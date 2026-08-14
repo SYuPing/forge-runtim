@@ -106,110 +106,110 @@ ADR-0008 正式 supersede ADR-0007 的 completion omission `continue` replay。�
 
 ### #1：首次 completion omission state
 
-目標是為每個 attempt 記錄首次 omission。RED 原因是 `recordCompletionOmission` 不存在，精準測試 0 pass、1 fail。修正是在 `session-state.ts` 加入 private per-attempt flag 與 `recordCompletionOmission(): boolean`；start/reset 清 flag，continue 不清除，首次回傳 true，重複回傳 false 且 no-op。精準驗證 1 pass、exit 0。教訓是 omission budget 應藏在 session state，不能讓測試依賴私有 attemptId。
+目標是為每個 attempt 記錄首次 omission。RED 原因是 `recordCompletionOmission` 不存在，精準測試 0 pass、1 fail。修正是在 `session-state.ts` 加入 private per-attempt flag 與 `recordCompletionOmission(): boolean`；start/reset 清 flag，continue 不清除，首次回傳 true，重複回傳 false 且 no-op。精準驗證 1 pass、exit 0。教訓是 omission budget 應藏在 session state，不能讓測試依賴私有 attemptId。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:14-15,76-78`。
 
 ### #2：同 attempt omission idempotence
 
-目標是證明同 attempt 的第二個 omission 不新增 recovery。既有 #1 的 idempotent implementation 已滿足需求，沒有新增 production code；精準測試 1 pass、exit 0。教訓是先用同一個狀態 seam 驗證重複事件，不要另加第二個 marker。
+目標是證明同 attempt 的第二個 omission 不新增 recovery。既有 #1 的 idempotent implementation 已滿足需求，沒有新增 production code；精準測試 1 pass、exit 0。教訓是先用同一個狀態 seam 驗證重複事件，不要另加第二個 marker。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:16,79`。
 
 ### #3：explicit retry 保留 round 與 snapshot
 
-RED 原因是 `retryGrillRound` 不存在，0 pass、1 fail。修正是在 `ForgeSessionState` 加入只在 recovery 可用的 `retryGrillRound()`，保留 roundId、request、immutable snapshot，清除 recovery marker 並重置 omission budget。精準測試 1 pass、exit 0。教訓是 retry 是新 attempt，不是新 round，也不是新 snapshot。
+RED 原因是 `retryGrillRound` 不存在，0 pass、1 fail。修正是在 `ForgeSessionState` 加入只在 recovery 可用的 `retryGrillRound()`，保留 roundId、request、immutable snapshot，清除 recovery marker 並重置 omission budget。精準測試 1 pass、exit 0。教訓是 retry 是新 attempt，不是新 round，也不是新 snapshot。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:17-18,80-82`。
 
 ### #4：extension omission recovery wiring
 
-目標是讓 extension 以既有 session seam settle omission、恢復工具並顯示 retry/cancel/switch。初始 RED 的 panel 仍顯示舊 `continue`，缺少 `/retry`。實作後完成 retry wiring、工具恢復與 recovery marker；`continue` 在 recovery 中拒絕且不產生 follow-up。
+目標是讓 extension 以既有 session seam settle omission、恢復工具並顯示 retry/cancel/switch。初始 RED 的 panel 仍顯示舊 `continue`，缺少 `/retry`。實作後完成 retry wiring、工具恢復與 recovery marker；`continue` 在 recovery 中拒絕且不產生 follow-up。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:13,19-20,70-75,83-84`。
 
-中途曾因測試錯誤期待 transform 失敗而失敗。Hunt 查明 exact replay 的正確歷史語義是 `continue`，一行修正測試後 1 pass、exit 0。後來 ADR-0007 的 stale test `Extension_WhenTerminalMessageOmitsCompletion_ShouldPromptContinueAndSwitch` 被刪除，因為它與 ADR-0008 的 retry/cancel/switch 契約衝突。教訓是先判定測試是在驗當前 contract，還是在保留已 supersede 的歷史行為。
+中途曾因測試錯誤期待 transform 失敗而失敗。Hunt 查明 exact replay 的正確歷史語義是 `continue`，一行修正測試後 1 pass、exit 0。後來 ADR-0007 的 stale test `Extension_WhenTerminalMessageOmitsCompletion_ShouldPromptContinueAndSwitch` 被刪除，因為它與 ADR-0008 的 retry/cancel/switch 契約衝突。教訓是先判定測試是在驗當前 contract，還是在保留已 supersede 的歷史行為。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:21-22,85-86`。
 
 ### #5：公開 omission/retry 狀態契約整合
 
-此步把 extension wiring 與 session-level omission seam 接合，確認 production 不在 extension 另造 omission 狀態。文件只記載 #1 至 #7 精準測試均通過，沒有另外列出一個新的獨立失敗命令。教訓是同一個狀態只應有一個 owner，extension 透過 session API 使用它。
+此步把 extension wiring 與 session-level omission seam 接合，確認 production 不在 extension 另造 omission 狀態。文件只記載 #1 至 #7 精準測試均通過，沒有另外列出一個新的獨立失敗命令。教訓是同一個狀態只應有一個 owner，extension 透過 session API 使用它。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:20,62,83,123`。
 
 ### #6：recovery 後工具與 active workflow 保留
 
-此步沿用既有 active workflow 控制與 tool restore safety，確保 cancel/switch/retry 的邊界不會留下錯誤工具。文件記錄 #1 至 #7 均 GREEN，未記載新的錯誤。教訓是 recovery 只增加 Grill 內部 marker，不要擴張 top-level state machine。
+此步沿用既有 active workflow 控制與 tool restore safety，確保 cancel/switch/retry 的邊界不會留下錯誤工具。文件記錄 #1 至 #7 均 GREEN，未記載新的錯誤。教訓是 recovery 只增加 Grill 內部 marker，不要擴張 top-level state machine。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:26,31,93,123`。
 
 ### #7：completion needs confirmation 的新命名與 WAIT_USER
 
-目標是確認有效 completion 立即顯示唯一問題並進 `WAIT_USER`。原有等價測試改名為 `Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWaitUser`，並刪除與新 recovery 契約衝突的 ADR-0007 stale test。#1 至 #7 精準單測均通過。教訓是文件、測試名稱與 runtime contract 必須同時更新，否則 stale contract 會把正確修正誤判成回歸。
+目標是確認有效 completion 立即顯示唯一問題並進 `WAIT_USER`。原有等價測試改名為 `Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWaitUser`，並刪除與新 recovery 契約衝突的 ADR-0007 stale test。#1 至 #7 精準單測均通過。教訓是文件、測試名稱與 runtime contract 必須同時更新，否則 stale contract 會把正確修正誤判成回歸。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:106-123`。
 
 ### #8：回答後自動開始下一 Grill round
 
-目標是使用者回答問題後不需要 `continue` 就進入下一 round。測試位於 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:331-381`，以 `sendInput("confirm")` 驗證 grill-1 到 grill-2。production 不需修改，精準測試 1 pass、exit 0。教訓是既有 resume path 已足夠時不要新增另一條 replay API。
+目標是使用者回答問題後不需要 `continue` 就進入下一 round。測試位於 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:331-381`，以 `sendInput("confirm")` 驗證 grill-1 到 grill-2。production 不需修改，精準測試 1 pass、exit 0。教訓是既有 resume path 已足夠時不要新增另一條 replay API。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:154-157`。
 
 ### #9：READY_FOR_DEEP 自動進 Deep
 
-目標是有效 READY completion 通過 gate 後自動進 Deep，沒有 `continue`。測試位於 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1049`，驗證 `KNOWLEDGE_UNDERSTANDING` 與 active tools restore。既有 production 行為已符合，精準測試 GREEN。教訓是以 stage 與 tool restore 的可觀察結果驗證，不把 command absence 當成唯一證據。
+目標是有效 READY completion 通過 gate 後自動進 Deep，沒有 `continue`。測試位於 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1049`，驗證 `KNOWLEDGE_UNDERSTANDING` 與 active tools restore。既有 production 行為已符合，精準測試 GREEN。教訓是以 stage 與 tool restore 的可觀察結果驗證，不把 command absence 當成唯一證據。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:163-166`。
 
 ### #10：visible panel content contract
 
-RED 顯示 panel `content` 只有 `WAIT_USER` 且 `display` 不是 true。修正 `forge-runtime/extensions/forge-runtime.ts:267-270,676-679,793-795` 的三個 panel 出口，統一使用完整 `panelText` 與 `display: true`；測試在 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:760` 捕獲 raw payload。GREEN 為 1 pass。教訓是 UI contract 要測 raw payload，不只測轉換後的文字。
+RED 顯示 panel `content` 只有 `WAIT_USER` 且 `display` 不是 true。修正 `forge-runtime/extensions/forge-runtime.ts:267-270,676-679,793-795` 的三個 panel 出口，統一使用完整 `panelText` 與 `display: true`；測試在 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:760` 捕獲 raw payload。GREEN 為 1 pass。教訓是 UI contract 要測 raw payload，不只測轉換後的文字。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:172-175`。
 
 ### #11：completion-tool-only prompt
 
-RED 原因是舊 prompt 仍含「請只輸出一個最阻塞的確認問題」。修正 `forge-runtime/src/grill/grill-skill.ts:27`，只允許 `forge_grill_evidence` 與 `forge_grill_complete`，禁止 assistant prose 與終局 JSON；`NEEDS_CONFIRMATION` 維持一題，READY 維持零題。測試 `tests/grill/grill-skill.test.ts:28-37` GREEN。教訓是 prompt 只能引導，runtime validator 與 tool gate 才是強制層；測試也不能把「禁止 prose」句子誤當成允許 prose。
+RED 原因是舊 prompt 仍含「請只輸出一個最阻塞的確認問題」。修正 `forge-runtime/src/grill/grill-skill.ts:27`，只允許 `forge_grill_evidence` 與 `forge_grill_complete`，禁止 assistant prose 與終局 JSON；`NEEDS_CONFIRMATION` 維持一題，READY 維持零題。測試 `tests/grill/grill-skill.test.ts:28-37` GREEN。教訓是 prompt 只能引導，runtime validator 與 tool gate 才是強制層；測試也不能把「禁止 prose」句子誤當成允許 prose。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:181-184`。
 
 ### #12：空 manifest 的 completion guard
 
-RED 為 1 pass、1 fail，因為原本首輪 evidence guard 無條件拒絕空 manifest。修正 `grill-result.ts:34,141`，加入 `snapshotManifest` context；只有空 manifest、首輪、`NEEDS_CONFIRMATION`、無 evidence 時例外放行。非空 manifest、READY、未提供 manifest 仍拒絕。caller `forge-runtime.ts:202` 傳入 round snapshot manifest，測試 `grill-result.test.ts:229,267` 驗證 2/2。教訓是 invariant 必須精確限定適用集合，不能把安全條件寫成不可完成的總規則。
+RED 為 1 pass、1 fail，因為原本首輪 evidence guard 無條件拒絕空 manifest。修正 `grill-result.ts:34,141`，加入 `snapshotManifest` context；只有空 manifest、首輪、`NEEDS_CONFIRMATION`、無 evidence 時例外放行。非空 manifest、READY、未提供 manifest 仍拒絕。caller `forge-runtime.ts:202` 傳入 round snapshot manifest，測試 `grill-result.test.ts:229,267` 驗證 2/2。教訓是 invariant 必須精確限定適用集合，不能把安全條件寫成不可完成的總規則。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:190-193`。
 
 ### #13：relevance gate failure 的 WAIT_USER 出口
 
-RED 的第一次命令參數順序錯誤，實際跑成整個測試檔，不能視為 focused evidence。修正為正確 `--test-name-pattern` 命令後，測試仍先證明 gate failure 停在錯誤路徑。production `forge-runtime/extensions/forge-runtime.ts:675` 改為沿用 roundId 與 fetched evidence，建立帶 reason 的來源/scope question、options 與 recommendation，發布 state 並進 `WAIT_USER`。精準 GREEN 為 1/1。教訓是驗證命令本身也是測試前提，必須確認 pattern、順序與實際執行數。
+RED 的第一次命令參數順序錯誤，實際跑成整個測試檔，不能視為 focused evidence。修正為正確 `--test-name-pattern` 命令後，測試仍先證明 gate failure 停在錯誤路徑。production `forge-runtime/extensions/forge-runtime.ts:675` 改為沿用 roundId 與 fetched evidence，建立帶 reason 的來源/scope question、options 與 recommendation，發布 state 並進 `WAIT_USER`。精準 GREEN 為 1/1。教訓是驗證命令本身也是測試前提，必須確認 pattern、順序與實際執行數。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:199-203`。
 
 ### #14：真實 PI TUI 的最小 test-only seam
 
-這是唯一跨越原本 PI boundary 的決策點。使用者選擇方案 A，核准在 `pi-main/packages/coding-agent/src/modes/interactive-mode.ts:313-331,489-493` 增加 optional `terminal?: Terminal`，由 constructor 轉給既有 `createInteractiveTui`；省略時仍建立 `ProcessTerminal`。不注入 TUI factory、不加依賴、不改 workflow 語意。
+這是唯一跨越原本 PI boundary 的決策點。使用者選擇方案 A，核准在 `pi-main/packages/coding-agent/src/modes/interactive-mode.ts:313-331,489-493` 增加 optional `terminal?: Terminal`，由 constructor 轉給既有 `createInteractiveTui`；省略時仍建立 `ProcessTerminal`。不注入 TUI factory、不加依賴、不改 workflow 語意。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:206-217`。
 
-先前真正的 upstream seam 測試為 RED 4/4，`npm run check` 出現 terminal option 型別錯誤；修正後 Vitest 4/4，terminal option 錯誤消失，但 upstream check 仍有既存 `packages/ai/test/*` 型別錯誤。真實 TUI 初次遇到 loader distribution 與 input/intent fixture 問題，修正 fixture 後 1/1 GREEN。教訓是 fake extension harness 不能取代真 TUI，test seam 必須小到只提供可控 Terminal。
+先前真正的 upstream seam 測試為 RED 4/4，`npm run check` 出現 terminal option 型別錯誤；修正後 Vitest 4/4，terminal option 錯誤消失，但 upstream check 仍有既存 `packages/ai/test/*` 型別錯誤。真實 TUI 初次遇到 loader distribution 與 input/intent fixture 問題，修正 fixture 後 1/1 GREEN。教訓是 fake extension harness 不能取代真 TUI，test seam 必須小到只提供可控 Terminal。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:228-237`。
 
 ### #15：真實 TUI READY 自動前進
 
-初始 RED 的 viewport 沒有 KNOWLEDGE，probe 顯示 manifest 非空但 `evidence=[]`，因首輪 invariant 進入 recovery。修正不是放寬 production guard，而是 test-only 使用 `runLightDiscovery(['test'])` 取得真實 candidate，Faux 回應順序改為 evidence、READY completion、settle。測試 `pi-grill-interactive.test.ts:123` GREEN 1/1。教訓是 fixture 必須滿足 production invariant，不能為了讓測試通過而削弱 invariant。
+初始 RED 的 viewport 沒有 KNOWLEDGE，probe 顯示 manifest 非空但 `evidence=[]`，因首輪 invariant 進入 recovery。修正不是放寬 production guard，而是 test-only 使用 `runLightDiscovery(['test'])` 取得真實 candidate，Faux 回應順序改為 evidence、READY completion、settle。測試 `pi-grill-interactive.test.ts:123` GREEN 1/1。教訓是 fixture 必須滿足 production invariant，不能為了讓測試通過而削弱 invariant。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:244-264`。
 
 ### #16：completion omission recovery settled
 
-真實 PI TUI 測試 `pi-grill-interactive.test.ts:229` 只回傳一段無 tool prose，驗證一次 `GRILL_COMPLETION_REQUIRED`、retry/cancel/switch、panel 只出現一次、user 只出現一次、queue 耗盡，settled 後 assistant 不再增加。測試 1/1、約 7.5 秒自行 exit。沒有 production 修改。教訓是 omission 的驗收核心是停止背景活動，不是自動補送一輪。
+真實 PI TUI 測試 `pi-grill-interactive.test.ts:229` 只回傳一段無 tool prose，驗證一次 `GRILL_COMPLETION_REQUIRED`、retry/cancel/switch、panel 只出現一次、user 只出現一次、queue 耗盡，settled 後 assistant 不再增加。測試 1/1、約 7.5 秒自行 exit。沒有 production 修改。教訓是 omission 的驗收核心是停止背景活動，不是自動補送一輪。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:274-294`。
 
 ### #17：單次輸入的 assistant turn 邊界
 
-測試 `pi-grill-interactive.test.ts:317` 驗證單次 input 在 omission terminal boundary 後，短暫 quiescence 期間 faux callCount 與 assistant count 不再增加，`pending=0`、`user=1`。首次命令曾 pass 後 timeout；獨立重跑後 #16、#17 都約 7.5 秒自行 exit 0，#17 為 1/1。教訓是要驗證穩定 terminal boundary，而不是硬編固定 assistant turn 數。
+測試 `pi-grill-interactive.test.ts:317` 驗證單次 input 在 omission terminal boundary 後，短暫 quiescence 期間 faux callCount 與 assistant count 不再增加，`pending=0`、`user=1`。首次命令曾 pass 後 timeout；獨立重跑後 #16、#17 都約 7.5 秒自行 exit 0，#17 為 1/1。教訓是要驗證穩定 terminal boundary，而不是硬編固定 assistant turn 數。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:304-322`。
 
 ## 4. Plan A 完整驗證、final review 與最後修正
 
-來源：`docs/PLAN-A.md:126-155`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md` 的 Plan A 完成 milestone。
+來源：`docs/PLAN-A.md:126-155`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:332-355` 的 Plan A 完成 milestone。
 
-完整驗證期間曾出現 focused batch 的 stale assertions，修正測試契約後 focused 94/94。真實 TUI 檔 4/4。完整 suite 在並行執行時，兩個 loader 測試因單一 loader subprocess 的 30 秒 timeout 失敗；隔離 loader 檔 2/2，確認不是 loader logic failure，而是 full-suite parallel load 讓既有 30 秒界線被壓過。
+既有 94/94 suite 曾通過；後續完整 suite 的 loader smoke 在並行負載下觸發 30 秒 timeout，改為 `--test-concurrency=1` 後最終 114/114。真實 TUI 檔 4/4。文件沒有提供足夠精度說明失敗的 loader 測試數量，因此本記錄不再細分為兩個測試，也不把 timeout 描述成 loader logic failure。直接證據：`docs/PLAN-A.md:370`、`docs/PLAN-A.md:126-132`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:340,352-355`。
 
-採最小修正，把 `forge-runtime/package.json` test runner 改為 `--test-concurrency=1`，不放寬 loader timeout。最終 `npm test` 114/114 exit 0，`npm run check` exit 0，P1 focused 修正 1/1，真實 TUI 4/4。Plan A final review 找到一個 Standards P1 與兩個 Spec 缺口：非 active Grill attempt 的工具未 fail-closed、正常 TUI 尚有 `continue` 語義、omission 後可能自動 retry。修正後所有 finding 關閉。
+採最小修正，把 `forge-runtime/package.json` test runner 改為 `--test-concurrency=1`，不放寬 loader timeout。最終 `npm test` 114/114 exit 0，`npm run check` exit 0，P1 focused 修正 1/1，真實 TUI 4/4。Plan A final review 找到一個 Standards P1 與兩個 Spec 缺口：非 active Grill attempt 的工具未 fail-closed、正常 TUI 尚有 `continue` 語義、omission 後可能自動 retry。修正後所有 finding 關閉。直接證據：`docs/PLAN-A.md:126-132`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:336-340,352-355`。
 
-最後 upstream seam Vitest 4/4；upstream `npm run check` 仍只剩既有 `packages/ai` 測試型別錯誤，與 terminal seam 無關。這是已知未解風險，不可寫成整個 upstream check 通過。
+最後 upstream seam Vitest 4/4；upstream `npm run check` 仍只剩既有 `packages/ai` 測試型別錯誤，與 terminal seam 無關。這是已知未解風險，不可寫成整個 upstream check 通過。直接證據：`docs/PLAN-A.md:132`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:230-237,355`。
 
 ## 5. 重要錯誤索引與已 supersede 契約
 
 1. 假綠燈：PI source CLI direct import 的 loader assertions 在舊程式碼即通過。修正為 global compiled `pi` bootstrap probe，見 `agent-state/typebox-loader-compatibility.md:14-29`。
-2. stale contract/test：舊測試期待 omission 顯示 `continue` 並可 replay；ADR-0008 改成 retry/cancel/switch，stale test 已刪除，見 `docs/adr/ADR-0007-grill-completion-tool.md:1-9` 與 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md` 的 #4 記錄。
-3. focused test 參數順序錯誤：#13 初次命令執行整檔，不能當作 focused RED/Green；改正 pattern 後才採用 1/1，見 Plan A 的 #13 milestone。
-4. type errors：Plan #14 的 upstream terminal option 型別錯誤在 seam 加入後出現；修正後 terminal 相關錯誤消失，留下既存 `packages/ai/test/*` 錯誤。不能把剩餘錯誤歸因於 Forge seam。
-5. loader distribution：source CLI、global compiled CLI 與 virtual module 分支不相同；真正 regression 必須走使用者實際的 compiled loader path。
-6. fixture evidence invariant：#15 的非空 manifest 加空 evidence 觸發首輪 guard；正確修法是補真實 candidate/evidence fixture，不是放寬 guard。
-7. pass 後 hang：`InteractiveMode.run()` 是 production 永久 loop，測試 assertions 通過後仍可能不退出；runner 需使用 `--test-force-exit`，這不是 runtime abort seam。
-8. full-suite 30 秒 timeout：並行 suite 讓 loader subprocess 超過 30 秒；隔離檔可 2/2，採 `--test-concurrency=1`，保留 timeout 安全界線。
-9. 非 active attempt 未 fail-closed：final review 發現兩個 Grill tool 只看部分條件；補上 `pendingGrillRun && stage===GRILL` 共同 gate 與 execute guard，P1 1/1 通過。
-10. panel payload 不可見：#10 raw payload 顯示 `content` 與 `display` 不符合契約；三個出口統一使用完整 `panelText` 與 `display: true`。
-11. prompt 與 validator drift：#11 舊 prompt 要 assistant 輸出問題；改成 completion-tool-only，並以 runtime validator 強制 question cardinality。
-12. 空 manifest 不可完成：#12 將 evidence invariant 精確限定在非空 manifest 首輪；空 manifest 改走唯一 scope question。
+2. stale contract/test：舊測試期待 omission 顯示 `continue` 並可 replay；ADR-0008 改成 retry/cancel/switch，stale test 已刪除，見 `docs/adr/ADR-0007-grill-completion-tool.md:1-9`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:21-22,85-86`。
+3. focused test 參數順序錯誤：#13 初次命令執行整檔，不能當作 focused RED/Green；改正 pattern 後才採用 1/1，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:199-203`。
+4. type errors：Plan #14 的 upstream terminal option 型別錯誤在 seam 加入後出現；修正後 terminal 相關錯誤消失，留下既存 `packages/ai/test/*` 錯誤。不能把剩餘錯誤歸因於 Forge seam，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:228-237`。
+5. loader distribution：source CLI、global compiled CLI 與 virtual module 分支不相同；真正 regression 必須走使用者實際的 compiled loader path，見 `agent-state/typebox-loader-compatibility.md:14-29,37-43`。
+6. fixture evidence invariant：#15 的非空 manifest 加空 evidence 觸發首輪 guard；正確修法是補真實 candidate/evidence fixture，不是放寬 guard，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:248-264`。
+7. pass 後 hang：`InteractiveMode.run()` 是 production 永久 loop，測試 assertions 通過後仍可能不退出；runner 需使用 `--test-force-exit`，這不是 runtime abort seam，見 `docs/PLAN-A.md:65-67`。
+8. full-suite 30 秒 timeout：完整 suite 的 loader smoke 在並行負載下觸發 30 秒 timeout；採 `--test-concurrency=1`，保留 timeout 安全界線，見 `docs/PLAN-A.md:131`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:340`。
+9. 非 active attempt 未 fail-closed：final review 發現兩個 Grill tool 的 gate 不完整；補上 `pendingGrillRun && stage===GRILL` 共同 gate 與 execute guard，P1 1/1 通過，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:336-338,352`。
+10. panel payload 不可見：#10 raw payload 顯示 `content` 與 `display` 不符合契約；三個出口統一使用完整 `panelText` 與 `display: true`，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:172-175`。
+11. prompt 與 validator drift：#11 舊 prompt 要 assistant 輸出問題；改成 completion-tool-only，並以 runtime validator 強制 question cardinality，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:181-184`。
+12. 空 manifest 不可完成：#12 將 evidence invariant 精確限定於非空 manifest 首輪；空 manifest 改走唯一 scope question，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:190-193`。
 
-歷史契約的明確 supersede 關係如下：ADR-0007/ADR-0003 的 omission `continue` replay 被 ADR-0008 取代；一般 active workflow 的 `continue` 仍保留，但 recovery 下必須拒絕。正常 completion 的 assistant terminal JSON 被 `forge_grill_complete` 取代；`/forge-runtime grill-result` 只留 debug injection。Plan B 的固定 widget tree 仍未完成，不能用 Plan A 的 TUI acceptance 宣稱 UI tree 已完成。
+歷史契約的明確 supersede 關係如下：ADR-0007/ADR-0003 的 omission `continue` replay 被 ADR-0008 取代；一般 active workflow 的 `continue` 仍保留，但 recovery 下必須拒絕。正常 completion 的 assistant terminal JSON 被 `forge_grill_complete` 取代；`/forge-runtime grill-result` 只留 debug injection。Plan B 的固定 widget tree 仍未完成，不能用 Plan A 的 TUI acceptance 宣稱 UI tree 已完成。直接證據：`docs/adr/ADR-0008-grill-completion-recovery-and-interactive-acceptance.md:1-14`、`docs/adr/ADR-0007-grill-completion-tool.md:1-9,21-29`、`docs/PLAN-B.md:116-127`。
 
 ## 6. 目前狀態與未完成項目
 
-截至 2026-08-14，Plan A #1 至 #17 已完成，完整 suite 114/114，Plan A final review 0 open findings。`forge-runtime` 的 `npm run check` exit 0；真實 PI TUI 4/4；upstream seam Vitest 4/4。唯一已知外部風險是 upstream `packages/ai` 測試型別錯誤。
+截至 2026-08-14，Plan A #1 至 #17 已完成，完整 suite 114/114，Plan A final review 0 open findings。`forge-runtime` 的 `npm run check` exit 0；真實 PI TUI 4/4；upstream seam Vitest 4/4。唯一已知外部風險是 upstream `packages/ai` 測試型別錯誤。直接證據：`docs/PLAN-A.md:126-132`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:332-355`。
 
-Plan B 只有 status/custom-panel/selector 的最小 slice。固定 widget tree、常駐 workflow stage、evidence 摘要、validation/repair 摘要，以及 selector 與固定 widget 共存尚未完成，見 `docs/PLAN-B.md:105-131`。Plan B 的文件仍有設計衝突：原始方向要求 UI layer，但 handoff 的 Not Building 又要求不實作固定 widget tree；這是人類決策邊界，不能自行把 Plan B 寫成完成。
+Plan B 只有 status/custom-panel/selector 的最小 slice。固定 widget tree、常駐 workflow stage、evidence 摘要、validation/repair 摘要，以及 selector 與固定 widget 共存尚未完成，見 `docs/PLAN-B.md:116-127`。Plan B 的文件仍有設計衝突：原始方向要求 UI layer，然而 handoff 的 Not Building 要求不實作固定 widget tree；這是人類決策邊界，不能自行把 Plan B 寫成完成。直接證據：`docs/PLAN-B.md:5-32,105-127`、`docs/handoff.md:40-45`。
 
-目前不應新增 top-level recovery stage、第三種 completion status、自動 retry、background steer、queue、parallel workflow，也不應擴大 Deep Knowledge、candidate scoring 或知識來源。`pi-main/` 只保留核准的 Plan A #14 test-only Terminal seam。
+目前不應新增 top-level recovery stage、第三種 completion status、自動 retry、background steer、queue、parallel workflow，也不應擴大 Deep Knowledge、candidate scoring 或知識來源。`pi-main/` 只保留核准的 Plan A #14 test-only Terminal seam。直接證據：`docs/PLAN-A.md:27-35`、`docs/adr/ADR-0008-grill-completion-recovery-and-interactive-acceptance.md:66-80`、`CONTEXT.md:49-59`。
 
 ## 7. 來源文件索引與排除項
 
