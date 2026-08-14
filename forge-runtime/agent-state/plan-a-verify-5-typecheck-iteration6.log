@@ -1,0 +1,23 @@
+
+> forge-runtime@0.1.0 check
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.pi-interactive.check.json
+
+tests/extensions/pi-grill-interactive.test.ts(40,8): error TS2345: Argument of type '{ message: { role: "assistant" | "user" | "toolResult" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary"; content: any; }; }' is not assignable to parameter of type 'ToolCallEvent & (AssistantMessageEvent | UserMessageEvent | InputEvent)'.
+  Type '{ message: { role: "assistant" | "user" | "toolResult" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary"; content: any; }; }' is not assignable to type 'ToolCallEvent & UserMessageEvent'.
+    Type '{ message: { role: "assistant" | "user" | "toolResult" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary"; content: any; }; }' is missing the following properties from type 'ToolCallEvent': type, toolCallId, toolName, input
+tests/extensions/pi-grill-interactive.test.ts(43,33): error TS2339: Property 'content' does not exist on type 'AgentMessage'.
+  Property 'content' does not exist on type 'BashExecutionMessage'.
+tests/extensions/pi-grill-interactive.test.ts(43,50): error TS7006: Parameter 'block' implicitly has an 'any' type.
+tests/extensions/pi-grill-interactive.test.ts(78,31): error TS2339: Property 'content' does not exist on type 'AgentMessage'.
+  Property 'content' does not exist on type 'BashExecutionMessage'.
+tests/extensions/pi-grill-interactive.test.ts(78,48): error TS7006: Parameter 'block' implicitly has an 'any' type.
+tests/extensions/pi-grill-interactive.test.ts(89,8): error TS2345: Argument of type '{ message: { role: "assistant" | "user" | "toolResult" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary"; content: any; }; }' is not assignable to parameter of type 'ToolCallEvent & (AssistantMessageEvent | UserMessageEvent | InputEvent)'.
+  Type '{ message: { role: "assistant" | "user" | "toolResult" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary"; content: any; }; }' is not assignable to type 'ToolCallEvent & UserMessageEvent'.
+    Type '{ message: { role: "assistant" | "user" | "toolResult" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary"; content: any; }; }' is missing the following properties from type 'ToolCallEvent': type, toolCallId, toolName, input
+tests/extensions/pi-grill-interactive.test.ts(93,41): error TS2339: Property 'content' does not exist on type 'AgentMessage'.
+  Property 'content' does not exist on type 'BashExecutionMessage'.
+tests/extensions/pi-grill-interactive.test.ts(111,36): error TS2345: Argument of type '{ text: string; }' is not assignable to parameter of type 'ToolCallEvent & (AssistantMessageEvent | UserMessageEvent | InputEvent)'.
+  Type '{ text: string; }' is not assignable to type 'ToolCallEvent & InputEvent'.
+    Type '{ text: string; }' is missing the following properties from type 'ToolCallEvent': type, toolCallId, toolName, input
+
+[agent] exit_code=2

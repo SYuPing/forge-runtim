@@ -1,0 +1,14 @@
+✔ PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnswer (371.279ms)
+✔ PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue (278.9849ms)
+✔ PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndSettle (352.2988ms)
+✔ PiTui_WhenSingleInputRuns_ShouldBoundAssistantTurns (375.7042ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6499.577
+
+[wrapper] exit=0 elapsed_ms=7682

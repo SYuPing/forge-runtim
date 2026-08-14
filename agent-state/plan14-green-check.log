@@ -1,0 +1,30 @@
+
+> pi-monorepo@0.0.3 check
+> biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:ts-imports && npm run check:shrinkwrap && npm run check:install-lock:coding-agent && tsgo --noEmit && npm run check:browser-smoke
+
+Checked 990 files in 1157ms. Fixed 1 file.
+
+> pi-monorepo@0.0.3 check:pinned-deps
+> node scripts/check-pinned-deps.mjs
+
+
+> pi-monorepo@0.0.3 check:ts-imports
+> node scripts/check-ts-relative-imports.mjs
+
+
+> pi-monorepo@0.0.3 check:shrinkwrap
+> node scripts/generate-coding-agent-shrinkwrap.mjs --check
+
+packages/coding-agent/npm-shrinkwrap.json is up to date.
+
+> pi-monorepo@0.0.3 check:install-lock:coding-agent
+> node scripts/generate-coding-agent-install-lock.mjs --check
+
+packages/coding-agent/install-lock is up to date.
+packages/ai/test/abort.test.ts(157,37): error TS2345: Argument of type '"claude-opus-4-1-20250805"' is not assignable to parameter of type 'ModelId<{ "anthropic-messages": { "claude-fable-5": { id: string; name: string; api: string; provider: string; baseUrl: string; reasoning: boolean; input: string[]; cost: { input: number; output: number; cacheRead: number; cacheWrite: number; }; contextWindow: number; maxTokens: number; thinkingLevelMap: { ...; }; c...'.
+packages/ai/test/context-overflow.test.ts(130,46): error TS2345: Argument of type '"gemini-2.5-pro"' is not assignable to parameter of type 'ModelId<{ "anthropic-messages": { "claude-haiku-4.5": { id: string; name: string; api: string; provider: string; baseUrl: string; reasoning: boolean; input: string[]; cost: { input: number; output: number; cacheRead: number; cacheWrite: number; }; contextWindow: number; maxTokens: number; headers: { ...; }; compat: ...'.
+packages/ai/test/openai-completions-tool-choice.test.ts(199,34): error TS2345: Argument of type '"qwen/qwen3-32b"' is not assignable to parameter of type 'ModelId<{ "openai-completions": { "llama-3.1-8b-instant": { id: string; name: string; api: string; provider: string; baseUrl: string; reasoning: boolean; input: string[]; cost: { input: number; output: number; cacheRead: number; cacheWrite: number; }; contextWindow: number; maxTokens: number; }; ... 4 more ...; "qwe...'.
+packages/ai/test/openai-completions-tool-choice.test.ts(1410,25): error TS2339: Property 'maxTokensField' does not exist on type 'OpenAICompletionsCompat | OpenAIResponsesCompat'.
+  Property 'maxTokensField' does not exist on type 'OpenAIResponsesCompat'.
+
+EXIT_CODE=2

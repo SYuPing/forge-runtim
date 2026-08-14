@@ -1,0 +1,8 @@
+{
+  "extends": "../pi-main/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "target": "ES2024"
+  },
+  "include": ["tests/extensions/pi-grill-interactive.test.ts", "tests/types/highlight-js.d.ts"]
+}

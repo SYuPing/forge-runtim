@@ -1,0 +1,12 @@
+
+> forge-runtime@0.1.0 check
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.pi-interactive.check.json
+
+tests/extensions/pi-grill-interactive.test.ts(44,33): error TS2339: Property 'content' does not exist on type 'AgentMessage'.
+  Property 'content' does not exist on type 'BashExecutionMessage'.
+tests/extensions/pi-grill-interactive.test.ts(44,50): error TS7006: Parameter 'block' implicitly has an 'any' type.
+tests/extensions/pi-grill-interactive.test.ts(80,31): error TS2339: Property 'content' does not exist on type 'AgentMessage'.
+  Property 'content' does not exist on type 'BashExecutionMessage'.
+tests/extensions/pi-grill-interactive.test.ts(80,48): error TS7006: Parameter 'block' implicitly has an 'any' type.
+tests/extensions/pi-grill-interactive.test.ts(95,41): error TS2339: Property 'content' does not exist on type 'AgentMessage'.
+  Property 'content' does not exist on type 'BashExecutionMessage'.

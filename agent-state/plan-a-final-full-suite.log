@@ -1,0 +1,169 @@
+Plan A final full suite: npm test
+
+> forge-runtime@0.1.0 test
+> tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit tests/**/*.test.ts
+
+✔ evaluateCandidateRelevance_WhenCandidateHasOnlyOneSignal_ShouldNeedMoreClues (2.2349ms)
+✔ evaluateCandidateRelevance_WhenDualSignalCandidatesHaveNoSharedSeed_ShouldNeedMoreClues (0.9856ms)
+✔ LightDiscovery_WhenSnapshotCreated_ShouldDeepFreezeEvidence (15.5515ms)
+✔ Extension_WhenGrillStarts_ShouldExposeOnlyDomainTools (1041.9461ms)
+✔ Extension_WhenToolBoundaryCannotEnforce_ShouldNotStartGrill (2.962ms)
+✔ Extension_WhenRequiredGrillSafetyCapabilityIsMissing_ShouldRejectGrillStartup (7.6227ms)
+✔ Extension_WhenRelevanceGateFails_ShouldDisplayScopeQuestionAndEnterWaitUser (8.82ms)
+✔ Extension_WhenSuccessfulSwitchReplacesPendingAssetApproval_ShouldNotResumeItOnApproval (5.3012ms)
+✔ Extension_WhenGrillRunAliasUsesControlledAssets_ShouldCreateFormalRoundAndSnapshotManifest (12.051ms)
+✔ Extension_WhenNonDomainToolIsCalledDuringGrill_ShouldBlock (8.8242ms)
+✔ Extension_WhenEvidenceCandidateIsKnown_ShouldReturnSnapshotContent (8.2688ms)
+✔ Extension_WhenEvidenceCandidateIsUnknown_ShouldReject (8.1555ms)
+✔ Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWaitUser (8.4229ms)
+✔ Extension_WhenPanelIsEmitted_ShouldUseVisibleContentContract (2.3652ms)
+✔ Extension_WhenUserAnswersQuestion_ShouldAutomaticallyStartNextGrillRound (9.5058ms)
+✔ Extension_WhenFormalCompletionEntersWaitUser_ShouldBlockNonDomainTools (7.5762ms)
+✔ Extension_WhenWaitUserAnswerIsOptionOrFreeText_ShouldReuseFetchedSnapshotEvidenceInNextGrillRound (15.4507ms)
+✔ Extension_WhenContinueDuringActiveGrill_ShouldReplaySameRoundWithoutDecisionOrNewSnapshot (7.5403ms)
+✔ Extension_WhenCompletionSuccessIsFollowedByTerminalProse_ShouldSuppressOnlyThatTurn (7.4049ms)
+✔ Extension_WhenReadyCompletionExitsGrill_ShouldRestorePriorActiveToolsAndEnterDeepKnowledge (8.1067ms)
+✔ Extension_WhenCompletionOmissionOccurs_ShouldShowRetryCancelSwitchAndSettle (7.8735ms)
+✔ Extension_WhenContinueRequestedDuringRecovery_ShouldNotReplayAttempt (7.8542ms)
+✔ Extension_WhenSwitchHasNoNewSession_ShouldKeepWaitUserWorkflowAndBlockNonDomainTools (2.4882ms)
+✔ Extension_WhenStreamingMessageEndsWithoutCompletion_ShouldNotSteerOrAutoReplay (8.4266ms)
+✔ Extension_WhenSwitchNewSessionIsCancelled_ShouldKeepActiveWorkflowAndGrillGate (7.9736ms)
+✔ Extension_WhenWaitUserHasNoFollowUpBridge_ShouldKeepQuestionForConfirmAndReject (4.3755ms)
+✔ Extension_WhenContinueCannotFollowUp_ShouldKeepWaitUserAndBlockNonDomainTools (2.3597ms)
+✔ Extension_WhenCompletionReadyForDeep_ShouldAutomaticallyEnterDeepKnowledge (8.459ms)
+✔ Extension_WhenOpenWorkflowGetsNewTopic_ShouldShowContinueCancelSwitchControls (7.5174ms)
+✔ Extension_WhenCancelCommandUsedInOpenWorkflow_ShouldResetToReceive (6.3789ms)
+✔ Extension_WhenCancelFollowsAssetApprovalPrompt_ShouldNotResumeCancelledRequest (4.0717ms)
+✔ Extension_WhenGrillIsCancelled_ShouldRestorePreviousActiveTools (7.3291ms)
+✔ Extension_WhenGrillIsSwitched_ShouldRestorePreviousActiveTools (9.2389ms)
+✔ Extension_WhenSwitchStartsReplacementSession_ShouldCreateSnapshotAndRoundThroughFrontDoor (10.5197ms)
+✔ Extension_WhenContinueCommandReplaysGrillRound_ShouldSendExistingDecisionInFollowUp (7.6537ms)
+✔ Extension_WhenGrillNeedsConfirmation_ShouldExposeWaitUser (2.6267ms)
+✔ Extension_WhenUserConfirmed_ShouldResumeDeepKnowledge (7.9016ms)
+✔ Extension_WhenUiSelectAvailable_ShouldUseSelectorToResumeWaitUser (7.9707ms)
+✔ Extension_WhenSelectorCannotFollowUp_ShouldRemainWaitUser (7.191ms)
+✔ Extension_WhenConfirmWithoutWaitUser_ShouldRejectResume (2.404ms)
+✔ Extension_WhenWaitUser_ShouldPublishPanelAndStatus (2.2811ms)
+✔ Extension_WhenWaitUserPayloadProvided_ShouldRenderPayloadValues (2.2721ms)
+✔ Extension_WhenStructuredGrillResultProvided_ShouldRenderWaitUserFromResult (2.2778ms)
+✔ Extension_WhenStructuredGrillResultIsReadyForDeep_ShouldContinueWithoutWaitUser (2.5687ms)
+✔ Extension_WhenRelevanceGateHasNoCandidates_ShouldStopBeforeDeepKnowledge (6.4375ms)
+✔ Extension_WhenGrillRunTriggered_ShouldInvokeGrillingSkill (6.9705ms)
+✔ Extension_WhenIdleAndEngineeringRequest_ShouldTransformIntoForgeFlow (6.0944ms)
+✔ Extension_WhenKnowledgeWikiMissing_ShouldStopStartForgeAndAskForConsent (4.4468ms)
+✔ Extension_WhenKnowledgeCodeBaseMissing_ShouldStopStartForgeAndAskForConsent (4.4048ms)
+✔ Extension_WhenKnowledgeAssetsExist_ShouldKeepStartForgePathUsingInjectedRoot (6.2095ms)
+✔ Extension_WhenGrillInvocationIsBuilt_ShouldExposeRuntimeIssuedRoundIdAndCompletionContract (9.7498ms)
+✔ CodeBase_WhenSeedsMatchFiles_ShouldReturnCandidates (15.4025ms)
+✔ CodeBase_WhenCandidateHasMultipleIndependentSignals_ShouldExplainWhyRelevant (8.2621ms)
+✔ CodeBase_WhenStrongestCandidateExists_ShouldRenderSinglePatternCard (9.1276ms)
+✔ CodeBase_WhenOnlySingleWeakPathSignalHits_ShouldNotEmitDeepDiveCandidate (7.0128ms)
+✔ CodeBase_WhenStrongCandidatesExist_ShouldNotMixInWeakSingleSignalMatch (10.5938ms)
+✔ CodeBase_WhenNoFilesMatch_ShouldKeepWikiOnlySummary (8.0675ms)
+✔ Conflict_WhenSameRelativePathDiffers_ShouldStop (31.1824ms)
+✔ CodeBase_WhenConflictExists_ShouldStillStopFirst (7.8063ms)
+✔ Conflict_WhenRelativePathMatchesAndContentSame_ShouldContinue (9.581ms)
+✔ Conflict_WhenDifferentPathsDiffer_ShouldIgnore (9.8097ms)
+✔ TargetMismatch_WhenStrongestCandidateHasNoMatchingTargetPath_ShouldRenderTargetGapAndContinue (8.8889ms)
+✔ TargetMismatch_WhenStrongestCandidateMatchesTargetPathButContentDiffers_ShouldStopWithTargetConflict (8.1286ms)
+✔ TargetMismatch_WhenStrongestCandidateIsGap_ShouldNotBeBlockedByWeakerConflict (9.4314ms)
+✔ Extension_WhenIdleAndChitChat_ShouldContinue (2.2538ms)
+✔ Extension_WhenWaitUserAndShortConfirmation_ShouldResumeExistingWorkflow (8.0563ms)
+✔ Extension_WhenRecreatedWaitUserDecisionWasAlreadyAnswered_ShouldKeepWaitUserWithoutReplayOrNewRound (8.5063ms)
+✔ Extension_WhenWaitUserAnswerComesFromSelectorOrCommand_ShouldFollowUpThroughSharedInputAndStartNextRound (25.1504ms)
+✔ Extension_WhenUserApprovesMissingKnowledgeAssets_ShouldResumePendingRequest (6.0153ms)
+✔ Extension_WhenGrillResultDebugCommandReceivesStructuredResult_ShouldPublishWaitUser (2.1998ms)
+✔ Extension_WhenForgeInputTransformsPrompt_ShouldKeepOriginalUserTranscript (6.121ms)
+✔ Extension_WhenStructuredGrillResultStreams_ShouldSuppressAssistantTextDuringMessageUpdate (10.4439ms)
+(node:47580) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+✖ Pi_WhenLoadingForgeRuntimeExtension_ShouldNotEmitTypeBoxSchemaResolutionError (6.2511ms)
+✖ Pi_WhenLoadingForgeRuntimeExtension_ShouldNotFailDuringExtensionLoad (0.4301ms)
+✔ PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnswer (429.1243ms)
+✔ PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue (259.0384ms)
+✔ PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndSettle (351.7109ms)
+✔ PiTui_WhenSingleInputRuns_ShouldBoundAssistantTurns (393.6992ms)
+✔ Schema_WhenLoaded_ShouldDeclareStructuredGrillResultShape (1.8429ms)
+✔ Schema_WhenQuestionOptionsDeclared_ShouldMatchRuntimeObjectBoundaries (0.8359ms)
+✔ Schema_WhenRecommendationConfidenceDeclared_ShouldMatchRuntimeNumber (0.7505ms)
+✔ Schema_WhenStatusChanges_ShouldConstrainQuestionCardinality (0.814ms)
+✔ parseStructuredGrillResult_WhenQuestionOptionsUseIdValueObjects_ShouldNormalizeToStrings (1.288ms)
+✔ parseStructuredGrillResult_WhenReadyForDeep_ShouldAllowEmptyQuestions (0.2698ms)
+✔ GrillCompletion_WhenRoundMatchesAndEvidenceFetched_ShouldParse (0.7305ms)
+✔ GrillCompletion_WhenRoundIsStale_ShouldReject (0.6216ms)
+✔ GrillCompletion_WhenEvidenceWasNotFetched_ShouldReject (0.3313ms)
+✔ GrillCompletion_WhenEmptyManifestFirstSnapshotRoundNeedsConfirmationWithNoEvidence_ShouldParse (0.2498ms)
+✔ GrillCompletion_WhenNonEmptyManifestFirstSnapshotRoundHasNoEvidence_ShouldReject (0.181ms)
+✔ GrillCompletion_WhenNeedsConfirmationHasMultipleQuestions_ShouldReject (0.134ms)
+✔ GrillCompletion_WhenReadyForDeepHasQuestion_ShouldReject (0.1518ms)
+✔ GrillCompletion_WhenQuestionIdIsEmpty_ShouldReject (0.1779ms)
+✔ GrillCompletion_WhenQuestionTextIsEmpty_ShouldReject (0.142ms)
+✔ buildGrillingSkillInvocation_WhenEvidenceSnapshotIsReused_ShouldRequireVerificationOnlyOnItsFirstRound (1.974ms)
+✔ buildGrillingSkillInvocation_WhenGrillToolsAreDeclared_ShouldAllowOnlyTheTwoDomainTools (1.1652ms)
+✔ GrillSkill_WhenInvocationBuilt_ShouldRequireCompletionToolWithoutAssistantProse (1.0323ms)
+✔ UnderstandIntent_WhenInputMixesChineseAndEnglish_ShouldIncludeSpiAndRtlSeeds (49.3437ms)
+✔ Discovery_WhenModeIsLight_ShouldReturnSummaryOnly (20.342ms)
+✔ Evidence_WhenBuildingContext_ShouldPreserveCitation (15.8352ms)
+✔ Repair_WhenCauseIsSpec_ShouldRollbackToToSpec (19.843ms)
+✔ SessionState_WhenAnswerRecorded_ShouldEnterUserConfirmedThenGrill (2.1665ms)
+✔ SessionState_WhenDecisionAlreadyAnswered_ShouldRejectDuplicate (1.66ms)
+✔ SessionState_WhenContinueRequested_ShouldRetainRoundAndSnapshot (0.4648ms)
+✔ SessionState_同一不可變Snapshot跨回答建立下一輪時_應僅首輪為第一輪 (0.3785ms)
+✔ SessionState_WhenCompletionOmissionFirstOccurs_ShouldEnterRecoveryOnce (0.4254ms)
+✔ SessionState_WhenSameAttemptOmissionRepeats_ShouldRemainSingleRecovery (0.2094ms)
+✔ SessionState_WhenExplicitRetryRequested_ShouldRetainRoundAndSnapshotAndStartNewAttempt (0.2078ms)
+✔ Transition_WhenGrillNeedsConfirmation_ShouldWaitUser (24.5181ms)
+✔ Transition_WhenUserConfirmed_ShouldResumeDeepKnowledge (4.2084ms)
+✔ ImplementGate_WhenTicketRequiresCode_ShouldEnterTdd (4.0233ms)
+✔ Judge_WhenValidationFails_ShouldRouteToRootCause (4.6697ms)
+✔ Transition_WhenMandatoryStageSkipped_ShouldReject (13.093ms)
+✔ StateMachine_WhenUserConfirms_ShouldAllowReturnToGrill (4.182ms)
+ℹ tests 113
+ℹ suites 0
+ℹ pass 111
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30495.3074
+
+✖ failing tests:
+
+test at tests\extensions\pi-extension-loader.test.ts:4:104
+✖ Pi_WhenLoadingForgeRuntimeExtension_ShouldNotEmitTypeBoxSchemaResolutionError (6.2511ms)
+  AssertionError [ERR_ASSERTION]: Pi CLI timed out after 30 seconds:
+  
+      at assertPiInvocationStartedWithoutTimeout (C:\Users\User\Desktop\Agents\pi-plugin-dev\forge-runtime\tests\extensions\pi-extension-loader.test.ts:22:9)
+      at TestContext.<anonymous> (C:\Users\User\Desktop\Agents\pi-plugin-dev\forge-runtime\tests\extensions\pi-extension-loader.test.ts:35:2)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.start (node:internal/test_runner/test:1015:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'ETIMEDOUT',
+    expected: 'ETIMEDOUT',
+    operator: 'notStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\extensions\pi-extension-loader.test.ts:4:311
+✖ Pi_WhenLoadingForgeRuntimeExtension_ShouldNotFailDuringExtensionLoad (0.4301ms)
+  AssertionError [ERR_ASSERTION]: Pi CLI timed out after 30 seconds:
+  
+      at assertPiInvocationStartedWithoutTimeout (C:\Users\User\Desktop\Agents\pi-plugin-dev\forge-runtime\tests\extensions\pi-extension-loader.test.ts:22:9)
+      at TestContext.<anonymous> (C:\Users\User\Desktop\Agents\pi-plugin-dev\forge-runtime\tests\extensions\pi-extension-loader.test.ts:40:2)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'ETIMEDOUT',
+    expected: 'ETIMEDOUT',
+    operator: 'notStrictEqual',
+    diff: 'simple'
+  }
+elapsed_seconds=31.28

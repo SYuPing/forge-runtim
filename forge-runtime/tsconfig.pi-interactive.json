@@ -1,0 +1,17 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"baseUrl": ".",
+		"paths": {
+			"@earendil-works/pi-ai": ["../pi-main/packages/ai/src/index.ts"],
+			"@earendil-works/pi-ai/*": [
+				"../pi-main/packages/ai/src/*.ts",
+				"../pi-main/packages/ai/src/providers/*.ts"
+			],
+			"@earendil-works/pi-agent-core": ["../pi-main/packages/agent/src/index.ts"],
+			"@earendil-works/pi-agent-core/*": ["../pi-main/packages/agent/src/*"],
+			"@earendil-works/pi-tui": ["../pi-main/packages/tui/src/index.ts"],
+			"@earendil-works/pi-tui/*": ["../pi-main/packages/tui/src/*"]
+		}
+	}
+}

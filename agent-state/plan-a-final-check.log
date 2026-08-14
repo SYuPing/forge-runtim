@@ -1,0 +1,6 @@
+
+> forge-runtime@0.1.0 check
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.pi-interactive.check.json
+
+
+[verification] exit_code=0 elapsed_ms=8872

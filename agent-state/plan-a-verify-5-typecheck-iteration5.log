@@ -1,0 +1,25 @@
+
+> forge-runtime@0.1.0 check
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.pi-interactive.check.json
+
+tests/extensions/pi-grill-interactive.test.ts(38,12): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '"message_end"' is not assignable to parameter of type '"input"'.
+tests/extensions/pi-grill-interactive.test.ts(38,47): error TS2345: Argument of type 'MessageEndEvent' is not assignable to parameter of type 'ToolCallEvent & (AssistantMessageEvent | UserMessageEvent | InputEvent)'.
+  Type 'MessageEndEvent' is not assignable to type 'ToolCallEvent & UserMessageEvent'.
+    Type 'MessageEndEvent' is missing the following properties from type 'ToolCallEvent': toolCallId, toolName, input
+tests/extensions/pi-grill-interactive.test.ts(41,12): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '"message_update"' is not assignable to parameter of type '"input"'.
+tests/extensions/pi-grill-interactive.test.ts(41,47): error TS2345: Argument of type 'MessageUpdateEvent' is not assignable to parameter of type 'ToolCallEvent & (AssistantMessageEvent | UserMessageEvent | InputEvent)'.
+  Type 'MessageUpdateEvent' is not assignable to type 'ToolCallEvent & UserMessageEvent'.
+    Type 'MessageUpdateEvent' is missing the following properties from type 'ToolCallEvent': toolCallId, toolName, input
+tests/extensions/pi-grill-interactive.test.ts(44,12): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '"tool_call"' is not assignable to parameter of type '"input"'.
+tests/extensions/pi-grill-interactive.test.ts(47,39): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type 'unknown' is not assignable to type 'void | InputEventResult | Promise<void | InputEventResult>'.
+tests/extensions/pi-grill-interactive.test.ts(47,47): error TS2345: Argument of type 'InputEvent' is not assignable to parameter of type 'ToolCallEvent & (AssistantMessageEvent | UserMessageEvent | InputEvent)'.
+  Type 'InputEvent' is not assignable to type 'ToolCallEvent & InputEvent'.
+    Type 'InputEvent' is missing the following properties from type 'ToolCallEvent': toolCallId, toolName, input

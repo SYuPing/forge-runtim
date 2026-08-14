@@ -1,0 +1,24 @@
+
+> forge-runtime@0.1.0 check
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.pi-interactive.check.json
+
+tests/extensions/pi-grill-interactive.test.ts(42,90): error TS2345: Argument of type 'ExtensionAPI' is not assignable to parameter of type 'ForgeExtensionApi'.
+  Types of property 'on' are incompatible.
+    Type '{ (event: "project_trust", handler: ProjectTrustHandler): void; (event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void; (event: "session_start", handler: ExtensionHandler<...>): void; (event: "session_info_changed", handler: ExtensionHandler<...>): void; (even...' is not assignable to type '{ (eventName: "tool_call", handler: (event: ToolCallEvent, ctx?: CommandContext | undefined) => unknown): void; (eventName: string, handler: (event: AssistantMessageEvent | UserMessageEvent | InputEvent, ctx?: CommandContext | undefined) => unknown): void; }'.
+      Types of parameters 'event' and 'eventName' are incompatible.
+        Type '"tool_call"' is not assignable to type '"project_trust"'.
+tests/extensions/pi-grill-interactive.test.ts(137,90): error TS2345: Argument of type 'ExtensionAPI' is not assignable to parameter of type 'ForgeExtensionApi'.
+  Types of property 'on' are incompatible.
+    Type '{ (event: "project_trust", handler: ProjectTrustHandler): void; (event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void; (event: "session_start", handler: ExtensionHandler<...>): void; (event: "session_info_changed", handler: ExtensionHandler<...>): void; (even...' is not assignable to type '{ (eventName: "tool_call", handler: (event: ToolCallEvent, ctx?: CommandContext | undefined) => unknown): void; (eventName: string, handler: (event: AssistantMessageEvent | UserMessageEvent | InputEvent, ctx?: CommandContext | undefined) => unknown): void; }'.
+      Types of parameters 'event' and 'eventName' are incompatible.
+        Type '"tool_call"' is not assignable to type '"project_trust"'.
+tests/extensions/pi-grill-interactive.test.ts(240,90): error TS2345: Argument of type 'ExtensionAPI' is not assignable to parameter of type 'ForgeExtensionApi'.
+  Types of property 'on' are incompatible.
+    Type '{ (event: "project_trust", handler: ProjectTrustHandler): void; (event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void; (event: "session_start", handler: ExtensionHandler<...>): void; (event: "session_info_changed", handler: ExtensionHandler<...>): void; (even...' is not assignable to type '{ (eventName: "tool_call", handler: (event: ToolCallEvent, ctx?: CommandContext | undefined) => unknown): void; (eventName: string, handler: (event: AssistantMessageEvent | UserMessageEvent | InputEvent, ctx?: CommandContext | undefined) => unknown): void; }'.
+      Types of parameters 'event' and 'eventName' are incompatible.
+        Type '"tool_call"' is not assignable to type '"project_trust"'.
+tests/extensions/pi-grill-interactive.test.ts(329,90): error TS2345: Argument of type 'ExtensionAPI' is not assignable to parameter of type 'ForgeExtensionApi'.
+  Types of property 'on' are incompatible.
+    Type '{ (event: "project_trust", handler: ProjectTrustHandler): void; (event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void; (event: "session_start", handler: ExtensionHandler<...>): void; (event: "session_info_changed", handler: ExtensionHandler<...>): void; (even...' is not assignable to type '{ (eventName: "tool_call", handler: (event: ToolCallEvent, ctx?: CommandContext | undefined) => unknown): void; (eventName: string, handler: (event: AssistantMessageEvent | UserMessageEvent | InputEvent, ctx?: CommandContext | undefined) => unknown): void; }'.
+      Types of parameters 'event' and 'eventName' are incompatible.
+        Type '"tool_call"' is not assignable to type '"project_trust"'.

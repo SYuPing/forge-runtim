@@ -1,0 +1,227 @@
+✔ Extension_WhenGrillStarts_ShouldExposeOnlyDomainTools (669.2974ms)
+✔ Extension_WhenToolBoundaryCannotEnforce_ShouldNotStartGrill (2.4687ms)
+✔ Extension_WhenRequiredGrillSafetyCapabilityIsMissing_ShouldRejectGrillStartup (5.6758ms)
+✔ Extension_WhenRelevanceGateFails_ShouldDisplayScopeQuestionAndEnterWaitUser (7.6623ms)
+✔ Extension_WhenSuccessfulSwitchReplacesPendingAssetApproval_ShouldNotResumeItOnApproval (4.1262ms)
+✔ Extension_WhenGrillRunAliasUsesControlledAssets_ShouldCreateFormalRoundAndSnapshotManifest (7.0096ms)
+✔ Extension_WhenNonDomainToolIsCalledDuringGrill_ShouldBlock (6.7518ms)
+✔ Extension_WhenEvidenceCandidateIsKnown_ShouldReturnSnapshotContent (8.5754ms)
+✔ Extension_WhenEvidenceCandidateIsUnknown_ShouldReject (7.3368ms)
+✔ Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWaitUser (7.1167ms)
+✔ Extension_WhenPanelIsEmitted_ShouldUseVisibleContentContract (2.1947ms)
+✔ Extension_WhenUserAnswersQuestion_ShouldAutomaticallyStartNextGrillRound (7.2065ms)
+✔ Extension_WhenFormalCompletionEntersWaitUser_ShouldBlockNonDomainTools (6.8996ms)
+✔ Extension_WhenWaitUserAnswerIsOptionOrFreeText_ShouldReuseFetchedSnapshotEvidenceInNextGrillRound (13.7326ms)
+✔ Extension_WhenContinueDuringActiveGrill_ShouldReplaySameRoundWithoutDecisionOrNewSnapshot (7.33ms)
+✔ Extension_WhenCompletionSuccessIsFollowedByTerminalProse_ShouldSuppressOnlyThatTurn (6.5904ms)
+✔ Extension_WhenReadyCompletionExitsGrill_ShouldRestorePriorActiveToolsAndEnterDeepKnowledge (7.2301ms)
+✔ Extension_WhenCompletionOmissionOccurs_ShouldShowRetryCancelSwitchAndSettle (6.6683ms)
+✔ Extension_WhenContinueRequestedDuringRecovery_ShouldNotReplayAttempt (6.3717ms)
+✔ Extension_WhenSwitchHasNoNewSession_ShouldKeepWaitUserWorkflowAndBlockNonDomainTools (2.0556ms)
+✔ Extension_WhenStreamingMessageEndsWithoutCompletion_ShouldNotSteerOrAutoReplay (7.1959ms)
+✔ Extension_WhenSwitchNewSessionIsCancelled_ShouldKeepActiveWorkflowAndGrillGate (6.2606ms)
+✔ Extension_WhenWaitUserHasNoFollowUpBridge_ShouldKeepQuestionForConfirmAndReject (4.3001ms)
+✔ Extension_WhenContinueCannotFollowUp_ShouldKeepWaitUserAndBlockNonDomainTools (2.1553ms)
+✔ Extension_WhenCompletionReadyForDeep_ShouldAutomaticallyEnterDeepKnowledge (7.3459ms)
+✔ Extension_WhenOpenWorkflowGetsNewTopic_ShouldShowContinueCancelSwitchControls (7.1367ms)
+✔ Extension_WhenCancelCommandUsedInOpenWorkflow_ShouldResetToReceive (5.6029ms)
+✔ Extension_WhenCancelFollowsAssetApprovalPrompt_ShouldNotResumeCancelledRequest (4.6147ms)
+✔ Extension_WhenGrillIsCancelled_ShouldRestorePreviousActiveTools (6.5721ms)
+✔ Extension_WhenGrillIsSwitched_ShouldRestorePreviousActiveTools (7.8491ms)
+✔ Extension_WhenSwitchStartsReplacementSession_ShouldCreateSnapshotAndRoundThroughFrontDoor (8.709ms)
+✔ Extension_WhenContinueCommandReplaysGrillRound_ShouldSendExistingDecisionInFollowUp (6.7807ms)
+✔ Extension_WhenGrillNeedsConfirmation_ShouldExposeWaitUser (2.0314ms)
+✔ Extension_WhenUserConfirmed_ShouldResumeDeepKnowledge (6.8156ms)
+✔ Extension_WhenUiSelectAvailable_ShouldUseSelectorToResumeWaitUser (6.7042ms)
+✔ Extension_WhenSelectorCannotFollowUp_ShouldRemainWaitUser (6.4811ms)
+✔ Extension_WhenConfirmWithoutWaitUser_ShouldRejectResume (2.1863ms)
+✔ Extension_WhenWaitUser_ShouldPublishPanelAndStatus (2.0308ms)
+✖ Extension_WhenWaitUserPayloadProvided_ShouldRenderPayloadValues (5.8107ms)
+✔ Extension_WhenStructuredGrillResultProvided_ShouldRenderWaitUserFromResult (2.1035ms)
+✔ Extension_WhenStructuredGrillResultIsReadyForDeep_ShouldContinueWithoutWaitUser (2.0537ms)
+✖ Extension_WhenRelevanceGateHasNoCandidates_ShouldStopBeforeDeepKnowledge (6.3836ms)
+✔ Extension_WhenGrillRunTriggered_ShouldInvokeGrillingSkill (6.1924ms)
+✔ Extension_WhenIdleAndEngineeringRequest_ShouldTransformIntoForgeFlow (5.4561ms)
+✔ Extension_WhenKnowledgeWikiMissing_ShouldStopStartForgeAndAskForConsent (3.9659ms)
+✔ Extension_WhenKnowledgeCodeBaseMissing_ShouldStopStartForgeAndAskForConsent (4.1658ms)
+✔ Extension_WhenKnowledgeAssetsExist_ShouldKeepStartForgePathUsingInjectedRoot (5.8915ms)
+✔ Extension_WhenGrillInvocationIsBuilt_ShouldExposeRuntimeIssuedRoundIdAndCompletionContract (6.9045ms)
+✔ CodeBase_WhenSeedsMatchFiles_ShouldReturnCandidates (16.2416ms)
+✔ CodeBase_WhenCandidateHasMultipleIndependentSignals_ShouldExplainWhyRelevant (6.6489ms)
+✔ CodeBase_WhenStrongestCandidateExists_ShouldRenderSinglePatternCard (6.8222ms)
+✔ CodeBase_WhenOnlySingleWeakPathSignalHits_ShouldNotEmitDeepDiveCandidate (6.3811ms)
+✔ CodeBase_WhenStrongCandidatesExist_ShouldNotMixInWeakSingleSignalMatch (8.0923ms)
+✔ CodeBase_WhenNoFilesMatch_ShouldKeepWikiOnlySummary (6.1138ms)
+✔ Conflict_WhenSameRelativePathDiffers_ShouldStop (47.2316ms)
+✔ CodeBase_WhenConflictExists_ShouldStillStopFirst (7.4884ms)
+✔ Conflict_WhenRelativePathMatchesAndContentSame_ShouldContinue (7.6746ms)
+✔ Conflict_WhenDifferentPathsDiffer_ShouldIgnore (8.2854ms)
+✔ TargetMismatch_WhenStrongestCandidateHasNoMatchingTargetPath_ShouldRenderTargetGapAndContinue (6.7977ms)
+✔ TargetMismatch_WhenStrongestCandidateMatchesTargetPathButContentDiffers_ShouldStopWithTargetConflict (7.0396ms)
+✔ TargetMismatch_WhenStrongestCandidateIsGap_ShouldNotBeBlockedByWeakerConflict (8.1259ms)
+✔ Extension_WhenIdleAndChitChat_ShouldContinue (1.9872ms)
+✔ Extension_WhenWaitUserAndShortConfirmation_ShouldResumeExistingWorkflow (7.1396ms)
+✔ Extension_WhenRecreatedWaitUserDecisionWasAlreadyAnswered_ShouldKeepWaitUserWithoutReplayOrNewRound (7.5982ms)
+✔ Extension_WhenWaitUserAnswerComesFromSelectorOrCommand_ShouldFollowUpThroughSharedInputAndStartNextRound (23.9849ms)
+✔ Extension_WhenUserApprovesMissingKnowledgeAssets_ShouldResumePendingRequest (5.0157ms)
+✔ Extension_WhenGrillResultDebugCommandReceivesStructuredResult_ShouldPublishWaitUser (3.1876ms)
+✖ Extension_WhenForgeInputTransformsPrompt_ShouldKeepOriginalUserTranscript (5.7055ms)
+✔ Extension_WhenStructuredGrillResultStreams_ShouldSuppressAssistantTextDuringMessageUpdate (6.6481ms)
+✔ Schema_WhenLoaded_ShouldDeclareStructuredGrillResultShape (1.6667ms)
+✔ Schema_WhenQuestionOptionsDeclared_ShouldMatchRuntimeObjectBoundaries (0.6402ms)
+✔ Schema_WhenRecommendationConfidenceDeclared_ShouldMatchRuntimeNumber (0.5029ms)
+✔ Schema_WhenStatusChanges_ShouldConstrainQuestionCardinality (0.754ms)
+✔ parseStructuredGrillResult_WhenQuestionOptionsUseIdValueObjects_ShouldNormalizeToStrings (0.9623ms)
+✔ parseStructuredGrillResult_WhenReadyForDeep_ShouldAllowEmptyQuestions (0.1568ms)
+✔ GrillCompletion_WhenRoundMatchesAndEvidenceFetched_ShouldParse (0.4249ms)
+✔ GrillCompletion_WhenRoundIsStale_ShouldReject (0.4873ms)
+✔ GrillCompletion_WhenEvidenceWasNotFetched_ShouldReject (0.2779ms)
+✔ GrillCompletion_WhenEmptyManifestFirstSnapshotRoundNeedsConfirmationWithNoEvidence_ShouldParse (0.3492ms)
+✔ GrillCompletion_WhenNonEmptyManifestFirstSnapshotRoundHasNoEvidence_ShouldReject (0.2546ms)
+✔ GrillCompletion_WhenNeedsConfirmationHasMultipleQuestions_ShouldReject (0.2092ms)
+✔ GrillCompletion_WhenReadyForDeepHasQuestion_ShouldReject (0.186ms)
+✔ GrillCompletion_WhenQuestionIdIsEmpty_ShouldReject (0.1577ms)
+✔ GrillCompletion_WhenQuestionTextIsEmpty_ShouldReject (0.1334ms)
+✔ buildGrillingSkillInvocation_WhenEvidenceSnapshotIsReused_ShouldRequireVerificationOnlyOnItsFirstRound (1.2911ms)
+✔ buildGrillingSkillInvocation_WhenGrillToolsAreDeclared_ShouldAllowOnlyTheTwoDomainTools (0.623ms)
+✔ GrillSkill_WhenInvocationBuilt_ShouldRequireCompletionToolWithoutAssistantProse (0.6153ms)
+✔ SessionState_WhenAnswerRecorded_ShouldEnterUserConfirmedThenGrill (1.231ms)
+✔ SessionState_WhenDecisionAlreadyAnswered_ShouldRejectDuplicate (0.9333ms)
+✔ SessionState_WhenContinueRequested_ShouldRetainRoundAndSnapshot (0.2044ms)
+✔ SessionState_同一不可變Snapshot跨回答建立下一輪時_應僅首輪為第一輪 (0.3158ms)
+✔ SessionState_WhenCompletionOmissionFirstOccurs_ShouldEnterRecoveryOnce (0.3063ms)
+✔ SessionState_WhenSameAttemptOmissionRepeats_ShouldRemainSingleRecovery (0.1463ms)
+✔ SessionState_WhenExplicitRetryRequested_ShouldRetainRoundAndSnapshotAndStartNewAttempt (0.1907ms)
+ℹ tests 94
+ℹ suites 0
+ℹ pass 91
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1375.8375
+
+✖ failing tests:
+
+test at tests\extensions\forge-runtime-extension.test.ts:11:657
+✖ Extension_WhenWaitUserPayloadProvided_ShouldRenderPayloadValues (5.8107ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Proceed to deep knowledge retrieval\?/. Input:
+  
+  'true'
+  
+      at TestContext.<anonymous> (C:\Users\User\Desktop\Agents\pi-plugin-dev\forge-runtime\tests\extensions\forge-runtime-extension.test.ts:1478:9)
+      at async Test.run (node:internal/test_runner/test:1125:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'true',
+    expected: /Proceed to deep knowledge retrieval\?/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests\extensions\forge-runtime-extension.test.ts:15:498
+✖ Extension_WhenRelevanceGateHasNoCandidates_ShouldStopBeforeDeepKnowledge (6.3836ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /CANDIDATE_RELEVANCE_INSUFFICIENT/. Input:
+  
+  'true\n' +
+    'Forge INTENT_UNDERSTANDING [active]\n' +
+    '\n' +
+    'Decision: 請幫我壓測方案 A\n' +
+    'forge-stage\n' +
+    'true\n' +
+    'Forge LIGHT_DISCOVERY [active]\n' +
+    '\n' +
+    'Decision: 請幫我壓測方案 A\n' +
+    'forge-stage\n' +
+    'true\n' +
+    'Forge GRILL [active]\n' +
+    '\n' +
+    'Decision: 請幫我壓測方案 A\n' +
+    'forge-stage\n' +
+    'true\n' +
+    'Forge WAIT_USER [waiting-user]\n' +
+    '\n' +
+    'Stage: WAIT_USER\n' +
+    'Question: 候選相關性不足；目前沒有同時命中 path 與 content 的 code_base 候選。\n' +
+    '請選擇補充可信來源或縮小需求範圍。\n' +
+    'Recommendation: 縮小需求範圍\n' +
+    'Options: 補充可信來源, 縮小需求範圍\n' +
+    'Evidence: \n' +
+    'Confirm: /forge-runtime confirm\n' +
+    'Reject: /forge-runtime reject\n' +
+    '\n' +
+    'Decision: 候選相關性不足；目前沒有同時命中 path 與 content 的 code_base 候選。\n' +
+    'forge-stage'
+  
+      at TestContext.<anonymous> (C:\Users\User\Desktop\Agents\pi-plugin-dev\forge-runtime\tests\extensions\forge-runtime-extension.test.ts:1579:9)
+      at async Test.run (node:internal/test_runner/test:1125:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'true\nForge INTENT_UNDERSTANDING [active]\n\nDecision: 請幫我壓測方案 A\nforge-stage\ntrue\nForge LIGHT_DISCOVERY [active]\n\nDecision: 請幫我壓測方案 A\nforge-stage\ntrue\nForge GRILL [active]\n\nDecision: 請幫我壓測方案 A\nforge-stage\ntrue\nForge WAIT_USER [waiting-user]\n\nStage: WAIT_USER\nQuestion: 候選相關性不足；目前沒有同時命中 path 與 content 的 code_base 候選。\n請選擇補充可信來源或縮小需求範圍。\nRecommendation: 縮小需求範圍\nOptions: 補充可信來源, 縮小需求範圍\nEvidence: \nConfirm: /forge-runtime confirm\nReject: /forge-runtime reject\n\nDecision: 候選相關性不足；目前沒有同時命中 path 與 content 的 code_base 候選。\nforge-stage',
+    expected: /CANDIDATE_RELEVANCE_INSUFFICIENT/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests\extensions\forge-runtime-extension.test.ts:15:25288
+✖ Extension_WhenForgeInputTransformsPrompt_ShouldKeepOriginalUserTranscript (5.7055ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /請只輸出一個最阻塞的確認問題/. Input:
+  
+  '<skill name="grilling" location="C:/Users/User/Desktop/Agents/pi-plugin-dev/.pi/skills/grilling/SKILL.md">\n' +
+    'References are relative to C:/Users/User/Desktop/Agents/pi-plugin-dev/.pi/skills/grilling.\n' +
+    '\n' +
+    '# Grilling\n' +
+    '\n' +
+    '你的工作是對輸入的方案、需求或設計做高壓壓測，先找出最阻塞、最需要人類決策的一題。\n' +
+    '\n' +
+    '規則：\n' +
+    '\n' +
+    '- 預設一次只處理一個最阻塞的問題，不要同時展開多題。\n' +
+    '- 如果呼叫方要求提供 recommendation，請提供明確 recommendation 與簡短理由。\n' +
+    '- 如果資訊不足，優先把缺口濃縮成一個最重要的確認問題。\n' +
+    '- 如果呼叫方要求特定輸出格式，嚴格遵守，不要加前後解說。\n' +
+    '- 如果呼叫方要求輸出 JSON，只輸出合法 JSON，不要輸出 Markdown code fence。\n' +
+    '\n' +
+    '輸出目標：\n' +
+    '\n' +
+    '- 幫助 workflow 決定是否需要進入人類確認邊界。\n' +
+    '- 若需要人類確認，產出一個清楚、可操作的問題與 recommendation。\n' +
+    '</skill>\n' +
+    '\n' +
+    '正常輸出只能透過 forge_grill_evidence 與 forge_grill_complete；不得輸出 assistant prose、終局 JSON 或其他文字結果。\n' +
+    'Grill v1 僅允許 forge_grill_evidence 與 forge_grill_complete；所有其他工具（包含原生與未知工具）一律禁止。\n' +
+    '新 snapshot 的首輪完成前，必須使用 forge_grill_evidence 查核 snapshot manifest 中的 candidateId；同一 snapshot 的後續 round 可重用已查核 evidence。\n' +
+    '完成結果只能透過 forge_grill_complete 提交，不得以 assistant 文字或終局 JSON 取代。\n' +
+    'completion payload 欄位固定為：roundId、status、questions、recommendation、evidence、requiresUserConfirmation。\n' +
+    '若仍有一個最阻塞、必須由使用者決定的問題，status 輸出 NEEDS_CONFIRMATION。\n' +
+    '若資訊已足夠直接進 deep knowledge，status 輸出 READY_FOR_DEEP。\n' +
+    'NEEDS_CONFIRMATION 時，questions 只放一題，格式為 { id, question, options }。\n' +
+    'READY_FOR_DEEP 時，questions 輸出空陣列。\n' +
+    'options 必須是字串陣列，例如 ["A", "B"]；不要輸出 { id, value } 物件。\n' +
+    'recommendation 格式為 { value, reason, confidence }。\n' +
+    'evidence 只放 evidence id 字串陣列。\n' +
+    'NEEDS_CONFIRMATION 時 requiresUserConfirmation 必須是 true。\n' +
+    'READY_FOR_DEEP 時 requiresUserConfirmation 必須是 false。\n' +
+    '可查核來源只限以下 snapshot manifest；不得猜測或傳入 path。\n' +
+    'forge_grill_evidence 只接受 manifest 中的 candidateId。\n' +
+    '目前 Grill roundId: grill-1\n' +
+    '完成時必須呼叫 forge_grill_complete；completion payload 必須原樣包含此 roundId。\n' +
+    '不得輸出 assistant 終局 JSON 代替 completion tool。\n' +
+    '任務：請幫我壓測方案 A\n' +
+    '\n' +
+    'Light discovery seeds: 請幫我壓測方案'
+  
+      at TestContext.<anonymous> (C:\Users\User\Desktop\Agents\pi-plugin-dev\forge-runtime\tests\extensions\forge-runtime-extension.test.ts:2305:9)
+      at async Test.run (node:internal/test_runner/test:1125:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<skill name="grilling" location="C:/Users/User/Desktop/Agents/pi-plugin-dev/.pi/skills/grilling/SKILL.md">\nReferences are relative to C:/Users/User/Desktop/Agents/pi-plugin-dev/.pi/skills/grilling.\n\n# Grilling\n\n你的工作是對輸入的方案、需求或設計做高壓壓測，先找出最阻塞、最需要人類決策的一題。\n\n規則：\n\n- 預設一次只處理一個最阻塞的問題，不要同時展開多題。\n- 如果呼叫方要求提供 recommendation，請提供明確 recommendation 與簡短理由。\n- 如果資訊不足，優先把缺口濃縮成一個最重要的確認問題。\n- 如果呼叫方要求特定輸出格式，嚴格遵守，不要加前後解說。\n- 如果呼叫方要求輸出 JSON，只輸出合法 JSON，不要輸出 Markdown code fence。\n\n輸出目標：\n\n- 幫助 workflow 決定是否需要進入人類確認邊界。\n- 若需要人類確認，產出一個清楚、可操作的問題與 recommendation。\n</skill>\n\n正常輸出只能透過 forge_grill_evidence 與 forge_grill_complete；不得輸出 assistant prose、終局 JSON 或其他文字結果。\nGrill v1 僅允許 forge_grill_evidence 與 forge_grill_complete；所有其他工具（包含原生與未知工具）一律禁止。\n新 snapshot 的首輪完成前，必須使用 forge_grill_evidence 查核 snapshot manifest 中的 candidateId；同一 snapshot 的後續 round 可重用已查核 evidence。\n完成結果只能透過 forge_grill_complete 提交，不得以 assistant 文字或終局 JSON 取代。\ncompletion payload 欄位固定為：roundId、status、questions、recommendation、evidence、requiresUserConfirmation。\n若仍有一個最阻塞、必須由使用者決定的問題，status 輸出 NEEDS_CONFIRMATION。\n若資訊已足夠直接進 deep knowledge，status 輸出 READY_FOR_DEEP。\nNEEDS_CONFIRMATION 時，questions 只放一題，格式為 { id, question, options }。\nREADY_FOR_DEEP 時，questions 輸出空陣列。\noptions 必須是字串陣列，例如 ["A", "B"]；不要輸出 { id, value } 物件。\nrecommendation 格式為 { value, reason, confidence }。\nevidence 只放 evidence id 字串陣列。\nNEEDS_CONFIRMATION 時 requiresUserConfirmation 必須是 true。\nREADY_FOR_DEEP 時 requiresUserConfirmation 必須是 false。\n可查核來源只限以下 snapshot manifest；不得猜測或傳入 path。\nforge_grill_evidence 只接受 manifest 中的 candidateId。\n目前 Grill roundId: grill-1\n完成時必須呼叫 forge_grill_complete；completion payload 必須原樣包含此 roundId。\n不得輸出 assistant 終局 JSON 代替 completion tool。\n任務：請幫我壓測方案 A\n\nLight discovery seeds: 請幫我壓測方案',
+    expected: /請只輸出一個最阻塞的確認問題/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+[verification] exit=1 elapsed_ms=2420

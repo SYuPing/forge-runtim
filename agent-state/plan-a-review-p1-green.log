@@ -1,0 +1,11 @@
+✔ tests\extensions\pi-grill-interactive.test.ts (4661.1723ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4668.5136
+
+[verification] exit_code=0 elapsed_ms=5777

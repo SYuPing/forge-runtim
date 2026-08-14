@@ -1,0 +1,20 @@
+
+> forge-runtime@0.1.0 check
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.pi-interactive.check.json
+
+tests/extensions/pi-grill-interactive.test.ts(46,11): error TS2322: Type '{ type: "text"; text: string; }[] | { type: "thinking"; thinking: string; }[] | { type: "toolCall"; }[]' is not assignable to type '{ type: "text"; text: string; } | readonly { type: "text"; text: string; }[]'.
+  Type '{ type: "thinking"; thinking: string; }[]' is not assignable to type '{ type: "text"; text: string; } | readonly { type: "text"; text: string; }[]'.
+    Type '{ type: "thinking"; thinking: string; }[]' is not assignable to type 'readonly { type: "text"; text: string; }[]'.
+      Property 'text' is missing in type '{ type: "thinking"; thinking: string; }' but required in type '{ type: "text"; text: string; }'.
+tests/extensions/pi-grill-interactive.test.ts(83,9): error TS2322: Type '{ type: "text"; text: string; }[] | { type: "thinking"; thinking: string; }[] | { type: "toolCall"; }[]' is not assignable to type '{ type: "text"; text: string; } | readonly { type: "text"; text: string; }[]'.
+  Type '{ type: "thinking"; thinking: string; }[]' is not assignable to type '{ type: "text"; text: string; } | readonly { type: "text"; text: string; }[]'.
+    Type '{ type: "thinking"; thinking: string; }[]' is not assignable to type 'readonly { type: "text"; text: string; }[]'.
+      Property 'text' is missing in type '{ type: "thinking"; thinking: string; }' but required in type '{ type: "text"; text: string; }'.
+tests/extensions/pi-grill-interactive.test.ts(93,10): error TS2322: Type '{ role: "assistant"; content: unknown[]; }' is not assignable to type '{ content?: (AssistantTextBlock | AssistantThinkingBlock | AssistantToolCallBlock)[] | undefined; role?: string | undefined; }'.
+  Types of property 'content' are incompatible.
+    Type 'unknown[]' is not assignable to type '(AssistantTextBlock | AssistantThinkingBlock | AssistantToolCallBlock)[]'.
+      Type 'unknown' is not assignable to type 'AssistantTextBlock | AssistantThinkingBlock | AssistantToolCallBlock'.
+tests/extensions/pi-grill-interactive.test.ts(99,45): error TS2339: Property 'type' does not exist on type '{}'.
+tests/extensions/pi-grill-interactive.test.ts(99,82): error TS2339: Property 'text' does not exist on type '{}'.
+tests/extensions/pi-grill-interactive.test.ts(100,49): error TS2339: Property 'type' does not exist on type '{}'.
+tests/extensions/pi-grill-interactive.test.ts(100,94): error TS2339: Property 'thinking' does not exist on type '{}'.
