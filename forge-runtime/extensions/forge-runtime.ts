@@ -154,6 +154,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let savedActiveTools: string[] | undefined;
 	let suppressCompletionTurn = false;
 	let pendingReplayInvocation: string | undefined;
+	let publishedPendingWaitUserDecisionId: string | undefined;
 	const canEnforceGrillToolBoundary = Boolean(pi.registerTool && pi.getActiveTools && pi.setActiveTools && pi.on);
 	const requireGrillToolBoundary = (ctx: CommandContext) => {
 		if (canEnforceGrillToolBoundary) {
@@ -179,12 +180,33 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		pendingKnowledgeRequest = undefined;
 		pendingReplayInvocation = undefined;
 		pendingUserMessageRewrite = undefined;
+		publishedPendingWaitUserDecisionId = undefined;
 			suppressCompletionTurn = false;
+		};
+		const shouldSkipPublishedWaitUser = (decisionId: string | undefined): boolean =>
+			sessionState.current().stage === "WAIT_USER" &&
+			typeof decisionId === "string" &&
+			decisionId.length > 0 &&
+			decisionId === publishedPendingWaitUserDecisionId;
+		const publishWaitUser = async (payload: WaitUserPayload, ctx: CommandContext): Promise<void> => {
+			if (shouldSkipPublishedWaitUser(payload.decisionId)) {
+				return;
+			}
+			if (sessionState.current().stage !== "WAIT_USER") {
+				publishedPendingWaitUserDecisionId = undefined;
+			}
+			if (payload.decisionId) {
+				publishedPendingWaitUserDecisionId = payload.decisionId;
+			}
+			await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(payload));
 		};
 		const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
 	const resumeGrillWithAnswer = async (answer: string, ctx: CommandContext): Promise<string | undefined> => {
 		const currentRound = sessionState.continueGrillRound();
 		const state = sessionState.recordAnswer(answer);
+		if (state.stage !== "WAIT_USER") {
+			publishedPendingWaitUserDecisionId = undefined;
+		}
 		if (state.stage !== "GRILL") {
 			await publishState(pi, ctx, state);
 			return undefined;
@@ -246,19 +268,20 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						isFirstRoundOfSnapshot: sessionState.isFirstGrillRoundOfSnapshot(),
 						snapshotManifest: round.snapshot.manifest,
 					});
-			if (completion.requiresUserConfirmation) {
-				const waitUser = sessionState.requireGrillResult({
-					...toWaitUserPayload(completion),
-					decisionId: completion.questions[0]?.id,
-				});
-					await handleWaitUserState(pi, ctx as CommandContext, waitUser);
+				if (completion.requiresUserConfirmation) {
+					const waitUser = {
+						...toWaitUserPayload(completion),
+						decisionId: completion.questions[0]?.id,
+					};
+					await publishWaitUser(waitUser, ctx as CommandContext);
 				} else {
 					await continueDeepKnowledge(
 						pi,
 					ctx as CommandContext,
-					sessionState,
-					activeWorkflow,
-					completion.recommendation.reason,
+						sessionState,
+						activeWorkflow,
+						publishWaitUser,
+						completion.recommendation.reason,
 						completion,
 					);
 					if (sessionState.current().stage !== "GRILL") {
@@ -501,20 +524,30 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			handler: async (args, ctx) => {
 				const command = args.trim();
 				if (command.startsWith("grill ambiguous ")) {
-					await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(parseWaitUserPayload(command.slice(16))));
+					await publishWaitUser(parseWaitUserPayload(command.slice(16)), ctx);
 					return;
 				}
 
 				if (command.startsWith("grill-result ")) {
 					const grillResult = parseStructuredGrillResult(command.slice("grill-result ".length));
 					if (!grillResult.requiresUserConfirmation) {
-						await continueDeepKnowledge(pi, ctx, sessionState, activeWorkflow, grillResult.recommendation.reason, grillResult);
+						await continueDeepKnowledge(
+							pi,
+							ctx,
+							sessionState,
+							activeWorkflow,
+							publishWaitUser,
+							grillResult.recommendation.reason,
+							grillResult,
+						);
 						return;
 					}
-					await handleWaitUserState(
-						pi,
+					await publishWaitUser(
+						{
+							...toWaitUserPayload(grillResult),
+							decisionId: grillResult.questions[0]?.id,
+						},
 						ctx,
-						sessionState.requireGrillResult(toWaitUserPayload(grillResult)),
 					);
 					return;
 				}
@@ -615,7 +648,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					await publishState(pi, ctx, state);
 					return;
 				}
-				await confirmAndContinueDeepKnowledge(pi, ctx, sessionState, activeWorkflow);
+				await confirmAndContinueDeepKnowledge(pi, ctx, sessionState, activeWorkflow, publishWaitUser);
 				return;
 			}
 
@@ -742,6 +775,7 @@ async function confirmAndContinueDeepKnowledge(
 	ctx: CommandContext,
 	sessionState: ReturnType<typeof createForgeSessionState>,
 	activeWorkflow: ActiveWorkflowContext | undefined,
+	publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
 ): Promise<ForgeUiState> {
 	const beforeConfirm = sessionState.current();
 	const nextState = sessionState.confirm();
@@ -751,7 +785,7 @@ async function confirmAndContinueDeepKnowledge(
 		return nextState;
 	}
 
-	await continueDeepKnowledge(pi, ctx, sessionState, activeWorkflow, beforeConfirm.decisionSummary);
+	await continueDeepKnowledge(pi, ctx, sessionState, activeWorkflow, publishWaitUser, beforeConfirm.decisionSummary);
 	return nextState;
 }
 
@@ -760,6 +794,7 @@ async function continueDeepKnowledge(
 	ctx: CommandContext,
 	sessionState: ReturnType<typeof createForgeSessionState>,
 	activeWorkflow: ActiveWorkflowContext | undefined,
+	publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
 	decisionSummary?: string,
 	grillResult?: StructuredGrillResult,
 ): Promise<void> {
@@ -769,18 +804,15 @@ async function continueDeepKnowledge(
 	if (workflow && relevance.decision !== "proceed_deep") {
 		const round = sessionState.continueGrillRound();
 		const evidenceIds = [...sessionState.getFetchedEvidenceIds()];
-		await publishState(
-			pi,
-			ctx,
-			sessionState.requireWaitUser({
+		const waitUserPayload = {
 				decisionId: round.roundId,
 				decisionSummary: relevance.reason,
 				evidenceIds,
 				options: ["補充可信來源", "縮小需求範圍"],
 				question: `${relevance.reason}\n請選擇補充可信來源或縮小需求範圍。`,
 				recommendation: "縮小需求範圍",
-			}),
-		);
+		};
+		await publishWaitUser(waitUserPayload, ctx);
 		return;
 	}
 
@@ -891,7 +923,11 @@ function parseWaitUserPayload(raw: string): WaitUserPayload {
 
 async function publishState(pi: ForgeExtensionApi, ctx: CommandContext, state: ForgeUiState): Promise<void> {
 	const status = buildWorkflowStatusText(state);
-	const sections = [buildWaitUserPanel(state), buildEvidenceSummaryText(state), buildValidationRepairText(state)].filter(
+	const sections = [
+		buildWaitUserPanel(state),
+		state.stage === "WAIT_USER" ? buildEvidenceSummaryText({ ...state, lastEvidenceIds: [] }) : buildEvidenceSummaryText(state),
+		buildValidationRepairText(state),
+	].filter(
 		(value): value is string => Boolean(value),
 	);
 	const panelText = [status, ...sections].join("\n\n");

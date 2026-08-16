@@ -7,8 +7,6 @@ export function buildWaitUserPanel(state: ForgeUiState): string | undefined {
 		`Question: ${state.waitUser.question}`,
 		`Recommendation: ${state.waitUser.recommendation}`,
 		`Options: ${state.waitUser.options.join(", ")}`,
-		`Evidence: ${state.waitUser.evidenceIds.join(", ")}`,
-		"Confirm: /forge-runtime confirm",
-		"Reject: /forge-runtime reject",
+		`Evidence: ${new Set(state.waitUser.evidenceIds).size} 項`,
 	].join("\n");
 }

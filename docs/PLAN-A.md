@@ -224,11 +224,13 @@ cd forge-runtime && npm run check
 
 ## 2026-08-16 增補實測同步
 
+> 歷史段落：本節的 47/44、OOM 與待 RED→GREEN 順序已由下方「最終完成狀態」取代，保留作診斷與時間線證據，不代表目前 blocker。
+
 - prompt-contract 增補已實測完成，並保留上述當時的 focused 5/5、`npm test` 116/116、`npm run check` exit 0 與兩軸 review 0 findings 證據。
 - 這不代表 Plan B 的 current 驗證完成；Plan B selector slice 只有歷史 71/71 證據，不能當作目前完整 suite。
 - 四參數 custom factory、Theme adapter、冗餘 `onEscape` 移除與有效答案 resume 後結束 command 均已完成；focused regression tests 3/3、`npm run check` exit 0，final Standards／Spec review 皆 0 blocker，scope blast 無 sibling bug。
-- `npm test` exit 1：47 tests 中 44 pass、3 fail；約 123 秒、約 4GB heap OOM，另有 2 個 loader timeout。`selectList` formatter 尚無實際 autocomplete render coverage。
-- 真實 PI TUI acceptance 與 current full suite 仍待完成；ticket 不得標記完成，舊 OOM／type-import probe 未執行。下一步由使用者實機重試相同「自行輸入…」路徑。
+- 歷史結果：`npm test` exit 1：47 tests 中 44 pass、3 fail；約 123 秒、約 4GB heap OOM，另有 2 個 loader timeout。`selectList` formatter 尚無實際 autocomplete render coverage。
+- 真實 PI TUI acceptance 與 current full suite 仍待完成；ticket 不得標記完成，舊 OOM／type-import probe 未執行。本段舊順序已由下方最終 closure 取代。
 
 ---
 
@@ -640,3 +642,81 @@ pi --offline --no-session --no-extensions --extension .pi/extensions/forge-runti
 
 - 獨立 review 未發現 Standards 或 Spec 缺陷：schema、validator lifecycle 與 completion 回傳結構未變，修改只移除不支援的 `typebox/schema` alias。
 - 限制：workspace 沒有 Git baseline，review 以指定檔案與 Plan A 的證據進行，無法產生 fixed-point diff；CodeGraph 也未能逐行載入新增測試與文件，但 focused／完整／runtime 驗證已實際覆蓋 loader seam。
+
+## 2026-08-16 已核准增補：WAIT_USER 開放回答與單次發布（歷史快照，已由最終完成狀態取代；當時待 RED→GREEN）
+
+### Building
+
+- 讓 WAIT_USER 將 options 視為推薦／快捷回答，接受 trim 後非空自由文字。
+- 讓語意不足的回答進入下一輪 GRILL 的新 clarification decision，不重發原 `decisionId`。
+- 讓同一 pending `decisionId` 只發布一次 WAIT_USER；移除通用 Confirm／Reject 顯示；exact evidence id 去重，主畫面只顯示唯一 evidence 數量，raw `ev-...` ID 留在 runtime state／紀錄且不顯示；completion 後不輸出 assistant prose。
+
+### Not Building
+
+- 不新增 schema、session-state 欄位、workflow stage、通用輸入元件或 `pi-main/` 修改。
+- 不預先修改 session-state；先由紅燈證明既有 raw free-text 已會 `recordAnswer` 但契約仍有 gap。
+- 不重開本文件既有 completed sections。
+
+### Files
+
+Production seams：
+
+- `forge-runtime/extensions/forge-runtime.ts`
+- `forge-runtime/src/ui/wait-user-panel.ts`
+- `forge-runtime/src/grill/grill-skill.ts`
+
+Tests：
+
+- `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`
+- `forge-runtime/tests/grill/grill-skill.test.ts`
+- `forge-runtime/tests/ui/wait-user-panel.test.ts`（新增）
+
+共 6 檔，超過 5 檔但分屬三個既有 seam；不得預先修改 session-state。
+
+### Tests
+
+Focused command：
+
+```text
+cd forge-runtime && npx tsx --test tests/extensions/forge-runtime-extension.test.ts tests/grill/grill-skill.test.ts tests/ui/wait-user-panel.test.ts
+```
+
+Assertions 必須涵蓋開放 options、new clarification decision、單次 WAIT_USER、無通用 Confirm／Reject、exact evidence id 去重後的唯一數量摘要與 completion 無 prose。
+
+### Execution Order
+
+1. 由獨立測試子代理先補三份 focused assertions，明確打出第一個 RED。
+2. 紅燈確認後，才由獨立實作角色在三個既有 seam 做最小 GREEN；不修改 session-state。
+3. 由獨立驗證角色執行上述 focused command 與 `npm run check`；完整 suite 保留 OOM 風險，不宣稱 current full-suite pass。
+
+### Verification
+
+- focused command 三檔均通過，且 `npm run check` exit 0。
+- 最近一次完整測試嘗試 47 中 44 pass、3 fail，另有 loader timeout／約 4GB heap OOM；該結果不視為 current full-suite pass。
+- 真實 PI TUI 視覺驗收在後續 verification，不阻塞先完成 RED→GREEN 的文件計畫。
+
+### Approval / Fragile assumptions
+
+- 使用者已核准上述六項契約；本增補可進入 RED→GREEN，但 ticket 仍未完成。
+- 六檔超過五檔是因三個既有 seam 各有 focused coverage；本計畫不預設 session-state 修改。
+
+## 最終完成狀態（2026-08-16）
+
+本節 supersede 上述舊的 47/44、OOM blocker 與待 RED→GREEN 狀態。
+
+### Building
+
+- Plan A implementation 已完成：WAIT_USER custom Editor／trim／blank Enter／Escape／shared resume、clarification decisionId、pending decisionId 一次性 publish、unique evidence count 與 completion prose suppression 均已落地。
+
+### Tests
+
+- 最終程式／測試路徑：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/src/grill/grill-skill.ts`、`forge-runtime/src/ui/wait-user-panel.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/grill/grill-skill.test.ts`、`forge-runtime/tests/ui/wait-user-panel.test.ts`。
+- focused batch：83/83 pass。
+- canonical `npm test`：124/124 pass，無 OOM／timeout。
+
+### Verification
+
+- `npm run check`：兩段 `tsc --noEmit` 通過。
+- scripted PI TUI：focused 1/1、full 4/4 pass。
+- final review：Standards 0 findings；Spec finding 已修正，closure 0 findings。
+- Plan B 人工視覺驗收、固定 widget tree、selectList autocomplete render coverage 尚未完成；下一步由使用者決定是否進入 Plan B。

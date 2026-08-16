@@ -179,6 +179,39 @@ test("Extension_WhenRelevanceGateFails_ShouldDisplayScopeQuestionAndEnterWaitUse
 	assert.match(renderedPayload, /來源|範圍/);
 });
 
+test("Extension_WhenRelevanceFailureIsReentered_ShouldPublishTheSameWaitUserPanelOnlyOnce", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"wiki/relevance-reentry-only.md",
+		"RelevanceReentryNeedle is documentary evidence, without a code_base candidate for deep knowledge.",
+	);
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+
+	const harness = await createExtensionHarness({ cwd: rootDir });
+	const startResult = await harness.sendInput("請幫我測試 RelevanceReentryNeedle");
+	assert.equal((startResult as { action?: string }).action, "transform");
+
+	const readyForDeepResult = JSON.stringify({
+		status: "READY_FOR_DEEP",
+		questions: [],
+		recommendation: { value: "proceed", reason: "先嘗試進入 deep。", confidence: 0.9 },
+		evidence: [],
+		requiresUserConfirmation: false,
+	});
+	await harness.runCommand(`grill-result ${readyForDeepResult}`);
+	await assert.doesNotReject(() => harness.runCommand(`grill-result ${readyForDeepResult}`));
+
+	const relevanceWaitUserPanels = harness.observedMessagePayloads.filter(
+		(payload) =>
+			payload.customType === "forge-stage" &&
+			String(payload.content ?? "").includes("候選相關性不足"),
+	);
+	assert.equal(relevanceWaitUserPanels.length, 1, "同一 pending decisionId 的 relevance WAIT_USER panel 只能發布一次");
+});
+
 test("Extension_WhenSuccessfulSwitchReplacesPendingAssetApproval_ShouldNotResumeItOnApproval", async (t) => {
 	const rootDir = createTempRoot({ withWiki: false, withCodeBase: false });
 	t.after(() => {
@@ -356,15 +389,13 @@ test("Extension_WhenPanelIsEmitted_ShouldUseVisibleContentContract", async () =>
 		"Question: Proceed to deep knowledge retrieval?",
 		"Recommendation: confirm",
 		"Options: confirm, reject",
-		"Evidence: EV-4242",
-		"Confirm: /forge-runtime confirm",
-		"Reject: /forge-runtime reject",
+		"Evidence: 1 項",
 		"",
 		"Decision: Need explicit user confirmation before continuing.",
-		"Evidence: EV-4242",
 	].join("\n");
 	assert.equal(payload.content, panelText);
 	assert.equal(payload.display, true);
+	assert.doesNotMatch(String(payload.content), /(?:^|\n)(?:Confirm|Reject):/);
 });
 
 test("Extension_WhenUserAnswersQuestion_ShouldAutomaticallyStartNextGrillRound", async (t) => {
@@ -458,7 +489,7 @@ test("Extension_WhenFormalCompletionEntersWaitUser_ShouldBlockNonDomainTools", a
 test("Extension_WhenWaitUserAnswerIsOptionOrFreeText_ShouldReuseFetchedSnapshotEvidenceInNextGrillRound", async (t) => {
 	for (const { answer, label } of [
 		{ answer: "B", label: "非推薦選項" },
-		{ answer: "我想先採用 B，因為它較符合目前風險", label: "自由文字" },
+		{ answer: "  我想先採用 B，因為它較符合目前風險  ", label: "自由文字" },
 	]) {
 		const rootDir = createTempRoot();
 		writeWorkspaceFile(
@@ -501,7 +532,7 @@ test("Extension_WhenWaitUserAnswerIsOptionOrFreeText_ShouldReuseFetchedSnapshotE
 		const resumeText = (resumeResult as { text?: string }).text ?? "";
 		assert.match(resumeText, /<skill name="grilling"/, `${label} 應走正式 Grill ingress`);
 		assert.match(resumeText, /roundId\s*[:：]\s*grill-2/, `${label} 應建立下一個 round`);
-		assert.ok(resumeText.includes(answer), `${label} 應記錄在下一個 Grill invocation`);
+		assert.ok(resumeText.includes(answer.trim()), `${label} 應記錄 trim 後答案在下一個 Grill invocation`);
 		assert.match(resumeText, new RegExp(`\\b${candidateId}\\b`), `${label} 應沿用 immutable snapshot`);
 		assert.match(resumeText, /forge_grill_evidence/, `${label} 應重送 evidence contract`);
 		assert.match(resumeText, /forge_grill_complete/, `${label} 應重送 completion contract`);
@@ -1496,7 +1527,8 @@ test("Extension_WhenWaitUserPayloadProvided_ShouldRenderPayloadValues", async ()
 	assert.equal(payload.display, true);
 	assert.match(String(payload.content), /Proceed to deep knowledge retrieval\?/);
 	assert.match(String(payload.content), /confirm/i);
-	assert.match(String(payload.content), /EV-4242/);
+	assert.match(String(payload.content), /Evidence: 1 項/);
+	assert.doesNotMatch(String(payload.content), /EV-4242/);
 });
 
 test("Extension_WhenStructuredGrillResultProvided_ShouldRenderWaitUserFromResult", async () => {
@@ -1541,7 +1573,8 @@ test("Extension_WhenStructuredGrillResultProvided_ShouldRenderWaitUserFromResult
 	assert.match(renderedMessage, /WAIT_USER/);
 	assert.match(renderedMessage, /Should we accept Plan A\?/);
 	assert.match(renderedMessage, /accept/);
-	assert.match(renderedMessage, /EV-9000/);
+	assert.match(renderedMessage, /Evidence: 1 項/);
+	assert.doesNotMatch(renderedMessage, /EV-9000/);
 });
 
 test("Extension_WhenStructuredGrillResultIsReadyForDeep_ShouldContinueWithoutWaitUser", async () => {
@@ -2293,6 +2326,65 @@ test("Extension_WhenRecreatedWaitUserDecisionWasAlreadyAnswered_ShouldKeepWaitUs
 	assert.doesNotMatch(replay?.content ?? "", /roundId\s*[:：]\s*grill-[3-9]/);
 });
 
+test("Extension_WhenSamePendingWaitUserDecisionIsPublishedTwice_ShouldShowSelectorAndPanelOnlyOnce", async () => {
+	const harness = await createExtensionHarness();
+	let selectorCalls = 0;
+	const waitUserCommand = `grill ambiguous ${JSON.stringify({
+		decisionId: "decision-publish-once",
+		question: "是否繼續？",
+		recommendation: "繼續",
+		options: ["繼續", "停止"],
+		evidenceIds: ["EV-PUBLISH-ONCE"],
+		decisionSummary: "等待人類決策。",
+	})}`;
+	const context = {
+		ui: {
+			async select() {
+				selectorCalls += 1;
+				return undefined;
+			},
+		},
+	};
+
+	await harness.runCommand(waitUserCommand, context);
+	await harness.runCommand(waitUserCommand, context);
+
+	const publishedPanels = harness.observedMessagePayloads.filter(
+		(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("是否繼續？"),
+	);
+	assert.equal(selectorCalls, 1, "同一 pending decisionId 不應再次發布 selector");
+	assert.equal(publishedPanels.length, 1, "同一 pending decisionId 不應再次發布 WAIT_USER panel");
+});
+
+test("Extension_WhenSameNeedsConfirmationGrillResultIsReentered_ShouldShowSelectorAndPanelOnlyOnce", async () => {
+	const harness = await createExtensionHarness();
+	let selectorCalls = 0;
+	const grillResult = JSON.stringify({
+		status: "NEEDS_CONFIRMATION",
+		questions: [{ id: "question-grill-result-dedupe", question: "是否繼續？", options: ["繼續", "停止"] }],
+		recommendation: { value: "繼續", reason: "等待人類決策。" },
+		evidence: ["EV-GRILL-RESULT-DEDUPE"],
+		requiresUserConfirmation: true,
+	});
+	const context = {
+		ui: {
+			async select() {
+				selectorCalls += 1;
+				return undefined;
+			},
+		},
+	};
+
+	await harness.runCommand(`grill-result ${grillResult}`, context);
+	await assert.doesNotReject(() => harness.runCommand(`grill-result ${grillResult}`, context));
+
+	const publishedPanels = harness.observedMessagePayloads.filter(
+		(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("是否繼續？"),
+	);
+	assert.equal(selectorCalls, 1, "同一 grill-result question id 不應再次發布 selector");
+	assert.equal(publishedPanels.length, 1, "同一 grill-result question id 不應再次發布 WAIT_USER panel");
+});
+
 test("Extension_WhenWaitUserAnswerComesFromSelectorOrCommand_ShouldFollowUpThroughSharedInputAndStartNextRound", async (t) => {
 	for (const row of [
 		{ source: "selector", answer: "B", command: undefined },
@@ -2425,7 +2517,8 @@ test("Extension_WhenGrillResultDebugCommandReceivesStructuredResult_ShouldPublis
 	assert.match(renderedMessage, /WAIT_USER/);
 	assert.match(renderedMessage, /是否接受方案 A？/);
 	assert.match(renderedMessage, /accept/);
-	assert.match(renderedMessage, /EV-7777/);
+	assert.match(renderedMessage, /Evidence: 1 項/);
+	assert.doesNotMatch(renderedMessage, /EV-7777/);
 });
 
 test("Extension_WhenForgeInputTransformsPrompt_ShouldKeepOriginalUserTranscript", async (t) => {

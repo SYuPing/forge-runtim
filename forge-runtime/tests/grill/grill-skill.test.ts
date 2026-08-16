@@ -48,3 +48,10 @@ test("BuildGrillingSkillInvocation_WhenFreeTextIsAvailable_ShouldForbidInputInst
 
 	assert.match(prompt, /options 禁止使用「請輸入／請提供……」等操作指示；自由文字輸入責任交給 WAIT_USER UI。/);
 });
+
+test("BuildGrillingSkillInvocation_WhenAnswerRemainsInsufficient_ShouldRequireNewClarificationDecisionId", () => {
+	const prompt = buildGrillingSkillInvocation("新增 runtime contract", "grill-2");
+
+	assert.match(prompt, /若回答語意仍不足.*下一輪.*新的 clarification decision/);
+	assert.match(prompt, /不得重用已回答的 decisionId/);
+});

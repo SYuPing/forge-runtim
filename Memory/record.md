@@ -106,7 +106,7 @@ ADR-0008 正式 supersede ADR-0007 的 completion omission `continue` replay。�
 
 ADR-0009 固定由 runtime 在每個 TUI selector 最後提供「自行輸入…」，不依模型文案猜測。選取後沿 PI 既有 `ctx.ui.custom` 四參數 factory 與 `Editor` 接受文字。非空答案 trim 後寫入同一 `decisionId` 並沿既有 resume path；空白 Enter 不送出，Escape 返回 selector。options 必須是可直接記錄的完整答案。
 
-production path 已完成四參數 factory、host `Theme` 到 `EditorTheme` adapter、trim、blank Enter 與 Escape focused coverage；Forge package 使用已核准的 `@earendil-works/pi-tui@0.83.0`。current full suite 與真實 PI TUI acceptance 仍未完成，固定 widget tree 也未完成；OOM 根因未知，ticket 不得標記完成。
+production path 已完成四參數 factory、host `Theme` 到 `EditorTheme` adapter、trim、blank Enter 與 Escape focused coverage；Forge package 使用已核准的 `@earendil-works/pi-tui@0.83.0`。當時 current full suite 未完成與 OOM blocker 均為歷史，已由 final closure 取代；Plan B 人工視覺驗收、固定 widget tree 與 autocomplete render coverage 仍未完成。
 
 ## 3. 現行 Plan A，嚴格依 #1 至 #17
 
@@ -217,7 +217,7 @@ RED 的第一次命令參數順序錯誤，實際跑成整個測試檔，不能�
 
 Plan B 只有 status/custom-panel/selector 的最小 slice。固定 widget tree、常駐 workflow stage、evidence 摘要、validation/repair 摘要，以及 selector 與固定 widget 共存尚未完成，見 `docs/PLAN-B.md:116-127`。Plan B 的文件仍有設計衝突：原始方向要求 UI layer，然而 handoff 的 Not Building 要求不實作固定 widget tree；這是人類決策邊界，不能自行把 Plan B 寫成完成。直接證據：`docs/PLAN-B.md:5-32,105-127`、`docs/handoff.md:40-45`。
 
-ADR-0009 的「自行輸入…」production path、四參數 custom factory、Theme adapter、trim、blank Enter 與 Escape focused coverage 已完成；focused regression tests 3/3，`npm run check` exit 0。current `npm test` 為 44/47，約 123 秒後因 heap OOM 終止，另有兩個 loader timeout。真實 PI TUI acceptance、固定 widget tree 與 `selectList` 實際 autocomplete render coverage 仍未完成，OOM 根因未知。直接證據：`CONTEXT.md:147-154`、`docs/adr/ADR-0009-wait-user-fixed-custom-input.md:35-41`、`docs/handoff.md:9-52`。
+ADR-0009 的「自行輸入…」production path、四參數 custom factory、Theme adapter、trim、blank Enter 與 Escape focused coverage 已完成；focused regression tests 3/3，`npm run check` exit 0。44/47、約 123 秒後 heap OOM 與 loader timeout 是歷史結果，已由 focused 83/83、canonical `npm test` 124/124、兩段 check、scripted TUI 1/1 與 4/4 及 review closure 0 findings 取代。Plan B 人工視覺驗收、固定 widget tree 與 `selectList` 實際 autocomplete render coverage 仍未完成。直接證據：`docs/PLAN-A.md` 最終完成狀態、`docs/PLAN-B.md` Final closure。
 
 目前不應新增 top-level recovery stage、第三種 completion status、自動 retry、background steer、queue、parallel workflow，也不應擴大 Deep Knowledge、candidate scoring 或知識來源。`pi-main/` 只保留核准的 Plan A #14 test-only Terminal seam。直接證據：`docs/PLAN-A.md:27-35`、`docs/adr/ADR-0008-grill-completion-recovery-and-interactive-acceptance.md:66-80`、`CONTEXT.md:49-59`。
 
@@ -228,6 +228,12 @@ ADR-0009 的「自行輸入…」production path、四參數 custom factory、Th
 - 取消輸入與 transport failure 不共用 `continue`：Escape 只返回 selector；follow-up bridge 不存在時維持 `WAIT_USER` 並結束 command。來源：`agent-state/wait-user-fixed-custom-input-20260815.md:17-22`、`CONTEXT.md:108-110`。
 - focused test、full suite、真實 runtime／TUI acceptance 是三層不同證據；歷史 slice 通過不能代替 current full 或 runtime 驗收。來源：`CONTEXT.md:149-154`、`docs/handoff.md:26-48`。
 - OOM 根因未被證明前，只記錄觀察到的失敗與已排除項目，不把假設寫成結論。來源：`docs/handoff.md:33-39`。
+- host callback contract 必須先以實際四參數驗證，再建立 adapter；名稱相似不代表介面相同。
+- runtime 應擁有固定輸入入口；dedupe 應放在 publish seam，避免每個呼叫端各自補防護。
+- evidence 的內部追溯與外部呈現要分離，畫面顯示唯一 count，raw ID 留在 runtime state／紀錄。
+- completion 只壓制同一 turn 的 prose；下一 turn 必須恢復正常輸出，不能用全域旗標代替邊界。
+- focused、full、static、scripted TUI 與人工驗收是多層證據，任何一層都不能互相替代。
+- 沒有 decisionId 的 ingress 無法做 pending dedupe；policy 必須保留給人類決策。
 
 ## 8. 來源文件索引與排除項
 

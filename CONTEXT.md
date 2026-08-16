@@ -1,6 +1,6 @@
 # Forge Runtime v4 Context
 
-日期：2026-08-13
+日期：2026-08-16
 
 ## 目標
 
@@ -144,11 +144,26 @@
 - 不在第一版做大型 reasoning plugin 生態。
 - 不在第一版做完整 UI polish。
 
-## ADR-0009 現況同步（2026-08-16）
+## ADR-0009 現況同步（2026-08-16 最終基線）
 
 - Plan A prompt-contract 增補已完成：focused 5/5、當時 `npm test` 116/116、`npm run check` exit 0，Standards／Spec review 各 0 findings。這些是該增補當時的驗證，不代表目前 Plan B 或完整 extension suite 已通過。
 - Plan B selector slice 的歷史驗證為 71/71；不得描述為目前完整 suite 通過。
 - 使用者已核准並安裝 `@earendil-works/pi-tui@0.83.0`，只修改 Forge package，不修改 `pi-main/`。Forge 已依 PI 四參數 `(tui, hostTheme, keybindings, done)` factory 建立 `EditorTheme` adapter，並移除冗餘 `onEscape` 指派。
 - 有效 custom 答案與普通選項在嘗試 resume 後會結束 command；空白 Enter 不送出，Escape 才返回 selector。三個 focused regression tests 3/3 通過，`npm run check` exit 0，scope blast 未發現 sibling bug。
-- `npm test` exit 1：47 tests 中 44 pass、3 fail；約 123 秒、約 4GB heap OOM，另有 2 個 loader timeout。final Standards／Spec review 皆 0 blocker；`selectList` formatter 尚無實際 autocomplete render coverage。
-- 真實 PI TUI acceptance 與 current full suite 尚未完成，ticket 不得標記完成；舊 OOM／type-import probe 未執行。下一步由使用者實機重試相同「自行輸入…」路徑。
+- focused Plan A：83/83 pass；canonical `npm test`：124/124 pass，無 OOM／timeout；`npm run check` 兩段 `tsc --noEmit` 均通過。
+- scripted PI TUI focused 1/1、full 4/4 通過；final review Standards 0 findings、Spec finding 已修正，closure 0 findings。
+- production 已覆蓋 custom Editor／trim／blank Enter／Escape／shared resume、clarification decisionId、相同 pending decisionId 的一次性 publish、unique evidence count、completion prose suppression。
+- 未完成且不可宣稱：Plan B 人工視覺驗收、固定 widget tree、selectList autocomplete render coverage；需使用者核准與驗收。
+
+## WAIT_USER ticket closure（2026-08-16）
+
+- Plan A implementation 與 automated/scripted gates 已完成；下一步等待使用者決定是否進入 Plan B 人工視覺驗收。
+- 無 decisionId 的 ingress 無法做 pending-id dedupe；此為低風險邊界，policy 不由 agent 代決。
+
+## WAIT_USER 固定輸入術語（2026-08-16）
+
+- **WAIT_USER Answer**：針對待處理問題提交的人類回答，可為快捷回答或自由回答。
+- **Clarification Decision**：用來補足語意或範圍的下一個 Grill 決策。
+- **Pending Decision**：尚未完成的人類決策及其 `decisionId`。
+- **Evidence Presentation**：將證據引用轉成使用者可讀的摘要呈現。
+- **Completion Finality**：completion 成功後，該輪不再追加對話內容。

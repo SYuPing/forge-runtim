@@ -2,6 +2,11 @@ node_modules/
 forge-runtime/*/node_modules/
 dist/
 code_base/
+wiki/
+.codex/
+.pi/
+
+
 .artifacts/
 *.log
 .DS_Store

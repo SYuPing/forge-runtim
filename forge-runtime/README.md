@@ -48,6 +48,8 @@ Forge Runtime 是一個供 [PI](../pi-main/packages/coding-agent/README.md) 載�
 | `cancel` | 取消目前流程。 |
 | `switch <request>` | 改以新的請求繼續。 |
 
+`WAIT_USER` selector 會固定在選項最後提供 runtime 擁有的「自行輸入…」。選取後可在同一互動中輸入文字，trim 後必須是非空內容才會送出；blank Enter 不送出，Escape 返回 selector。畫面只顯示去重後的 evidence count，不顯示 raw evidence ID，也不顯示通用 Confirm／Reject。`confirm`／`reject` command 或回答路徑仍可存在，並不代表 UI 必須顯示通用按鈕。
+
 ## Grill completion 契約
 
 `forge_grill_complete` 只接受兩種結果：

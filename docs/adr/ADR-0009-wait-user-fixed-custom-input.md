@@ -32,10 +32,23 @@ Accepted
 - 不重做 PI TUI、不實作固定 widget tree、不修改 `pi-main/`。
 - 不改用 `ctx.ui.editor`／`input`，不自製 Editor；依賴決策僅限 `forge-runtime` package。
 
-## 實作與驗證狀態（2026-08-16）
+## 實作與驗證狀態（2026-08-16 最終）
 
 - `@earendil-works/pi-tui@0.83.0` 已由人類核准並安裝；依賴只在 Forge package，未修改 `pi-main/`。
 - Forge 已依四參數 `(tui, hostTheme, keybindings, done)` factory 建立 host `Theme` → `EditorTheme` adapter，移除冗餘 `onEscape` 指派；有效答案在嘗試 resume 後結束 command，無 bridge 時維持 `WAIT_USER`。
 - 三個 focused regression tests 3/3 通過：render／trim submit、blank Enter／Escape、無 bridge option；`npm run check` exit 0，scope blast 無 sibling bug。
-- `npm test` exit 1：47 tests 中 44 pass、3 fail；約 123 秒、約 4GB heap OOM，另有 2 個 loader timeout。final Standards／Spec review 皆 0 blocker；`selectList` formatter 尚無實際 autocomplete render coverage。
-- 真實 PI TUI acceptance 與 current full suite 尚未完成，因此本 ADR Accepted 不等於 ticket 完成；舊 OOM／type-import probe未執行。下一步由使用者實機重試相同「自行輸入…」路徑。
+- focused Plan A：83/83 pass；canonical `npm test`：124/124 pass，無 OOM／timeout；`npm run check` 兩段 `tsc --noEmit` 均通過。
+- scripted PI TUI focused 1/1、full 4/4 通過；final review Standards 0 findings，Spec finding 已修正，closure 0 findings。
+- production 已覆蓋 custom Editor／trim／blank Enter／Escape／shared resume、clarification decisionId、相同 pending decisionId 的一次性 publish、unique evidence count、completion prose suppression。
+- 未完成且不可宣稱：Plan B 人工視覺驗收、固定 widget tree、selectList autocomplete render coverage；需使用者核准與驗收。無 decisionId ingress 無法做 pending-id dedupe，不替使用者決定 policy。
+
+## 已核准的 WAIT_USER 契約補充（2026-08-16）
+
+1. `questions[].options` 是推薦／快捷回答，不是封閉集合；trim 後非空的自由文字也是有效回答，沿既有 resume path 記錄為同一 `decisionId` 的人類決策。
+2. 若回答的語意仍不足，下一輪 `GRILL` 必須提出新的 clarification decision；不得稱為非法選項，也不得重發原 `decisionId`。
+3. 同一 pending `decisionId` 只發布一次 `WAIT_USER`；重複 completion 或重入不得再次發布同一題。
+4. `WAIT_USER` 不顯示通用 Confirm／Reject；畫面只呈現問題、快捷回答、固定「自行輸入…」入口與必要狀態。
+5. Evidence 以 exact evidence id 去重；主畫面只顯示唯一 evidence 數量（例如 `Evidence: 4 項`），不顯示 raw `ev-...` ID，完整 ID 保留在 runtime state／紀錄供追溯。
+6. `forge_grill_complete` 成功完成狀態轉移後，不再追加 assistant prose；completion 後的可見結果由 runtime UI 契約承擔。
+
+上述補充保留本 ADR 的 Accepted 狀態與下方未完成驗證；不新增 schema 欄位、workflow stage 或 `pi-main/` 變更。
