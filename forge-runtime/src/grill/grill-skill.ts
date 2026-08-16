@@ -33,7 +33,7 @@ export function buildGrillingSkillInvocation(
 		"若資訊已足夠直接進 deep knowledge，status 輸出 READY_FOR_DEEP。",
 		"NEEDS_CONFIRMATION 時，questions 只放一題，格式為 { id, question, options }。",
 		"READY_FOR_DEEP 時，questions 輸出空陣列。",
-		"options 必須是字串陣列，例如 [\"A\", \"B\"]；不要輸出 { id, value } 物件。",
+		"options 必須是字串陣列，例如 [\"A\", \"B\"]；不要輸出 { id, value } 物件；questions[].options[] 必須是可直接記錄為 decision 的完整答案；options 禁止使用「請輸入／請提供……」等操作指示；自由文字輸入責任交給 WAIT_USER UI。",
 		"recommendation 格式為 { value, reason, confidence }。",
 		"evidence 只放 evidence id 字串陣列。",
 		"NEEDS_CONFIRMATION 時 requiresUserConfirmation 必須是 true。",

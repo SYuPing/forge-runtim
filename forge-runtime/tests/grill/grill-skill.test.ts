@@ -36,3 +36,15 @@ test("GrillSkill_WhenInvocationBuilt_ShouldRequireCompletionToolWithoutAssistant
 	assert.doesNotMatch(prompt, /只輸出一個最阻塞的確認問題/);
 	assert.doesNotMatch(prompt, /(?:允許|可以|請|應).{0,12}(?:assistant prose|其他文字結果)/i);
 });
+
+test("BuildGrillingSkillInvocation_WhenOptionsAreRequested_ShouldRequireCompleteRecordableAnswers", () => {
+	const prompt = buildGrillingSkillInvocation("新增 runtime contract");
+
+	assert.match(prompt, /questions\[\]\.options.*必須.*可直接記錄為 decision 的完整答案/);
+});
+
+test("BuildGrillingSkillInvocation_WhenFreeTextIsAvailable_ShouldForbidInputInstructionOptions", () => {
+	const prompt = buildGrillingSkillInvocation("新增 runtime contract");
+
+	assert.match(prompt, /options 禁止使用「請輸入／請提供……」等操作指示；自由文字輸入責任交給 WAIT_USER UI。/);
+});

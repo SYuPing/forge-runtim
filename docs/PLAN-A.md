@@ -2,7 +2,7 @@
 
 日期：2026-08-13
 
-狀態：Completed（2026-08-14）；Plan #1–#17、完整驗證與 final review 均完成，當前 0 open findings。下一步自動執行 Plan B；Plan B 尚未完成。
+狀態：原 Plan #1 至 #17 已 Completed（2026-08-14）；2026-08-15 prompt-contract 增補已完成。增補當時 focused 5/5、`npm test` 116/116、`npm run check` exit 0、Standards／Spec review 各 0 findings。這些結果不代表 Plan B current 驗證；不重開 #1 至 #17。
 
 Prerequisite
 
@@ -36,25 +36,25 @@ Prerequisite
 
 ## Approach
 
-### Gap 1 — 有界 attempt 與 explicit recovery
+### Gap 1：有界 attempt 與 explicit recovery
 
 在既有 session round 狀態上加入最小 attempt／omission marker。首個 completion omission 原子地標記 recovery；相同 attempt 後續 terminal event no-op。`RECOVERY_REQUIRED` 只存在於 `GRILL` 內，不加入 state-machine top-level enum。recovery panel 發出後不安排 follow-up，確保 session settled。
 
-使用者於 2026-08-13 已確認 interface：`ForgeSessionState` 以私有 attempt 狀態維護 omission budget；公開 `recordCompletionOmission(): boolean` 僅首次記錄並進 recovery 時回傳 `true`，重複事件回傳 `false` 且 no-op。`retryGrillRound(): GrillRound | undefined` 只在 recovery 中可用，保留 roundId、request 與 immutable snapshot 並重置 omission budget。`GrillRound` 不公開 attemptId 或 omission marker；retry 後新 attempt 的首次 omission 可再次回傳 `true`。這個小 interface 旨在維持 deep module，避免測試耦合私有狀態；private attempt interface 已於本 session 實作，#1–#3 targeted tests GREEN，但完整驗證仍未跑。
+使用者於 2026-08-13 已確認 interface：`ForgeSessionState` 以私有 attempt 狀態維護 omission budget；公開 `recordCompletionOmission(): boolean` 僅首次記錄並進 recovery 時回傳 `true`，重複事件回傳 `false` 且 no-op。`retryGrillRound(): GrillRound | undefined` 只在 recovery 中可用，保留 roundId、request 與 immutable snapshot 並重置 omission budget。`GrillRound` 不公開 attemptId 或 omission marker；retry 後新 attempt 的首次 omission 可再次回傳 `true`。這個小 interface 旨在維持 deep module，避免測試耦合私有狀態；private attempt interface 已於本 session 實作，#1 至 #3 targeted tests GREEN，但完整驗證仍未跑。
 
 `/forge-runtime retry` 驗證目前確為 recovery，再重用既有 round、snapshot、decision summary 與 evidence cache建立新 attempt；新 attempt 有新的 omission budget。`continue` 在 recovery 中不 replay。
 
-### Gap 2 — 正常 completion 與可見輸出
+### Gap 2：正常 completion 與可見輸出
 
 `NEEDS_CONFIRMATION` completion 在同一操作中以 `{ content: panelText, display: true }` 顯示唯一問題並轉 `WAIT_USER`；使用者回答沿既有 resume path 自動建立下一 round。`READY_FOR_DEEP` 通過 relevance gate 後直接執行既有 deep transition，不等待 command。
 
 Grill invocation 移除「只輸出一個問題」，改為 completion-tool-only：需要確認時 `questions` 恰好一題，`READY_FOR_DEEP` 零題，兩者都不得輸出 assistant prose。
 
-### Gap 3 — Discovery completion guard
+### Gap 3：Discovery completion guard
 
 將首輪 evidence invariant 限定於 manifest 非空。空 manifest 允許零 evidence 的單一來源／scope 問題。relevance gate 失敗不再只 notify 錯誤；它建立可回答的來源／scope decision，顯示 panel 並進 `WAIT_USER`。
 
-### Gap 4 — 真實 PI TUI 驗收
+### Gap 4：真實 PI TUI 驗收
 
 保留 unit／fake extension harness 作快速回歸，但完成 gate 必須另走真 PI TUI／extension lifecycle：觀察問題、回答、下一 round、READY 自動 Deep、omission recovery settled 與單次輸入的 assistant-turn 上限。
 
@@ -90,6 +90,12 @@ production／test 預計 9 個檔案（1 新增、8 修改）；durable docs 依
 ## Tests
 
 | 測試 | 驗收條件 |
+|---|---|
+| `Extension_WhenCustomWaitUserFactoryRuns_ShouldRenderAndSubmitTrimmedAnswer` | fake custom 真正執行四參數 factory；Editor 可 render，Enter 送出 trim 後答案 |
+| `Extension_WhenCustomWaitUserFactoryReceivesBlankThenEscape_ShouldReturnToSelectorWithoutDecision` | blank Enter 不完成，Escape 返回 selector，不新增 decision／round |
+| `Extension_WhenWaitUserOptionCannotResume_ShouldKeepWaitUserAndCloseSelector` | 無 follow-up bridge 時普通選項只開一次 selector，維持 `WAIT_USER` 且不送出 user message |
+
+| 測試 | 驗收條件 |
 | --- | --- |
 | `SessionState_WhenCompletionOmissionFirstOccurs_ShouldEnterRecoveryOnce` | 首次 omission 記錄一次並設定 recovery |
 | `SessionState_WhenSameAttemptOmissionRepeats_ShouldRemainSingleRecovery` | 同 attempt 重複事件不新增 recovery |
@@ -113,13 +119,13 @@ production／test 預計 9 個檔案（1 新增、8 修改）；durable docs 依
 
 ## 本 session 進度（2026-08-14）
 
-- #1–#17 individual tests 已完成並 GREEN；使用者選擇方案 A 並核准 #14 的 test-only seam，#14 已 GREEN。
+- #1 至 #17 individual tests 已完成並 GREEN；使用者選擇方案 A 並核准 #14 的 test-only seam，#14 已 GREEN。
 - focused batch、完整 suite、typecheck、真 PI TUI 與 review 已完成；Plan A acceptance 已完成。
 - production 修改集中於 `forge-runtime/src/runtime/session-state.ts` 與 `forge-runtime/extensions/forge-runtime.ts`；測試 #7 已使用上方新名稱，ADR-0007 stale test 已刪除。
 
 | 編號 | 狀態 |
 | --- | --- |
-| #1–#17 individual tests | completed / GREEN |
+| #1 至 #17 individual tests | completed / GREEN |
 | #14 `PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnswer` | approved seam / GREEN |
 | focused batch、完整 suite、typecheck、review | completed / GREEN |
 
@@ -151,9 +157,78 @@ cd forge-runtime && npm test
 cd forge-runtime && npm run check
 
 # 驗證結果：focused batch、完整 suite、type check 與真 PI TUI 均已完成；116 僅為原始預估，不是硬 gate。
-# #14–#17 與 final review 均已 GREEN；Plan A acceptance 已完成。
+# #14 至 #17 與 final review 均已 GREEN；Plan A acceptance 已完成。
 # 真實 PI TUI：問題可見、回答後下一 round、READY 自動 Deep、每 attempt omission recovery 一次且 settled、單次輸入 assistant turns 有界。
 ```
+
+---
+
+## 2026-08-15 增補 Plan A：WAIT_USER 選項語意契約（Completed）
+
+本增補不重開已完成的 Plan A #1 至 #17；只先補上 Plan B 固定自由輸入入口所依賴的最小 prompt contract。
+
+### Building
+
+- 規定 `questions[].options` 只能包含可直接記錄為 decision 的完整答案。
+- 禁止把「請輸入／請提供……」等操作指示放入 options；自由文字由 `WAIT_USER` 的系統「自行輸入…」入口負責。
+
+### Not Building
+
+- 不加入選項文案 heuristic 或語意 parser。
+- 不修改 grill result schema、workflow stage、completion status 或 `pi-main/`。
+
+### Approach
+
+只在 `buildGrillingSkillInvocation` 既有 options 規則旁補一條明確約束；結構驗證仍維持既有 string array contract。這避免 UI 猜文案，也避免為單一互動新增 schema。
+
+Fragile assumption：prompt 約束能大幅減少操作指示型 options，但不提供機器層語意證明；固定「自行輸入…」仍是使用者可逃離錯誤候選的 UI 邊界。
+
+### Files
+
+| 檔案 | 變動 |
+| --- | --- |
+| `forge-runtime/src/grill/grill-skill.ts` | 補上 options 必須是完整答案的 prompt contract |
+| `forge-runtime/tests/grill/grill-skill.test.ts` | 新增兩個 prompt contract tests |
+
+共 2 個檔案（0 新增 + 2 修改）。
+
+### Tests
+
+| 測試 | 驗收條件 |
+| --- | --- |
+| `BuildGrillingSkillInvocation_WhenOptionsAreRequested_ShouldRequireCompleteRecordableAnswers` | invocation 明確要求 options 可直接記錄為 decision |
+| `BuildGrillingSkillInvocation_WhenFreeTextIsAvailable_ShouldForbidInputInstructionOptions` | invocation 禁止操作指示型 options，並把自由輸入責任交給 WAIT_USER UI |
+
+### Execution Order
+
+1. 獨立測試子代理先新增上述兩個測試並執行 focused batch，確認第一個紅燈及失敗原因。
+2. 確認紅燈後，獨立實作角色才修改 `grill-skill.ts` 做最小 GREEN。
+3. 獨立驗證角色重跑 focused test、完整 suite 與 type check。
+4. 獨立 review 角色確認沒有 schema、狀態機或 `pi-main/` 變更後，才進 Plan B。
+
+### Execution Result
+
+- 增補已完成並通過 focused test、完整 suite、type check 與獨立 review；未重開 Plan A #1 至 #17。
+- Plan B 的 custom Editor 依賴決策已批准：Forge package 使用 `@earendil-works/pi-tui@0.83.0`，只改 Forge package，不改 `pi-main/`；後續以 RED→GREEN 進入固定「自行輸入…」slice。
+
+### Verification
+
+```text
+# 僅由獨立驗證子代理執行，從 repo root
+cd forge-runtime && npx tsx --test tests/grill/grill-skill.test.ts
+cd forge-runtime && npm test
+cd forge-runtime && npm run check
+
+# 期望：既有 114 + 新增 2 = 116 passed / 0 failed；type check 通過。
+```
+
+## 2026-08-16 增補實測同步
+
+- prompt-contract 增補已實測完成，並保留上述當時的 focused 5/5、`npm test` 116/116、`npm run check` exit 0 與兩軸 review 0 findings 證據。
+- 這不代表 Plan B 的 current 驗證完成；Plan B selector slice 只有歷史 71/71 證據，不能當作目前完整 suite。
+- 四參數 custom factory、Theme adapter、冗餘 `onEscape` 移除與有效答案 resume 後結束 command 均已完成；focused regression tests 3/3、`npm run check` exit 0，final Standards／Spec review 皆 0 blocker，scope blast 無 sibling bug。
+- `npm test` exit 1：47 tests 中 44 pass、3 fail；約 123 秒、約 4GB heap OOM，另有 2 個 loader timeout。`selectList` formatter 尚無實際 autocomplete render coverage。
+- 真實 PI TUI acceptance 與 current full suite 仍待完成；ticket 不得標記完成，舊 OOM／type-import probe 未執行。下一步由使用者實機重試相同「自行輸入…」路徑。
 
 ---
 
@@ -165,7 +240,7 @@ cd forge-runtime && npm run check
 
 日期：2026-08-11
 
-狀態：Completed — 2026-08-13 final schema exactness 與文件語意 follow-up 完成，完整驗證 97/97 與 type check 均通過。
+狀態：Completed，2026-08-13 final schema exactness 與文件語意 follow-up 完成，完整驗證 97/97 與 type check 均通過。
 
 Prerequisite
 
@@ -285,7 +360,7 @@ Execution Order
 
 ---
 
-## Execution Progress — 2026-08-12
+## Execution Progress：2026-08-12
 
 已完成的 red → green slices：
 
@@ -356,7 +431,7 @@ Approval and Completion Gate
 
 ---
 
-## Completion — 2026-08-13
+## Completion：2026-08-13
 
 - 三個 safety slices 均完成：continue replay 攜帶既有 decision；缺 followUp bridge 時 confirm／reject／selector 維持 `WAIT_USER`；缺 `newSession` 或 replacement 被取消時 switch 保留原 workflow。
 - final review 修正：正常 Grill prompt 改為 completion-tool-only；`READY_FOR_DEEP` completion 離開 Grill 後還原原 active tools；缺少完整 tool-boundary capability 時拒絕啟動或重播 Grill。
@@ -375,7 +450,7 @@ Approval and Completion Gate
 
 日期：2026-08-10
 
-狀態：Completed — 使用者確認後已依本計畫完成最小修復與驗證。
+狀態：Completed；使用者確認後已依本計畫完成最小修復與驗證。
 
 Prerequisite（若有）
 

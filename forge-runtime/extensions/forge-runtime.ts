@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import Type from "typebox";
 import { buildGrillingSkillInvocation } from "../src/grill/grill-skill.ts";
 import {
@@ -34,8 +35,25 @@ interface CommandContext {
 	ui?: {
 		notify(message: string, level?: string): void;
 		select?(title: string, options: string[]): Promise<string | undefined>;
+			custom?(
+				factory: (
+					tui: TUI,
+					hostTheme: ForgeHostTheme,
+					_keybindings: unknown,
+					done: (value: string | undefined) => void,
+				) => Component | Promise<Component>,
+		): Promise<string | undefined>;
 		setStatus?(status: string): void;
 	};
+	}
+
+interface ForgeHostTheme {
+	fg(token: "accent" | "muted" | "borderMuted", text: string): string;
+}
+
+interface ForgeEditorTheme {
+	borderColor: EditorTheme["borderColor"];
+	selectList: EditorTheme["selectList"];
 }
 
 interface CommandRegistration {
@@ -650,17 +668,63 @@ async function handleWaitUserState(
 	ctx: CommandContext,
 	state: ForgeUiState,
 ): Promise<void> {
+	const RUNTIME_OWNED_INPUT_LABEL = "自行輸入…";
 	await publishState(pi, ctx, state);
 
 	if (!ctx.ui?.select || !state.waitUser) {
 		return;
 	}
 
-	const selection = await ctx.ui.select(state.waitUser.question, state.waitUser.options);
-	if (selection === undefined) {
-		return;
-	}
-	if (await resumeWaitUserByFollowUp(pi, selection)) {
+	while (true) {
+		const selection = await ctx.ui.select(state.waitUser.question, [
+			...state.waitUser.options,
+			RUNTIME_OWNED_INPUT_LABEL,
+		]);
+		if (selection === undefined) {
+			return;
+		}
+		if (selection === RUNTIME_OWNED_INPUT_LABEL) {
+			if (!ctx.ui.custom) {
+				return;
+			}
+			const answer = await ctx.ui.custom(async (tui, hostTheme, _keybindings, done) => {
+				const { Editor, Key, matchesKey } = await import("@earendil-works/pi-tui");
+				const editorTheme: ForgeEditorTheme = {
+					borderColor: (text) => hostTheme.fg("borderMuted", text),
+					selectList: {
+						selectedPrefix: (text) => hostTheme.fg("accent", text),
+						selectedText: (text) => hostTheme.fg("accent", text),
+						description: (text) => hostTheme.fg("muted", text),
+						scrollInfo: (text) => hostTheme.fg("muted", text),
+						noMatch: (text) => hostTheme.fg("muted", text),
+					},
+				};
+				const editor = new Editor(tui, editorTheme);
+				editor.onSubmit = (value) => {
+					const trimmed = value.trim();
+					if (trimmed.length > 0) done(trimmed);
+				};
+				const handleInput = editor.handleInput.bind(editor);
+				editor.handleInput = (data) => {
+					if (matchesKey(data, Key.escape)) {
+						done(undefined);
+						return;
+					}
+					handleInput(data);
+				};
+				return editor;
+			});
+			if (answer === undefined) {
+				continue;
+			}
+			const trimmed = answer.trim();
+			if (trimmed.length === 0) {
+				continue;
+			}
+			await resumeWaitUserByFollowUp(pi, trimmed);
+			return;
+		}
+		await resumeWaitUserByFollowUp(pi, selection);
 		return;
 	}
 }

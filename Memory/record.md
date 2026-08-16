@@ -4,7 +4,7 @@
 
 本文件把本專案現有 Markdown 中能確認的開發過程，依照時間與依賴順序整理成可交接的記錄。讀者假設是接手 Forge Runtime v4 的資深工程師，需要知道每次決策為何發生、哪個契約被改變、哪個錯誤曾經阻擋進度，以及哪些驗證結果是真實結果而不是預估值。
 
-本記錄涵蓋架構基線、ADR-0001 至 ADR-0008、Plan A 的歷史與現行執行、Plan B 的最小 UI slice、三份 durable state，以及 handoff 所指定的目前狀態。紀錄截止於 2026-08-14。沒有文件證據的細節不在此補造；若某一階段的精確命令、完整 diff 或時間未被文件記錄，以下會明確標示。
+本記錄涵蓋架構基線、ADR-0001 至 ADR-0009、Plan A 的歷史與現行執行、Plan B 的最小 UI slice、四份 durable state，以及 handoff 所指定的目前狀態。紀錄截止於 2026-08-16。沒有文件證據的細節不在此補造；若某一階段的精確命令、完整 diff 或時間未被文件記錄，以下會明確標示。
 
 本 repo 沒有 root-level Git baseline，因而不能把固定起點 diff 當作證據。這個限制在 `docs/handoff.md:47-55`、`agent-state/typebox-loader-compatibility.md:37-43` 與 Plan A 的 final review 記錄中都有說明。
 
@@ -100,6 +100,14 @@ ADR-0008 正式 supersede ADR-0007 的 completion omission `continue` replay。�
 
 使用者確認的 deep module seam 是 `recordCompletionOmission(): boolean` 與 `retryGrillRound(): GrillRound | undefined`。attemptId 與 omission marker 不進公開 `GrillRound` contract；retry 保留 round、request、immutable snapshot 並重置 omission budget。正常 `NEEDS_CONFIRMATION` 自動進 `WAIT_USER`，回答後自動下一 round；`READY_FOR_DEEP` 通過 gate 後自動 Deep。空 manifest 可用零 evidence 提出唯一 scope 問題，relevance failure 也必須可見且可回答。
 
+### 2.10 ADR-0009：WAIT_USER 固定自行輸入入口，2026-08-15 至 2026-08-16
+
+來源：`docs/adr/ADR-0009-wait-user-fixed-custom-input.md:1-41`、`agent-state/wait-user-fixed-custom-input-20260815.md:162-211`。
+
+ADR-0009 固定由 runtime 在每個 TUI selector 最後提供「自行輸入…」，不依模型文案猜測。選取後沿 PI 既有 `ctx.ui.custom` 四參數 factory 與 `Editor` 接受文字。非空答案 trim 後寫入同一 `decisionId` 並沿既有 resume path；空白 Enter 不送出，Escape 返回 selector。options 必須是可直接記錄的完整答案。
+
+production path 已完成四參數 factory、host `Theme` 到 `EditorTheme` adapter、trim、blank Enter 與 Escape focused coverage；Forge package 使用已核准的 `@earendil-works/pi-tui@0.83.0`。current full suite 與真實 PI TUI acceptance 仍未完成，固定 widget tree 也未完成；OOM 根因未知，ticket 不得標記完成。
+
 ## 3. 現行 Plan A，嚴格依 #1 至 #17
 
 本節的編號就是後續工程師搜尋的定位索引。每一步都記錄目標、決策、修改、錯誤、修正、驗證與教訓。Plan A 的正式測試表在 `docs/PLAN-A.md:114-124`，最終狀態與證據在 `docs/PLAN-A.md:126-155`。
@@ -128,7 +136,7 @@ RED 原因是 `retryGrillRound` 不存在，0 pass、1 fail。修正是在 `Forg
 
 ### #6：recovery 後工具與 active workflow 保留
 
-此步沿用既有 active workflow 控制與 tool restore safety，確保 cancel/switch/retry 的邊界不會留下錯誤工具。文件記錄 #1 至 #7 均 GREEN，未記載新的錯誤。教訓是 recovery 只增加 Grill 內部 marker，不要擴張 top-level state machine。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:26,31,93,123`。
+此步沿用既有 active workflow 控制與 tool restore safety，確保 cancel/switch/retry 的邊界不會留下錯誤工具。文件記錄 #1 至 #7 均 GREEN，未記載新的錯誤。教訓是 recovery 只增加 Grill 內部 marker，不要擴張 top-level state machine。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:26,31,93,123`、`agent-state/grill-resume-replay.md:12-15`。
 
 ### #7：completion needs confirmation 的新命名與 WAIT_USER
 
@@ -170,7 +178,7 @@ RED 的第一次命令參數順序錯誤，實際跑成整個測試檔，不能�
 
 ### #16：completion omission recovery settled
 
-真實 PI TUI 測試 `pi-grill-interactive.test.ts:229` 只回傳一段無 tool prose，驗證一次 `GRILL_COMPLETION_REQUIRED`、retry/cancel/switch、panel 只出現一次、user 只出現一次、queue 耗盡，settled 後 assistant 不再增加。測試 1/1、約 7.5 秒自行 exit。沒有 production 修改。教訓是 omission 的驗收核心是停止背景活動，不是自動補送一輪。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:274-294`。
+真實 PI TUI 測試 `pi-grill-interactive.test.ts:229` 只回傳一段無 tool prose，驗證一次 `GRILL_COMPLETION_REQUIRED`、retry/cancel/switch、panel 只出現一次、user 只出現一次、queue 耗盡，settled 後 assistant 不再增加。測試 1/1、約 7.5 秒自行 exit。沒有 production 修改。教訓是 omission 的驗收核心是停止背景活動，不是自動補送一輪。直接證據：`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:274-294,322`。
 
 ### #17：單次輸入的 assistant turn 邊界
 
@@ -192,9 +200,9 @@ RED 的第一次命令參數順序錯誤，實際跑成整個測試檔，不能�
 2. stale contract/test：舊測試期待 omission 顯示 `continue` 並可 replay；ADR-0008 改成 retry/cancel/switch，stale test 已刪除，見 `docs/adr/ADR-0007-grill-completion-tool.md:1-9`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:21-22,85-86`。
 3. focused test 參數順序錯誤：#13 初次命令執行整檔，不能當作 focused RED/Green；改正 pattern 後才採用 1/1，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:199-203`。
 4. type errors：Plan #14 的 upstream terminal option 型別錯誤在 seam 加入後出現；修正後 terminal 相關錯誤消失，留下既存 `packages/ai/test/*` 錯誤。不能把剩餘錯誤歸因於 Forge seam，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:228-237`。
-5. loader distribution：source CLI、global compiled CLI 與 virtual module 分支不相同；真正 regression 必須走使用者實際的 compiled loader path，見 `agent-state/typebox-loader-compatibility.md:14-29,37-43`。
+5. loader distribution：source CLI、global compiled CLI 與 virtual module 分支不相同；真正 regression 必須走使用者實際的 compiled loader path，見 `agent-state/typebox-loader-compatibility.md:14-29,33,37-43`。
 6. fixture evidence invariant：#15 的非空 manifest 加空 evidence 觸發首輪 guard；正確修法是補真實 candidate/evidence fixture，不是放寬 guard，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:248-264`。
-7. pass 後 hang：`InteractiveMode.run()` 是 production 永久 loop，測試 assertions 通過後仍可能不退出；runner 需使用 `--test-force-exit`，這不是 runtime abort seam，見 `docs/PLAN-A.md:65-67`。
+7. pass 後 hang：`InteractiveMode.run()` 是 production 永久 loop，測試 assertions 通過後仍可能不退出；runner 需使用 `--test-force-exit`，這不是 runtime abort seam，見 `docs/PLAN-A.md:63-67`。
 8. full-suite 30 秒 timeout：完整 suite 的 loader smoke 在並行負載下觸發 30 秒 timeout；採 `--test-concurrency=1`，保留 timeout 安全界線，見 `docs/PLAN-A.md:131`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:340`。
 9. 非 active attempt 未 fail-closed：final review 發現兩個 Grill tool 的 gate 不完整；補上 `pendingGrillRun && stage===GRILL` 共同 gate 與 execute guard，P1 1/1 通過，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:336-338,352`。
 10. panel payload 不可見：#10 raw payload 顯示 `content` 與 `display` 不符合契約；三個出口統一使用完整 `panelText` 與 `display: true`，見 `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:172-175`。
@@ -205,15 +213,25 @@ RED 的第一次命令參數順序錯誤，實際跑成整個測試檔，不能�
 
 ## 6. 目前狀態與未完成項目
 
-截至 2026-08-14，Plan A #1 至 #17 已完成，完整 suite 114/114，Plan A final review 0 open findings。`forge-runtime` 的 `npm run check` exit 0；真實 PI TUI 4/4；upstream seam Vitest 4/4。唯一已知外部風險是 upstream `packages/ai` 測試型別錯誤。直接證據：`docs/PLAN-A.md:126-132`、`agent-state/grill-completion-recovery-interactive-acceptance-20260813.md:332-355`。
+截至 2026-08-16，Plan A #1 至 #17 已完成；其完整 suite、Plan A final review、真實 PI TUI 與 upstream seam 證據仍屬已完成的歷史 milestone。直接證據：`docs/PLAN-A.md:120-138`、`docs/PLAN-A.md:434-447`。
 
 Plan B 只有 status/custom-panel/selector 的最小 slice。固定 widget tree、常駐 workflow stage、evidence 摘要、validation/repair 摘要，以及 selector 與固定 widget 共存尚未完成，見 `docs/PLAN-B.md:116-127`。Plan B 的文件仍有設計衝突：原始方向要求 UI layer，然而 handoff 的 Not Building 要求不實作固定 widget tree；這是人類決策邊界，不能自行把 Plan B 寫成完成。直接證據：`docs/PLAN-B.md:5-32,105-127`、`docs/handoff.md:40-45`。
 
+ADR-0009 的「自行輸入…」production path、四參數 custom factory、Theme adapter、trim、blank Enter 與 Escape focused coverage 已完成；focused regression tests 3/3，`npm run check` exit 0。current `npm test` 為 44/47，約 123 秒後因 heap OOM 終止，另有兩個 loader timeout。真實 PI TUI acceptance、固定 widget tree 與 `selectList` 實際 autocomplete render coverage 仍未完成，OOM 根因未知。直接證據：`CONTEXT.md:147-154`、`docs/adr/ADR-0009-wait-user-fixed-custom-input.md:35-41`、`docs/handoff.md:9-52`。
+
 目前不應新增 top-level recovery stage、第三種 completion status、自動 retry、background steer、queue、parallel workflow，也不應擴大 Deep Knowledge、candidate scoring 或知識來源。`pi-main/` 只保留核准的 Plan A #14 test-only Terminal seam。直接證據：`docs/PLAN-A.md:27-35`、`docs/adr/ADR-0008-grill-completion-recovery-and-interactive-acceptance.md:66-80`、`CONTEXT.md:49-59`。
 
-## 7. 來源文件索引與排除項
+## 7. Lesson learned
 
-本記錄使用的 17 份本專案 Markdown 來源如下：
+- 先依 host 的真實 callback contract 驗證 `ctx.ui.custom` 四參數，再建立 `Theme → EditorTheme` adapter；不可只依名稱或本地手寫型別假設介面形狀。來源：`docs/adr/ADR-0009-wait-user-fixed-custom-input.md:15-20,35-40`。
+- 測試必須實際執行 factory 與 render path；只讓 fake 回傳最後答案，只能驗證 wiring，不能證明 TUI 可用。來源：`docs/PLAN-A.md:92-96`。
+- 取消輸入與 transport failure 不共用 `continue`：Escape 只返回 selector；follow-up bridge 不存在時維持 `WAIT_USER` 並結束 command。來源：`agent-state/wait-user-fixed-custom-input-20260815.md:17-22`、`CONTEXT.md:108-110`。
+- focused test、full suite、真實 runtime／TUI acceptance 是三層不同證據；歷史 slice 通過不能代替 current full 或 runtime 驗收。來源：`CONTEXT.md:149-154`、`docs/handoff.md:26-48`。
+- OOM 根因未被證明前，只記錄觀察到的失敗與已排除項目，不把假設寫成結論。來源：`docs/handoff.md:33-39`。
+
+## 8. 來源文件索引與排除項
+
+本記錄使用的 19 份本專案 Markdown 來源如下：
 
 1. `FORGE_RUNTIME_Arch_v4.md`：v4 架構與最高邊界。
 2. `CONTEXT.md`：當前 contract、Plan A 狀態與已知風險。
@@ -228,11 +246,13 @@ Plan B 只有 status/custom-panel/selector 的最小 slice。固定 widget tree�
 11. `docs/adr/ADR-0006-grill-readonly-candidate-verification.md`：candidate verification 與 snapshot。
 12. `docs/adr/ADR-0007-grill-completion-tool.md`：completion tool 與 loader follow-up。
 13. `docs/adr/ADR-0008-grill-completion-recovery-and-interactive-acceptance.md`：recovery 與 TUI acceptance。
-14. `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md`：Plan A #1 至 #17 的 durable milestone、錯誤與最終證據。
-15. `agent-state/grill-resume-replay.md`：被 ADR-0008 部分取代的歷史 resume/replay ticket。
-16. `agent-state/typebox-loader-compatibility.md`：loader 錯誤、有效 regression seam 與修正。
-17. `AGENTS.md`：repo 工作規則、角色隔離、驗證委派與文件交付規則，不是功能決策來源，但列入以說明本記錄的交接與證據格式邊界。
+14. `docs/adr/ADR-0009-wait-user-fixed-custom-input.md`：WAIT_USER 固定自行輸入入口。
+15. `agent-state/wait-user-fixed-custom-input-20260815.md`：本 ticket 的 durable state、驗證與阻塞。
+16. `agent-state/grill-completion-recovery-interactive-acceptance-20260813.md`：Plan A #1 至 #17 的 durable milestone、錯誤與最終證據。
+17. `agent-state/grill-resume-replay.md`：被 ADR-0008 部分取代的歷史 resume/replay ticket。
+18. `agent-state/typebox-loader-compatibility.md`：loader 錯誤、有效 regression seam 與修正。
+19. `AGENTS.md`：repo 工作規則、角色隔離、驗證委派與文件交付規則，不是功能決策來源，但列入以說明本記錄的交接與證據格式邊界。
 
-排除項：`pi-main/**` 上游文件只用於已記錄的 API 或 loader 事實，未納入本記錄來源索引；`node_modules`、`.codegraph`、`wiki`、`code_base` 與所有 `.log` 均排除。它們不是本次開發決策的 Markdown 紀錄。程式碼與測試檔只在本文作為 `file:line` 證據引用，沒有把它們當成第 18 份以上的文件來源。
+排除項：`pi-main/**` 上游文件只用於已記錄的 API 或 loader 事實，未納入本記錄來源索引；`node_modules`、`.codegraph`、`wiki`、`code_base` 與所有 `.log` 均排除。它們不是本次開發決策的 Markdown 紀錄。程式碼與測試檔只在本文作為 `file:line` 證據引用，沒有把它們當成第 20 份以上的文件來源。
 
 本文件的文字只記錄上述來源能確認的內容。未在來源中出現的精確 commit、完整 diff、個別代理名稱、Plan B 後續決策與某些早期測試命令，均未猜測補寫。

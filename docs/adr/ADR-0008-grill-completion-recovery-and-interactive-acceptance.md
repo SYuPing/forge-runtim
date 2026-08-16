@@ -15,6 +15,7 @@ Accepted
 - test evidence：#1–#7 各自精準單測均 1 pass、exit 0；#7 測試名稱為 `Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWaitUser`。ADR-0007 stale 測試已刪除。
 - 非 active Grill attempt 的兩工具已由 `pendingGrillRun && stage===GRILL` 共同 gate 與 execute guard fail-closed；正常 TUI 不含 `continue`，omission 靜置且僅 `/forge-runtime retry` 建立下一 attempt。
 - 證據：P1 1/1、TUI 4/4、`npm run check`、`npm test` 114/114 均 exit 0；upstream seam Vitest 4/4，upstream check 僅剩既有 `packages/ai` 測試型別錯誤。
+- 2026-08-15 核准的 `WAIT_USER` 固定自行輸入入口另由 ADR-0009 規範；不改動本 ADR 的 recovery 與有界 attempt 決策。
 
 ## Context
 

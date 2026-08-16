@@ -905,6 +905,7 @@ async function createExtensionHarness(options: {
 		ui?: {
 			notify?(message: string): void;
 			select?(title: string, options: string[]): Promise<string | undefined>;
+			custom?(...args: unknown[]): Promise<string | undefined>;
 			setStatus?(status: string): void;
 		};
 	} = {}) {
@@ -1368,7 +1369,7 @@ test("Extension_WhenUiSelectAvailable_ShouldUseSelectorToResumeWaitUser", async 
 
 	assert.equal(selectCalls.length, 1, "Expected ctx.ui.select to be called once");
 	assert.match(selectCalls[0]?.title ?? "", /Proceed to deep knowledge retrieval\?/);
-	assert.deepEqual(selectCalls[0]?.options ?? [], ["confirm", "reject"]);
+	assert.deepEqual(selectCalls[0]?.options ?? [], ["confirm", "reject", "自行輸入…"]);
 	assert.deepEqual(harness.observedUserMessageCalls, [{ content: "confirm", options: { deliverAs: "followUp" } }]);
 	assert.equal(harness.reenteredFollowUpEvents.length, 1, "預期 selector 會剛好一次重新進入共用 input 路徑");
 	assert.deepEqual(harness.reenteredFollowUpEvents[0]?.event, { text: "confirm" });
@@ -1400,7 +1401,7 @@ test("Extension_WhenSelectorCannotFollowUp_ShouldRemainWaitUser", async (t) => {
 
 	assert.equal(selectCalls.length, 1, "Expected ctx.ui.select to be called once");
 	assert.match(selectCalls[0]?.title ?? "", /Proceed to deep knowledge retrieval\?/);
-	assert.deepEqual(selectCalls[0]?.options ?? [], ["confirm", "reject"]);
+	assert.deepEqual(selectCalls[0]?.options ?? [], ["confirm", "reject", "自行輸入…"]);
 	assert.deepEqual(harness.observedUserMessageCalls, []);
 	assert.equal(harness.reenteredFollowUpEvents.length, 0);
 	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
@@ -2120,6 +2121,126 @@ test("Extension_WhenIdleAndChitChat_ShouldContinue", async () => {
 	const result = await inputHandler({ text: "今天天氣如何？" });
 
 	assert.deepEqual(result, { action: "continue" });
+});
+
+test("Extension_WhenCustomWaitUserFactoryRuns_ShouldRenderAndSubmitTrimmedAnswer", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+	const harness = await createExtensionHarness({ cwd: rootDir });
+	const manifestCandidate = await startFormalGrillRound(rootDir, harness.sendInput);
+	let customCalls = 0;
+
+	await harness.runCommand(formalWaitUserCommand(manifestCandidate), {
+		ui: {
+			async select() {
+				return "自行輸入…";
+			},
+			async custom(...args: unknown[]) {
+				customCalls += 1;
+				const factory = args[0] as (...args: unknown[]) => Promise<{
+					render(width: number): void;
+					handleInput(input: string): void;
+				}>;
+				const fakeTui = { requestRender() {}, terminal: { rows: 24 } };
+				const hostTheme = { fg(_token: unknown, text: string) { return text; } };
+				const keybindings = {};
+				let doneValue = "";
+				const done = (value: string) => {
+					doneValue = value;
+				};
+				const editor = await Reflect.apply(factory, undefined, [fakeTui, hostTheme, keybindings, done]);
+				editor.render(80);
+				editor.handleInput("  自訂回答  ");
+				editor.handleInput("\r");
+				return doneValue;
+			},
+		},
+	});
+
+	assert.equal(harness.observedUserMessageCalls.at(-1)?.content, "自訂回答");
+	assert.equal(customCalls, 1);
+});
+
+test("Extension_WhenCustomWaitUserFactoryReceivesBlankThenEscape_ShouldReturnToSelectorWithoutDecision", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+	const harness = await createExtensionHarness({ cwd: rootDir });
+	const manifestCandidate = await startFormalGrillRound(rootDir, harness.sendInput);
+	let selectCalls = 0;
+	let customCalls = 0;
+
+	await harness.runCommand(formalWaitUserCommand(manifestCandidate), {
+		ui: {
+			async select() {
+			selectCalls += 1;
+			if (selectCalls === 2) {
+				assert.equal(harness.observedUserMessageCalls.length, 0);
+			}
+				return selectCalls === 1 ? "自行輸入…" : "confirm";
+			},
+			async custom(...args: unknown[]) {
+				customCalls += 1;
+				const factory = args[0] as (...args: unknown[]) => Promise<{
+					render(width: number): void;
+					handleInput(input: string): void;
+				}>;
+				const fakeTui = { requestRender() {}, terminal: { rows: 24 } };
+				const hostTheme = { fg(_token: unknown, text: string) { return text; } };
+				const keybindings = {};
+				let doneCalls = 0;
+				let doneValue: unknown;
+				const done = (value: unknown) => {
+					doneCalls += 1;
+					doneValue = value;
+				};
+				const editor = await Reflect.apply(factory, undefined, [fakeTui, hostTheme, keybindings, done]);
+				editor.render(80);
+				editor.handleInput("   ");
+				editor.handleInput("\r");
+				assert.equal(doneCalls, 0);
+				editor.handleInput("\x1b");
+				assert.equal(doneCalls, 1);
+				assert.equal(doneValue, undefined);
+				return doneValue;
+			},
+		},
+	});
+
+	assert.equal(selectCalls, 2);
+	assert.equal(customCalls, 1);
+	assert.equal(harness.observedUserMessageCalls.length, 1);
+	assert.equal(harness.observedUserMessageCalls[0]?.content, "confirm");
+});
+
+test("Extension_WhenWaitUserOptionCannotResume_ShouldKeepWaitUserAndCloseSelector", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+	const harness = await createExtensionHarness({ cwd: rootDir, withoutFollowUpBridge: true });
+	const manifestCandidate = await startFormalGrillRound(rootDir, harness.sendInput);
+	let selectorCalls = 0;
+
+	await assert.doesNotReject(
+		harness.runCommand(formalWaitUserCommand(manifestCandidate), {
+			ui: {
+				async select() {
+					selectorCalls += 1;
+					if (selectorCalls === 1) return "confirm";
+					throw new Error("selector reopened");
+				},
+			},
+		}),
+	);
+
+	assert.equal(selectorCalls, 1);
+	assert.equal(harness.observedUserMessageCalls.length, 0);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
+	assert.match(harness.observedMessages.at(-1) ?? "", /Proceed to deep knowledge retrieval\?/);
 });
 
 test("Extension_WhenWaitUserAndShortConfirmation_ShouldResumeExistingWorkflow", async (t) => {

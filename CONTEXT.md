@@ -10,7 +10,7 @@
 
 ## 目前 repo 狀態
 
-- repo root 只有 `FORGE_RUNTIME_Arch_v4.md`、`forge-runtime/`、`pi-main/`。
+- repo root 已包含 `docs/`、`agent-state/`、`Memory/` 等交付文件；Forge 新實作仍只位於 `forge-runtime/`，`pi-main/` 維持上游參考用途。
 - `forge-runtime/` 已建立獨立 TypeScript package，含 state machine、orchestrator、light discovery、candidate relevance gate、deep executor、context builder、repair routing 與最小 extension entry。
 - `docs/handoff.md`、`CONTEXT.md`、`docs/adr/` 在本次設計前皆不存在；本次依 workflow 補齊。
 
@@ -48,9 +48,9 @@
 
 ### Grill acceptance 進度（2026-08-14）
 
-- Plan A #1–#17 已完成並 GREEN；final review 的 Standards 1 個 P1 與 Spec 2 個驗收缺口均已修正，當前 0 open findings。
+- Plan A #1 至 #17 已完成並 GREEN；final review 的 Standards 1 個 P1 與 Spec 2 個驗收缺口均已修正，當前 0 open findings。
 - production 已落在 `forge-runtime/src/runtime/session-state.ts` 與 `forge-runtime/extensions/forge-runtime.ts`：session seam 維護 per-attempt omission budget，extension 完成 omission settle／restore tools、recovery continue 拒絕與明確一次 retry followUp。
-- #8–#13 已完成互動、Deep、panel、prompt、空 manifest 與 relevance gate slices；`116` 僅為預估，刪除 stale test 後淨測試數不固定。
+- #8 至 #13 已完成互動、Deep、panel、prompt、空 manifest 與 relevance gate slices；`116` 僅為預估，刪除 stale test 後淨測試數不固定。
 - #14 seam 精確形狀已核准：`InteractiveModeOptions` 新增 optional `terminal?: Terminal`，constructor 將 options.terminal 轉交既有 `createInteractiveTui`；省略時仍由 factory 建立 `ProcessTerminal`。
 - seam 僅供真 PI TUI test-only 使用；不得注入 TUI factory、不得新增依賴、不得改 runtime workflow 語意或 pi-main 其他功能。
 - 非 active Grill attempt 的兩個 Grill 工具已以 `pendingGrillRun && stage===GRILL` 共同 gate，並加上 execute guard，確保 fail-closed。
@@ -84,7 +84,7 @@
 
 - 使用 `forge-runtime/` 作為唯一新實作根目錄。
 - 以 package + extension + skills 形式落地，不碰 `pi-main/`。
-- 真 PI TUI #14–#17 是明確核准的 test-only 例外：只增加 `InteractiveModeOptions.terminal` seam，不改 pi-main runtime workflow 或其他功能。
+- 真 PI TUI #14 至 #17 是明確核准的 test-only 例外：只增加 `InteractiveModeOptions.terminal` seam，不改 pi-main runtime workflow 或其他功能。
 - 先把 workflow contract 做對，再補 TUI / custom UI。
 - TDD 與獨立 review 是 runtime policy，不是提示詞建議。
 - 正式 ingress 僅限一般自然工程請求與 asset approval；控制命令不構成新的正式 ingress。
@@ -102,7 +102,8 @@
 - `forge_grill_complete` 成功後必須原子地完成狀態轉移，並壓制同一 agent turn 餘下的 streaming 與終局 prose；不可用 `abort()` 取代此規則。
 - `forge_grill_complete` 的結果只保留 `NEEDS_CONFIRMATION` 與 `READY_FOR_DEEP`；候選證據不足時以單一 `NEEDS_CONFIRMATION` 問題請使用者補來源或明確改變 Discovery 範圍。
 - completion payload 的 `evidence` 僅能引用本 workflow 已由 `forge_grill_evidence` 回傳的 candidate id；非空 snapshot 的第一輪至少須成功查核一筆 evidence，空 manifest 則允許零 evidence 的單一來源／scope 問題，後續 round 可重用既有查核結果。
-- `WAIT_USER` 的 options 是快捷選擇與 recommendation，不限制使用者；自由回答與選項回答同樣記錄為該 `decisionId` 的人類決策，再進入下一輪 `GRILL`。
+- `WAIT_USER` 的 options 是快捷選擇與 recommendation，不限制使用者；每個 TUI selector 固定把 runtime 擁有的「自行輸入…」排在最後，選取後在同一互動中接受自由文字。trim 後的非空自由回答與選項回答同樣記錄為該 `decisionId` 的人類決策，再進入下一輪 `GRILL`；空白不送出，取消只返回 selector。UI 不得依選項文案猜測是否需要自訂輸入。
+- 為符合 PI coding-agent 的 `ctx.ui.custom` factory contract，Forge 以四參數 `(tui, hostTheme, keybindings, done)` 接收 callback，並在 Forge 內將 host `Theme` 轉成 `EditorTheme`：`borderColor` 使用 `hostTheme.fg("borderMuted", text)`，`selectList` 使用既有 accent／muted formatter。Forge package runtime dependency 固定為 `@earendil-works/pi-tui@0.83.0`；只修改 `forge-runtime` package manifest／lockfile，不修改 `pi-main/`，不改用 `ctx.ui.editor`／`input`，也不自製 Editor。
 - 只有明確 `/forge-runtime switch <request>` 可要求改變 task scope；replacement 必須經正式 ingress 建立新的 Light Discovery snapshot，不得經 `/grill-run` bridge。其他自由回答皆保留在現有 decision loop，候選不足時只能請使用者使用 switch。
 - 若 assistant 終局未呼叫 `forge_grill_complete`，runtime 必須記錄該 attempt 首次 `Completion Omission`，保留目前 round，並進入 `GRILL + RECOVERY_REQUIRED`；顯示 `retry / cancel / switch` 後 settled，不做 background steer、auto replay 或自動 Deep。
 - `/forge-runtime retry` 是 completion omission 的唯一重跑入口：使用同一 round／snapshot 建立新 attempt；`/forge-runtime continue` 不再承擔 omission recovery。
@@ -142,3 +143,12 @@
 - 不在第一版接上所有知識來源。
 - 不在第一版做大型 reasoning plugin 生態。
 - 不在第一版做完整 UI polish。
+
+## ADR-0009 現況同步（2026-08-16）
+
+- Plan A prompt-contract 增補已完成：focused 5/5、當時 `npm test` 116/116、`npm run check` exit 0，Standards／Spec review 各 0 findings。這些是該增補當時的驗證，不代表目前 Plan B 或完整 extension suite 已通過。
+- Plan B selector slice 的歷史驗證為 71/71；不得描述為目前完整 suite 通過。
+- 使用者已核准並安裝 `@earendil-works/pi-tui@0.83.0`，只修改 Forge package，不修改 `pi-main/`。Forge 已依 PI 四參數 `(tui, hostTheme, keybindings, done)` factory 建立 `EditorTheme` adapter，並移除冗餘 `onEscape` 指派。
+- 有效 custom 答案與普通選項在嘗試 resume 後會結束 command；空白 Enter 不送出，Escape 才返回 selector。三個 focused regression tests 3/3 通過，`npm run check` exit 0，scope blast 未發現 sibling bug。
+- `npm test` exit 1：47 tests 中 44 pass、3 fail；約 123 秒、約 4GB heap OOM，另有 2 個 loader timeout。final Standards／Spec review 皆 0 blocker；`selectList` formatter 尚無實際 autocomplete render coverage。
+- 真實 PI TUI acceptance 與 current full suite 尚未完成，ticket 不得標記完成；舊 OOM／type-import probe 未執行。下一步由使用者實機重試相同「自行輸入…」路徑。
