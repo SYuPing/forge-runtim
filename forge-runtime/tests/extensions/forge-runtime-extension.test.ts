@@ -179,7 +179,7 @@ test("Extension_WhenRelevanceGateFails_ShouldDisplayScopeQuestionAndEnterWaitUse
 	assert.match(renderedPayload, /來源|範圍/);
 });
 
-test("Extension_WhenRelevanceFailureIsReentered_ShouldPublishTheSameWaitUserPanelOnlyOnce", async (t) => {
+test("Extension_WhenRelevanceFailureIsReenteredAfterUiReturns_ShouldRepublishTheSameWaitUserPanel", async (t) => {
 	const rootDir = createTempRoot();
 	writeWorkspaceFile(
 		rootDir,
@@ -209,7 +209,7 @@ test("Extension_WhenRelevanceFailureIsReentered_ShouldPublishTheSameWaitUserPane
 			payload.customType === "forge-stage" &&
 			String(payload.content ?? "").includes("候選相關性不足"),
 	);
-	assert.equal(relevanceWaitUserPanels.length, 1, "同一 pending decisionId 的 relevance WAIT_USER panel 只能發布一次");
+	assert.equal(relevanceWaitUserPanels.length, 2, "UI 返回後同一 pending decisionId 的 relevance WAIT_USER panel 可再次發布");
 });
 
 test("Extension_WhenSuccessfulSwitchReplacesPendingAssetApproval_ShouldNotResumeItOnApproval", async (t) => {
@@ -2156,6 +2156,35 @@ test("Extension_WhenIdleAndChitChat_ShouldContinue", async () => {
 	assert.deepEqual(result, { action: "continue" });
 });
 
+test("Extension_WhenWaitUserUiThrows_ShouldPreservePendingDecisionAndAllowRetry", async () => {
+	const harness = await createExtensionHarness();
+	const decisionPayload = JSON.stringify({ ...JSON.parse(waitUserPayload), decisionId: "decision-ui-throw" });
+	const sentinel = new Error("WAIT_USER_UI_SENTINEL");
+	let customAttempts = 0;
+	const context = {
+		ui: {
+			select: async () => "自行輸入…",
+			custom: async () => {
+				customAttempts += 1;
+				if (customAttempts === 1) {
+					throw sentinel;
+				}
+				return "retry answer";
+			},
+		},
+	};
+
+	await assert.rejects(harness.runCommand(`grill ambiguous ${decisionPayload}`, context), (error) => error === sentinel);
+	const waitUserStatus = harness.observedStatuses.at(-1);
+	assert.ok(waitUserStatus?.includes("WAIT_USER"));
+
+	await harness.runCommand(`grill ambiguous ${decisionPayload}`, context);
+
+	assert.equal(customAttempts, 2);
+	assert.deepEqual(harness.observedUserMessages, ["retry answer"]);
+	assert.equal(harness.observedStatuses.at(-1), waitUserStatus);
+});
+
 test("Extension_WhenCustomWaitUserFactoryRuns_ShouldRenderAndSubmitTrimmedAnswer", async (t) => {
 	const rootDir = createTempRoot();
 	t.after(() => {
@@ -2326,7 +2355,7 @@ test("Extension_WhenRecreatedWaitUserDecisionWasAlreadyAnswered_ShouldKeepWaitUs
 	assert.doesNotMatch(replay?.content ?? "", /roundId\s*[:：]\s*grill-[3-9]/);
 });
 
-test("Extension_WhenSamePendingWaitUserDecisionIsPublishedTwice_ShouldShowSelectorAndPanelOnlyOnce", async () => {
+test("Extension_WhenSamePendingWaitUserDecisionIsRetriedAfterUiReturns_ShouldRerenderWithoutTransition", async () => {
 	const harness = await createExtensionHarness();
 	let selectorCalls = 0;
 	const waitUserCommand = `grill ambiguous ${JSON.stringify({
@@ -2352,11 +2381,137 @@ test("Extension_WhenSamePendingWaitUserDecisionIsPublishedTwice_ShouldShowSelect
 	const publishedPanels = harness.observedMessagePayloads.filter(
 		(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("是否繼續？"),
 	);
-	assert.equal(selectorCalls, 1, "同一 pending decisionId 不應再次發布 selector");
-	assert.equal(publishedPanels.length, 1, "同一 pending decisionId 不應再次發布 WAIT_USER panel");
+	assert.equal(selectorCalls, 2, "前一次 UI 返回後，同一 pending decisionId 應再次顯示 selector");
+	assert.equal(publishedPanels.length, 2, "前一次 UI 返回後，同一 pending decisionId 應再次顯示 WAIT_USER panel");
 });
 
-test("Extension_WhenSameNeedsConfirmationGrillResultIsReentered_ShouldShowSelectorAndPanelOnlyOnce", async () => {
+test("Extension_WhenSamePendingWaitUserUiIsActive_ShouldNotPublishDuplicateUi", async () => {
+	const harness = await createExtensionHarness();
+	let selectorCalls = 0;
+	let releaseUi: (() => void) | undefined;
+	let markUiEntered: (() => void) | undefined;
+	const uiEntered = new Promise<void>((resolve) => {
+		markUiEntered = resolve;
+	});
+	const uiRelease = new Promise<string | undefined>((resolve) => {
+		releaseUi = () => resolve(undefined);
+	});
+	const waitUserCommand = `grill ambiguous ${JSON.stringify({
+		decisionId: "decision-active-ui-dedupe",
+		question: "同一個 UI 是否只開一次？",
+		recommendation: "繼續",
+		options: ["繼續", "停止"],
+		evidenceIds: ["EV-ACTIVE-UI-DEDUPE"],
+		decisionSummary: "等待人類決策。",
+	})}`;
+	const context = {
+		ui: {
+			async select() {
+				selectorCalls += 1;
+				markUiEntered?.();
+				return await uiRelease;
+			},
+		},
+	};
+
+	let firstRun: Promise<void> | undefined;
+	try {
+		firstRun = harness.runCommand(waitUserCommand, context);
+		await uiEntered;
+		const statusCount = harness.observedStatuses.length;
+		const panelCount = harness.observedMessagePayloads.filter(
+			(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("同一個 UI 是否只開一次？"),
+		).length;
+
+		await harness.runCommand(waitUserCommand, context);
+
+		assert.equal(selectorCalls, 1, "第一個 UI 尚未返回時，第二次不得開啟 selector");
+		assert.equal(harness.observedStatuses.length, statusCount, "第二次不得重做 WAIT_USER transition");
+		assert.equal(
+			harness.observedMessagePayloads.filter(
+				(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("同一個 UI 是否只開一次？"),
+			).length,
+			panelCount,
+			"第一個 UI 尚未返回時，第二次不得發布另一份 WAIT_USER panel",
+		);
+	} finally {
+		releaseUi?.();
+		await firstRun;
+	}
+});
+
+test("Extension_WhenWaitUserHasNoUi_ShouldPreservePendingDecisionAndAllowRetry", async () => {
+	const harness = await createExtensionHarness();
+	let selectorCalls = 0;
+	const waitUserCommand = `grill ambiguous ${JSON.stringify({
+		decisionId: "decision-no-ui-retry",
+		question: "沒有 UI 時是否保留？",
+		recommendation: "保留",
+		options: ["保留", "停止"],
+		evidenceIds: ["EV-NO-UI-RETRY"],
+		decisionSummary: "等待 UI 重試。",
+	})}`;
+
+	await assert.doesNotReject(() => harness.runCommand(waitUserCommand, {}));
+	const uiContext = {
+		ui: {
+			async select() {
+				selectorCalls += 1;
+				return undefined;
+			},
+		},
+	};
+	await harness.runCommand(waitUserCommand, uiContext);
+
+	const publishedPanels = harness.observedMessagePayloads.filter(
+		(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("沒有 UI 時是否保留？"),
+	);
+	assert.equal(selectorCalls, 1, "無 UI 後相同 pending decisionId 應可重試 selector");
+	assert.equal(publishedPanels.length, 2, "無 UI 後相同 pending decisionId 應可重顯 WAIT_USER panel");
+	assert.equal(harness.observedUserMessageCalls.length, 0, "重試顯示不得重做 WAIT_USER transition 或送出回答");
+});
+
+test("Extension_WhenDifferentPendingWaitUserDecisionReenters_ShouldIgnoreAndPreserveOriginal", async () => {
+	const harness = await createExtensionHarness();
+	let selectorCalls = 0;
+	const context = {
+		ui: {
+			async select() {
+				selectorCalls += 1;
+				return undefined;
+			},
+		},
+	};
+	const firstWaitUserCommand = `grill ambiguous ${JSON.stringify({
+		decisionId: "decision-first-pending",
+		question: "原始待決策？",
+		recommendation: "繼續",
+		options: ["繼續", "停止"],
+		evidenceIds: ["EV-FIRST-PENDING"],
+		decisionSummary: "保留第一個待決策。",
+	})}`;
+	const secondWaitUserCommand = `grill ambiguous ${JSON.stringify({
+		decisionId: "decision-second-reentry",
+		question: "後續重入問題？",
+		recommendation: "改變方向",
+		options: ["改變方向", "停止"],
+		evidenceIds: ["EV-SECOND-REENTRY"],
+		decisionSummary: "不得取代第一個待決策。",
+	})}`;
+
+	await harness.runCommand(firstWaitUserCommand, context);
+	await assert.doesNotReject(() => harness.runCommand(secondWaitUserCommand, context));
+
+	const publishedPanels = harness.observedMessagePayloads.filter(
+		(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("WAIT_USER"),
+	);
+	assert.equal(selectorCalls, 1, "不同 pending decisionId 重入不得發布第二個 selector");
+	assert.equal(publishedPanels.length, 1, "不同 pending decisionId 重入不得發布第二個 WAIT_USER panel");
+	assert.match(String(publishedPanels[0]?.content ?? ""), /原始待決策？/);
+	assert.doesNotMatch(String(publishedPanels[0]?.content ?? ""), /後續重入問題？/);
+});
+
+test("Extension_WhenSameNeedsConfirmationGrillResultIsReenteredAfterUiReturns_ShouldRepublishSelectorAndPanel", async () => {
 	const harness = await createExtensionHarness();
 	let selectorCalls = 0;
 	const grillResult = JSON.stringify({
@@ -2381,8 +2536,8 @@ test("Extension_WhenSameNeedsConfirmationGrillResultIsReentered_ShouldShowSelect
 	const publishedPanels = harness.observedMessagePayloads.filter(
 		(payload) => payload.customType === "forge-stage" && String(payload.content ?? "").includes("是否繼續？"),
 	);
-	assert.equal(selectorCalls, 1, "同一 grill-result question id 不應再次發布 selector");
-	assert.equal(publishedPanels.length, 1, "同一 grill-result question id 不應再次發布 WAIT_USER panel");
+	assert.equal(selectorCalls, 2, "UI 返回後同一 grill-result question id 可再次發布 selector");
+	assert.equal(publishedPanels.length, 2, "UI 返回後同一 grill-result question id 可再次發布 WAIT_USER panel");
 });
 
 test("Extension_WhenWaitUserAnswerComesFromSelectorOrCommand_ShouldFollowUpThroughSharedInputAndStartNextRound", async (t) => {

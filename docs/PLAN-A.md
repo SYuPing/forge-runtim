@@ -720,3 +720,76 @@ Assertions 必須涵蓋開放 options、new clarification decision、單次 WAIT
 - scripted PI TUI：focused 1/1、full 4/4 pass。
 - final review：Standards 0 findings；Spec finding 已修正，closure 0 findings。
 - Plan B 人工視覺驗收、固定 widget tree、selectList autocomplete render coverage 尚未完成；下一步由使用者決定是否進入 Plan B。
+
+---
+
+# Plan A：WAIT_USER 重入與 UI lease 生命週期
+
+日期：2026-08-16
+
+狀態：已完成（2026-08-17）。正式程式、精準／完整驗證與審查均已完成。
+
+## 建置範圍
+
+- 同一時間只保留一個 pending decision；不同 `decisionId` 重入採「先到的待決策優先（first-pending-wins）」由 extension 靜默忽略，不拋錯、不改動原 decision 或 UI，也不發布第二個 UI。
+- 相同 `decisionId` 重入只重顯 UI；UI 已 active 時略過重複發布，不再次做 `WAIT_USER` transition。
+- 將 `published` marker 改為互動期間的 in-flight UI lease；`ctx.ui.custom` 整段互動持有，透過 `finally` 清除，正常返回與 throw 都涵蓋。
+- Escape／無 UI 保留 `WAIT_USER` 與 pending decision，允許自然文字或同 ID 日後重試，不自動重試。
+- UI throw 清 lease 後向上傳遞，仍保留 `WAIT_USER` 與 pending decision。
+
+## 不建置
+
+- 不修改 `pi-main/`、schema、stages 或 completion。
+- 不做 queue、replace、history dedupe、answered decisionId reuse 改動或 reset lifecycle。
+- 不處理上游強制關閉 component 且未呼叫 `done` 所造成的 Promise／lease pending；列為已知風險。
+
+## 實作方式
+
+在既有 `forge-runtime.ts` 的 WAIT_USER 發布與互動 seam 做最小修正：先以 pending decision identity gate 保護原狀態，再以 UI active／lease 邊界控制發布與清理。不同 ID 在 transition 前靜默忽略；同 ID 只走重顯路徑。UI 結束或例外統一清 lease，例外照原路徑向上傳遞。
+
+## 檔案
+
+| 檔案 | 變動 |
+| --- | --- |
+| `forge-runtime/extensions/forge-runtime.ts` | WAIT_USER single-pending、same-ID rerender、UI lease 與 failure／cancel semantics |
+| `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | 不同 ID 靜默忽略、同 ID 重試、UI throw、Escape／無 UI 與 active UI 去重回歸測試 |
+
+正式程式／測試實際只修改上述 2 個檔案；本文件與 ADR、handoff、ticket state 為 durable 文件，不列入正式程式檔案範圍。
+
+## 測試
+
+至少覆蓋以下案例；不預先承諾新增測試總數，驗收以基線與新增案例全數通過為準：
+
+- 不同 ID 重入被 extension 靜默忽略，不拋錯、不發布第二個 UI，原 pending decision、WAIT_USER 與 marker／lease 不變。
+- 相同 ID 在 UI 失敗後可重試，且重試不再次做 WAIT_USER transition。
+- UI throw 向上傳遞，並清除 lease、保留 WAIT_USER／pending decision。
+- Escape／無 UI 正常返回，保留 WAIT_USER／pending decision，允許後續重試且不自動重試。
+- active UI 收到相同 ID 時不重複發布。
+
+## 執行順序
+
+1. 已完成回歸案例、最小 production 修正與 focused 驗證。
+2. 已完成 full suite、兩段 type check 與 scripted PI TUI 驗證。
+3. 已完成 Standards／Spec 審查；無 runtime 發現，且無範圍膨脹。
+
+## 驗證
+
+```text
+# 僅由獨立驗證子代理執行，從 repo root
+cd forge-runtime
+npx tsx --test tests/extensions/forge-runtime-extension.test.ts tests/grill/grill-skill.test.ts tests/ui/wait-user-panel.test.ts
+npm test
+npm run check
+```
+
+命令依 `forge-runtime/package.json` 的 `test`／`check` scripts；實際結果為精準測試套件 87 通過／0 失敗、`npm test` 128 通過／0 失敗／0 略過、`npm run check` 兩段 tsc 均通過。scripted PI TUI 精準 1/1、完整 4/4 通過。
+
+## 脆弱假設
+
+若上游強制關閉 component 而沒有呼叫 `done`，Promise／lease 可能 pending；本 Plan A 不加入 reset lifecycle，後續若要處理需另行核准。
+
+## Ticket closure（2026-08-17）
+
+Plan A 與本 ticket 已完成，無待實作或 re-review。最終 Standards review 為 0 findings；最終 Spec review 為 0 findings。精準測試套件 87/87、完整 `npm test` 128/128、`npm run check` 兩段 tsc 均通過；runtime／test 在最終測試後未再修改，後續僅進行文件翻譯與狀態同步。下一步只能由使用者另行決定方案 B 人工視覺驗收，或開立新 ticket。
+
+保留三個已知 gap：缺少 `decisionId` 的 ingress 不做 dedupe；上游 UI component 不呼叫 `done` 可能使 Promise／lease 永久 pending；Plan B 人工視覺驗收尚未完成。

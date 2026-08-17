@@ -165,5 +165,24 @@
 - **WAIT_USER Answer**：針對待處理問題提交的人類回答，可為快捷回答或自由回答。
 - **Clarification Decision**：用來補足語意或範圍的下一個 Grill 決策。
 - **Pending Decision**：尚未完成的人類決策及其 `decisionId`。
+- **Single Pending Decision**：同一時間只有一個待決策；不同 `decisionId` 的新問題不得取代目前待決策。
+- **Same-ID Reentry**：同一待決策的 `decisionId` 再次出現，表示重顯目前問題，不建立新的待決策。
+- **Different-ID Reentry**：待決策尚未完成時出現不同 `decisionId`，extension 依 first-pending-wins 靜默忽略新問題；不得拋錯、覆寫原待決策或發布第二個 UI。
+- **Unanswered WAIT_USER**：取消、Escape、沒有 UI 或互動失敗而未提交回答時，待決策仍存在，可由自然文字或相同 `decisionId` 再次嘗試。
 - **Evidence Presentation**：將證據引用轉成使用者可讀的摘要呈現。
 - **Completion Finality**：completion 成功後，該輪不再追加對話內容。
+
+## WAIT_USER ticket 實作與驗證完成（2026-08-17）
+
+- production 已在 `forge-runtime/extensions/forge-runtime.ts` 分離 pending identity 與 UI in-flight lease：不同 ID 靜默忽略；同 ID UI 返回後可重顯；active UI 去重；`finally` 涵蓋正常、Escape／undefined 與 throw；成功回答清除 identity。
+- 精準測試套件：87 通過、0 失敗、0 略過；`npm test`：128 通過、0 失敗、0 略過；`npm run check` 兩段 tsc 均通過。
+- Standards 審查曾找到文件過期與英文標題，現已修正；Spec 無 runtime 發現、無範圍膨脹。
+- 未解缺口：缺少 `decisionId` 的 ingress 不做 dedupe；上游 UI component 不呼叫 `done` 可能永久 pending；方案 B 人工視覺驗收仍待使用者決策。
+
+## 跨工作項目可重用經驗（2026-08-17）
+
+- 待決策識別與 UI 執行中租約必須分開。前者代表決策仍存在，只在成功回答時清除；後者只涵蓋一次 UI 發布到返回，並用 `finally` 清理。
+- 同 ID 的依序重顯，與 UI 尚未返回時的重複發布，是不同契約，測試必須分開。
+- 紅燈測試必須因目標契約缺失而失敗。編譯、缺依賴、缺生成資料或無關例外，都不是有效紅燈。
+- 驗證失敗時，先判定是產品回歸還是環境阻礙。既有 manifest、lock 與正式 hydration 流程能修復環境時，不可改正式程式碼掩蓋問題。
+- `CONTEXT.md`、ADR、Plan、handoff 與 agent-state 必須跟完成狀態同步；保留舊狀態時要標示為歷史。

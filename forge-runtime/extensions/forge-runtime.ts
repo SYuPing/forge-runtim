@@ -154,7 +154,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let savedActiveTools: string[] | undefined;
 	let suppressCompletionTurn = false;
 	let pendingReplayInvocation: string | undefined;
-	let publishedPendingWaitUserDecisionId: string | undefined;
+	let pendingWaitUserDecisionId: string | undefined;
+	let activeWaitUserUiLeaseDecisionId: string | undefined;
 	const canEnforceGrillToolBoundary = Boolean(pi.registerTool && pi.getActiveTools && pi.setActiveTools && pi.on);
 	const requireGrillToolBoundary = (ctx: CommandContext) => {
 		if (canEnforceGrillToolBoundary) {
@@ -180,32 +181,54 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		pendingKnowledgeRequest = undefined;
 		pendingReplayInvocation = undefined;
 		pendingUserMessageRewrite = undefined;
-		publishedPendingWaitUserDecisionId = undefined;
+		pendingWaitUserDecisionId = undefined;
+		activeWaitUserUiLeaseDecisionId = undefined;
 			suppressCompletionTurn = false;
 		};
-		const shouldSkipPublishedWaitUser = (decisionId: string | undefined): boolean =>
-			sessionState.current().stage === "WAIT_USER" &&
-			typeof decisionId === "string" &&
-			decisionId.length > 0 &&
-			decisionId === publishedPendingWaitUserDecisionId;
 		const publishWaitUser = async (payload: WaitUserPayload, ctx: CommandContext): Promise<void> => {
-			if (shouldSkipPublishedWaitUser(payload.decisionId)) {
+			const decisionId = payload.decisionId;
+			const hasDecisionId = typeof decisionId === "string" && decisionId.length > 0;
+			const currentState = sessionState.current();
+			if (
+				currentState.stage === "WAIT_USER" &&
+				hasDecisionId &&
+				typeof pendingWaitUserDecisionId === "string" &&
+				decisionId !== pendingWaitUserDecisionId
+			) {
 				return;
 			}
-			if (sessionState.current().stage !== "WAIT_USER") {
-				publishedPendingWaitUserDecisionId = undefined;
+			if (currentState.stage === "WAIT_USER" && hasDecisionId && decisionId === pendingWaitUserDecisionId) {
+				if (activeWaitUserUiLeaseDecisionId === decisionId) {
+					return;
+				}
+				activeWaitUserUiLeaseDecisionId = decisionId;
+				try {
+					await handleWaitUserState(pi, ctx, currentState);
+				} finally {
+					if (activeWaitUserUiLeaseDecisionId === decisionId) {
+						activeWaitUserUiLeaseDecisionId = undefined;
+					}
+				}
+				return;
 			}
-			if (payload.decisionId) {
-				publishedPendingWaitUserDecisionId = payload.decisionId;
+			if (hasDecisionId) {
+				pendingWaitUserDecisionId = decisionId;
+				activeWaitUserUiLeaseDecisionId = decisionId;
 			}
-			await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(payload));
+			try {
+				await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(payload));
+			} finally {
+				if (hasDecisionId && activeWaitUserUiLeaseDecisionId === decisionId) {
+					activeWaitUserUiLeaseDecisionId = undefined;
+				}
+			}
 		};
 		const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
 	const resumeGrillWithAnswer = async (answer: string, ctx: CommandContext): Promise<string | undefined> => {
 		const currentRound = sessionState.continueGrillRound();
 		const state = sessionState.recordAnswer(answer);
 		if (state.stage !== "WAIT_USER") {
-			publishedPendingWaitUserDecisionId = undefined;
+			pendingWaitUserDecisionId = undefined;
 		}
 		if (state.stage !== "GRILL") {
 			await publishState(pi, ctx, state);

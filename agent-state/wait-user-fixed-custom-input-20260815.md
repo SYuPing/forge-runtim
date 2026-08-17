@@ -744,6 +744,8 @@ Ticket：`wait-user-fixed-custom-input-20260815`
 
 ## Milestone：2026-08-16 sticky marker 風險列為下一階段最高優先級
 
+> 歷史紀錄：以下「未實作／待決策」內容已由後續完成里程碑取代，保留供追溯。
+
 ### 已完成項目
 
 - 已將 WAIT_USER sticky marker 失敗、取消、無 UI 與相同 `decisionId` 重試風險記錄至 `docs/handoff.md`。
@@ -773,3 +775,427 @@ Ticket：`wait-user-fixed-custom-input-20260815`
 ### 下一步
 
 - 由獨立測試代理先針對失敗、取消、無 UI 與相同 ID 重試建立 RED，再依使用者決策實作最小修正。
+
+## Milestone：2026-08-16 WAIT_USER 重入與 UI lease 設計核准
+
+### 已完成項目
+
+- 已將使用者逐項核准的 single-pending、same-ID rerender、不同 ID 靜默忽略、UI lease 與 failure／cancel semantics 落盤至 `CONTEXT.md`、ADR-0010、`docs/PLAN-A.md` 與 `docs/handoff.md`。
+- 已明確保留 answered decisionId reuse 的既有行為，並排除 queue、replace、history dedupe、reset lifecycle 與任何 `pi-main`／schema／stages／completion 修改。
+
+### 重要決策
+
+- 不同 `decisionId` 重入採 first pending wins；原 decision 與 UI 不變。
+- 相同 `decisionId` 只重顯；active UI 略過重複發布，不做 WAIT_USER transition。
+- `published` 只代表 in-flight UI lease；UI 正常完成或 throw 均清除，throw 向上傳遞且保留 WAIT_USER／pending decision。
+- Escape／無 UI 正常返回並保留待決策，可由自然文字或同 ID 日後重試，不自動重試。
+
+### 修改檔案
+
+- `CONTEXT.md`
+- `docs/adr/ADR-0010-wait-user-single-pending-ui-lease.md`
+- `docs/PLAN-A.md`
+- `docs/handoff.md`
+- 本狀態檔
+
+### 測試結果
+
+- 本 milestone 僅完成文件落盤，未執行測試或其他程式驗證；不得宣稱已實作或已重跑測試。
+
+### 未解問題
+
+- 上游強制關閉 component 而未呼叫 `done` 時，Promise／lease 可能 pending；本次不做 reset lifecycle。
+- 下一步依 `docs/handoff.md`：先展示摘要，等使用者確認後以 `execute-designed-plan` 執行 Plan A；測試代理先打 RED，再由不同 implementation 與 review 角色接手。
+
+## Milestone：2026-08-16 不同 decisionId first-pending-wins 文件同步
+
+> 歷史紀錄：以下「未實作／待決策」內容已由後續完成里程碑取代，保留供追溯。
+
+### 已完成項目
+
+- 已將使用者最新決策同步至 `CONTEXT.md`、ADR-0010 與 `docs/PLAN-A.md`。
+- 已明確記錄不同 `decisionId` 重入由 extension 靜默忽略：不拋錯、不覆寫原 pending、不發布第二個 UI。
+
+### 重要決策
+
+- 已存在 pending decision 時採 first-pending-wins；原 pending 與其 UI 生命週期保持不變。
+
+### 修改檔案
+
+- `CONTEXT.md`
+- `docs/adr/ADR-0010-wait-user-single-pending-ui-lease.md`
+- `docs/PLAN-A.md`
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 本次只同步設計文件，未執行測試；尚無有效 RED 或 GREEN 證據。
+
+### 未解問題
+
+- 尚未由 production implementation 代理將此決策落實於 extension，也未新增或執行對應測試。
+
+### 下一步
+
+- 由後續 implementation／測試角色依更新後 Plan A 建立並驗證最小行為。
+
+## Milestone：2026-08-16 不同 pending WAIT_USER decisionId 重入 RED
+
+### 已完成項目
+
+- 已執行指定單一測試，確認不同 `decisionId` 重入未被靜默忽略，形成符合 A 契約的有效 RED。
+
+### 重要決策
+
+- 依 first-pending-wins 契約，原 pending 必須保留；本輪僅驗證 RED，不修改 production 或 test code。
+
+### 修改檔案
+
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 測試：`Extension_WhenDifferentPendingWaitUserDecisionReenters_ShouldIgnoreAndPreserveOriginal`
+- 命令：`cd forge-runtime && npx tsx --test --test-name-pattern="Extension_WhenDifferentPendingWaitUserDecisionReenters_ShouldIgnoreAndPreserveOriginal" tests/extensions/forge-runtime-extension.test.ts`
+- exit code：`1`；`1 failed、0 passed`。
+- 失敗斷言：`assert.doesNotReject` 捕捉到 `Invalid transition: WAIT_USER -> WAIT_USER`（`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:2388`）。
+
+### 未解問題
+
+- extension 尚未在已有 pending 時靜默忽略不同 `decisionId`，仍嘗試重複進行 WAIT_USER transition。
+
+### 下一步
+
+- 交由獨立 production implementation 角色在既有 extension pending seam 做最小 GREEN；本角色不追加修改。
+
+## Milestone：2026-08-16 不同 pending WAIT_USER decisionId 重入 GREEN 驗證
+
+### 已完成項目
+
+- 指定測試已通過，確認不同 pending `decisionId` 重入會忽略並保留原 pending。
+
+### 重要決策
+
+- 本次僅驗證既有 production 修改；未修改 production code 或測試。
+
+### 修改檔案
+
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 測試：`Extension_WhenDifferentPendingWaitUserDecisionReenters_ShouldIgnoreAndPreserveOriginal`
+- 命令：`cd forge-runtime && npx tsx --test --test-name-pattern="Extension_WhenDifferentPendingWaitUserDecisionReenters_ShouldIgnoreAndPreserveOriginal" tests/extensions/forge-runtime-extension.test.ts`
+- exit code：`0`；`1 passed、0 failed、0 cancelled、0 skipped、0 todo`。
+- 單行摘要：指定案例轉綠。
+
+### 未解問題
+
+- 本次僅執行指定精準測試；未執行 full suite 或 check。
+
+### 下一步
+
+- 下一個 slice：同 ID 在 UI 返回後可重新顯示。
+
+## Milestone：2026-08-16 同一 pending WAIT_USER UI 返回後重試 RED
+
+### 已完成項目
+
+- 已執行指定單一測試，確認同一 pending `decisionId` 在 UI 返回後未重新顯示 selector，形成有效 RED。
+
+### 重要決策
+
+- 本輪僅驗證 sticky marker 風險；未修改 production code 或測試。
+
+### 修改檔案
+
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 測試：`Extension_WhenSamePendingWaitUserDecisionIsRetriedAfterUiReturns_ShouldRerenderWithoutTransition`
+- 命令：`cd forge-runtime && npx tsx --test --test-name-pattern="Extension_WhenSamePendingWaitUserDecisionIsRetriedAfterUiReturns_ShouldRerenderWithoutTransition" tests/extensions/forge-runtime-extension.test.ts`
+- exit code：`1`；`0 passed、1 failed`。
+- 失敗斷言：selector 實際顯示 `1` 次，期待 `2` 次（`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:2355`）。
+- 根因：UI 返回後 sticky `published` marker 未清除，導致同一 pending decisionId 的重試仍被視為已發布而不重顯。
+
+### 未解問題
+
+- 等待獨立 production implementation 角色清除正常 UI 返回後的 lease marker，並保留 WAIT_USER／pending decision 以支援同 ID 重試。
+
+### 下一步
+
+- 由獨立 production implementation 角色在既有 UI lease seam 做最小 GREEN；本角色不追加修改。
+
+## Milestone：2026-08-16 identity／lease 分離 GREEN 驗證
+
+### 已完成項目
+
+- 兩個 WAIT_USER regression 均已轉綠：不同 pending `decisionId` 會靜默忽略並保留原 pending；同一 `decisionId` 在 UI 正常返回後可重新顯示且不重複 WAIT_USER transition。
+
+### 重要決策
+
+- 本次只驗證既有 production 修正；未修改 production code 或測試。
+
+### 修改檔案
+
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 命令：`cd forge-runtime && npx tsx --test --test-name-pattern="^(Extension_WhenDifferentPendingWaitUserDecisionReenters_ShouldIgnoreAndPreserveOriginal|Extension_WhenSamePendingWaitUserDecisionIsRetriedAfterUiReturns_ShouldRerenderWithoutTransition)$" tests/extensions/forge-runtime-extension.test.ts`
+- exit code：`0`；`2 passed、0 failed、0 cancelled、0 skipped、0 todo`。
+- 個別結果：兩個指定案例均通過。
+
+### 未解問題
+
+- UI throw 後清除 lease、保留 WAIT_USER／pending decision 的行為尚未驗證。
+
+### 下一步
+
+- UI throw slice：先執行對應 RED，再由獨立 implementation 角色做最小 GREEN。
+
+## Milestone：2026-08-16 UI throw 後保留 pending decision GREEN 驗證
+
+### 結論
+
+- 指定測試已通過；現有 UI lease `finally` 實作已涵蓋 throw 後清除 lease、保留 pending decision 並允許同 ID 重試。
+- 本次未修改 production code 或測試。
+
+### 修改檔案
+
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 測試：`Extension_WhenWaitUserUiThrows_ShouldPreservePendingDecisionAndAllowRetry`
+- 命令：`cd forge-runtime && npx tsx --test --test-name-pattern="Extension_WhenWaitUserUiThrows_ShouldPreservePendingDecisionAndAllowRetry" tests/extensions/forge-runtime-extension.test.ts`
+- exit code：`0`；`1 passed、0 failed、0 cancelled、0 skipped、0 todo`。
+
+### 未解問題
+
+- 本次僅執行指定精準測試；未執行 full suite 或 check。
+
+### 下一步
+
+- Escape／無 UI 行為尚待獨立驗證；本 slice 無新增 production 修改。
+
+## Milestone：2026-08-16 無 UI 保留 pending decision GREEN 驗證
+
+### 結論
+
+- 指定測試已通過；現有實作已涵蓋無 UI 時保留 pending decision，並允許同一 decisionId 後續重試。
+- 本次未修改 production code 或測試。
+
+### 測試結果
+
+- 測試：`Extension_WhenWaitUserHasNoUi_ShouldPreservePendingDecisionAndAllowRetry`
+- 命令：`cd forge-runtime && npx tsx --test --test-name-pattern="^Extension_WhenWaitUserHasNoUi_ShouldPreservePendingDecisionAndAllowRetry$" tests/extensions/forge-runtime-extension.test.ts`
+- exit code：`0`；`1 passed、0 failed、0 cancelled、0 skipped、0 todo`。
+
+### 未解問題
+
+- 本次僅執行指定精準測試；未執行 full suite 或 check。
+
+### 下一步
+
+- 由後續驗證處理 active UI 與同一 decisionId 的去重行為。
+
+## Milestone：2026-08-16 active UI 同 ID 去重 GREEN 驗證
+
+### 結論
+
+- `Extension_WhenSamePendingWaitUserUiIsActive_ShouldNotPublishDuplicateUi` 通過；現有 lease 已涵蓋同一 pending decisionId 在 UI active 期間不重複發布。
+- 本次未新增 production 修改，也未修改測試。
+
+### 測試結果
+
+- 命令：`cd forge-runtime && npx tsx --test --test-name-pattern="Extension_WhenSamePendingWaitUserUiIsActive_ShouldNotPublishDuplicateUi" tests/extensions/forge-runtime-extension.test.ts`
+- exit code：`0`；`1 passed、0 failed、0 cancelled、0 skipped、0 todo`。
+
+### 未解風險
+
+- 本次僅執行指定精準測試；未執行 full suite 或 check。
+
+### 下一步
+
+- 執行 focused suite 的其餘 WAIT_USER 去重／重試案例。
+
+## Milestone：2026-08-16 Plan A focused suite 重跑驗證
+
+### 結論
+
+- 指定 Plan A focused suite 全數通過；本次未修改 production code 或測試。
+
+### 測試結果
+
+- 命令：`cd forge-runtime && npx tsx --test tests/extensions/forge-runtime-extension.test.ts tests/grill/grill-skill.test.ts tests/ui/wait-user-panel.test.ts`
+- exit code：`0`；`87 passed、0 failed、0 skipped`。
+- 依賴／環境已補齊；未修改 lockfile。
+
+### 未解風險
+
+- focused suite 已通過；Plan A 下一步仍需執行 full test 與 `npm run check`。
+
+## Milestone：2026-08-17 WAIT_USER ticket 完成與 durable 文件同步
+
+### 已完成項目
+
+- production 已分離 pending identity 與 UI in-flight lease；不同 ID 靜默忽略；同 ID UI 返回後可重顯；active UI 去重；`finally` 涵蓋正常、Escape／undefined 與 throw；成功回答清除 identity。
+- 已同步 `CONTEXT.md`、ADR-0010、`docs/PLAN-A.md` 與 `docs/handoff.md`，並將 Plan A 狀態標記為已完成。
+
+### 重要決策
+
+- first-pending-wins 保留；無 `decisionId` 的 ingress 不做 dedupe。
+- 上游 component 未呼叫 `done` 的永久 pending 風險保留；Plan B 人工視覺驗收另待使用者決策。
+
+### 修改檔案
+
+- `CONTEXT.md`
+- `docs/adr/ADR-0010-wait-user-single-pending-ui-lease.md`
+- `docs/PLAN-A.md`
+- `docs/handoff.md`
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 精準測試套件：87 通過、0 失敗、0 略過。
+- `npm test`：128 通過、0 失敗、0 略過。
+- `npm run check`：兩段 tsc 均通過。
+- 歷史紀錄：Standards 曾記錄文件過期與英文標題；該問題已於後續文件修正中處理。Spec 無 runtime 發現、無範圍膨脹。
+
+### 未解問題
+
+- 缺少 `decisionId` 的 ingress 不做 dedupe。
+- 上游 UI component 不呼叫 `done` 可能使 Promise／lease 永久 pending。
+- Plan B 人工視覺驗收尚未完成。
+
+### 下一步
+
+- 等待使用者決定是否進入 Plan B 人工視覺驗收；本 ticket 不再待 RED 或待實作。
+
+## Milestone：2026-08-17 review 第二輪文件修正
+
+### 已完成項目
+
+- 已將 ADR-0010 的英文 prose headings 與 `Accepted` 狀態改為繁體中文。
+- 已將 handoff 的不同 ID 行改為「靜默忽略」，並將 `Gaps／風險` 改為「缺口與風險」。
+- 已為兩段歷史「未實作／待決策」區段加註其已由後續完成里程碑取代，未刪除歷史內容。
+
+### 重要決策
+
+- 僅修正指定文件文字與 durable state；production 與 test 保持不變。
+
+### 修改檔案
+
+- `docs/adr/ADR-0010-wait-user-single-pending-ui-lease.md`
+- `docs/handoff.md`
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 未執行測試；既有 focused 87、full 128、check pass 證據仍有效。
+
+### 未解問題
+
+- 第三輪 Spec 已 0 項發現；第三輪 Standards 剩餘的一般文字／歷史狀態問題正在本次修正，下一步只剩乾淨確認。
+
+### 下一步
+
+- 完成本次五份文件的乾淨確認。
+
+## Milestone：2026-08-17 審查第三輪 Standards 文件修正
+
+### 已完成項目
+
+- 已將五份指定文件中本輪新增或修改區塊的非技術英文文字翻成繁體中文，保留程式識別字、命令、套件名與檔名。
+- 已將 `Handoff`、`Plan B` 一般文字、`focused`／`full`／`review`／`Completed` 等一般文字同步為繁體中文；`PLAN-B.md` 檔名保留。
+- 已把先前 Standards 文件過期／英文標題的記錄改為歷史過去式並註明已修，並更新目前狀態為第三輪 Spec 已 0 項發現、Standards 剩餘文字問題正在修正。
+
+### 重要決策
+
+- 僅修改 `docs/handoff.md`、`CONTEXT.md`、`docs/PLAN-A.md`、`docs/adr/ADR-0010-wait-user-single-pending-ui-lease.md` 與本狀態檔；不修改正式程式或測試。
+
+### 修改檔案
+
+- `docs/handoff.md`
+- `CONTEXT.md`
+- `docs/PLAN-A.md`
+- `docs/adr/ADR-0010-wait-user-single-pending-ui-lease.md`
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 未執行測試；僅完成文件翻譯、狀態同步與 `git diff --check`。
+
+### 未解問題
+
+- 第三輪 Standards 的剩餘一般文字／歷史狀態問題需完成乾淨確認；沒有新增正式程式、測試或功能缺口。
+
+### 下一步
+
+- 只做指定五份文件的乾淨確認，確認後交回主代理。
+
+## Milestone：2026-08-17 ticket closure 最終 review 與狀態同步
+
+### 已完成項目
+
+- 本 ticket 已完成；最終 Standards review 0 findings、最終 Spec review 0 findings。
+- handoff、Plan A 與本狀態檔已同步 closure；無待實作或 re-review。
+
+### 重要決策
+
+- runtime／test 在最終測試後未再修改，後續僅進行文件翻譯與狀態同步。
+- 下一步只能由使用者另行決定方案 B 人工視覺驗收，或開立新 ticket。
+
+### 修改檔案
+
+- `docs/handoff.md`
+- `docs/PLAN-A.md`
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+- 精準測試套件：87/87 通過。
+- 完整 `npm test`：128/128 通過。
+- `npm run check`：兩段 tsc 通過。
+- 最終測試後未修改 runtime／test；本次僅執行 `git diff --check`。
+
+### 未解問題
+
+- 缺少 `decisionId` 的 ingress 不做 dedupe。
+- 上游 UI component 不呼叫 `done` 可能使 Promise／lease 永久 pending。
+- Plan B 人工視覺驗收尚未完成。
+
+### 下一步
+
+- 等待使用者另行決定方案 B，或開立新 ticket；本 ticket 不再待驗證、實作或 re-review。
+
+## 記憶更新（2026-08-17）
+
+### 已完成項目
+
+WAIT_USER 工作項目已完成：87/87、128/128、兩段 tsc、雙軸 0 發現。
+
+### 重要決策
+
+儲存庫沒有 `/Memory` 實作，因此依現有持久文件分工記錄。可重用經驗集中於 `CONTEXT.md` 新增區段，本檔不重複記錄。
+
+### 修改檔案
+
+- `CONTEXT.md`
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+
+### 測試結果
+
+本輪僅更新文件，未重跑 runtime 測試；既有證據未受影響。
+
+### 未解問題
+
+- 缺少 `decisionId` 的 ingress 不做 dedupe。
+- 上游 UI component 不呼叫 `done` 可能使 Promise／lease 永久 pending。
+- 方案 B 人工視覺驗收尚未完成。
+
+### 下一步
+
+只有使用者另行決定方案 B，或建立新工作項目。

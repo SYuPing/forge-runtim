@@ -1,69 +1,56 @@
-# Forge Runtime v4 Handoff
+# Forge Runtime v4 交接
 
-日期：2026-08-16
+日期：2026-08-17
 
-## 目標
+## 目標與目前狀態
 
-完成 ADR-0009 的 `WAIT_USER` 固定「自行輸入…」入口：沿既有 `ctx.ui.custom` 四參數 factory `(tui, hostTheme, keybindings, done)` + `Editor` resume path 接受 trim 後自由文字，並在 Forge 內將 host `Theme` 轉成 `EditorTheme`；空白 Enter 不送出，Escape 返回 selector；不修改 `pi-main/`、schema、workflow stage 或 completion status。
+依 ADR-0010 與 `docs/PLAN-A.md`，WAIT_USER 重入與 UI lease 生命週期 ticket 已完成。
 
-## 目前狀態（2026-08-16）
+- 同時只允許一個 pending decision；不同 ID 靜默忽略，採 first-pending-wins。
+- 相同 ID 只重顯 UI；active UI 略過重複發布，不做 WAIT_USER transition。
+- `published` 改為 in-flight UI lease，整段 `ctx.ui.custom` 互動持有並由 `finally` 於結束／例外清除。
+- Escape／無 UI 保留 WAIT_USER 與 pending decision；UI throw 清 lease 後上拋；不自動重試。
+- answered decisionId reuse、pi-main/schema/stages/completion 與 reset lifecycle 均不在本次範圍。
 
-- Plan A prompt-contract 增補已完成；當時 focused 5/5、`npm test` 116/116、`npm run check` exit 0、Standards／Spec review 各 0 findings。
-- Plan B selector slice 的歷史驗證為 71/71，不能描述為目前完整 suite 通過。
-- `@earendil-works/pi-tui@0.83.0` 已由人類核准並安裝，只改 Forge package、不改 `pi-main/`。
-- custom factory seam 已修正：Forge 依 `(tui, hostTheme, keybindings, done)` 建立 `EditorTheme` adapter，移除冗餘 `onEscape`；有效答案在嘗試 resume 後結束 command。
-- focused regression tests 3/3 通過，`npm run check` exit 0；final Standards／Spec review 皆 0 blocker，scope blast 無 sibling bug。
-- Plan A implementation 與 automated/scripted gates 已完成：focused 83/83、canonical `npm test` 124/124、`npm run check` 兩段通過；scripted PI TUI focused 1/1、full 4/4；無 OOM／timeout。
-- final review Standards 0 findings；Spec finding 已修正，closure 0 findings。下一步是等待使用者決定是否進入 Plan B 人工視覺驗收。
+## Plan A 完成結果
 
-## 修改檔案
+- production 已在 `forge-runtime/extensions/forge-runtime.ts` 分離 pending identity 與 UI in-flight lease。
+- 不同 ID 靜默忽略；同 ID UI 返回後可重顯；active UI 去重；`finally` 涵蓋正常、Escape／undefined 與 throw；成功回答清 identity。
 
-- `forge-runtime/extensions/forge-runtime.ts`
-- `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`
-- `forge-runtime/package.json`
-- `forge-runtime/package-lock.json`
-- 本 handoff、`CONTEXT.md`、ADR-0009、`docs/PLAN-A.md`、`docs/PLAN-B.md`、ticket state 與 OOM log 僅作狀態同步。
+## 相關文件與預計程式檔
 
-## 已知驗證與歷史 OOM evidence
+- `CONTEXT.md`
+- `docs/adr/ADR-0010-wait-user-single-pending-ui-lease.md`
+- `docs/PLAN-A.md`
+- `docs/PLAN-B.md`（保留為先前人工視覺驗收）
+- `docs/handoff.md`
+- `agent-state/wait-user-fixed-custom-input-20260815.md`
+- production/test 實際：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`
 
-- Plan A prompt-contract：focused 5/5；當時完整 `npm test` 116/116；`npm run check` exit 0；Standards／Spec review 各 0 findings。
-- Plan B selector：歷史 71/71；不是 current full suite。
-- 精準 custom test：1/1；standalone `pi-tui` import 正常；Jiti loader 為 `moduleCache:false`。
-- 歷史完整 extension test 曾約 75 至 76 秒後約 4GB heap OOM；原始證據保留於 `agent-state/wait-user-fixed-custom-input-20260815-oom-diagnosis.log`。目前 canonical suite 已 124/124 通過，該 OOM 不再是 current blocker。
+## 決策
 
-## 已嘗試但不足的假設
+- 不同 `decisionId` 重入由 extension 靜默忽略且不改原 pending；相同 ID 只重顯，active UI 不重複發布。
+- UI lease 覆蓋整段 `ctx.ui.custom` 互動；由 `finally` 清除，throw 向上傳遞並保留 WAIT_USER。
+- Escape／無 UI 保留待決策，可自然文字或同 ID 日後重試，不自動重試。
+- 不修改 answered decisionId reuse、queue／replace／history dedupe／reset lifecycle，也不修改 `pi-main/`、schema、stages、completion。
 
-1. 頂層 runtime import 改為 dynamic import：仍 OOM。
-2. dynamic import 移入 async factory：仍 OOM。
-3. 刪除冗餘 selector test 回到 71 tests：仍 OOM。
+## 缺口與風險
 
-目前根因仍未知；證據只支持問題位於非精準 `node:test`／`tsx` 載入探索或 Jiti 重複保留路徑，不能下定論。
+- 上游若強制關閉 component 而未呼叫 `done`，Promise／lease 可能 pending；本次明確排除 reset lifecycle。
+- `docs/PLAN-B.md` 保留為先前人工視覺驗收，不新增 Plan B。
+- 缺少 `decisionId` 的 ingress 不做 dedupe；上游 UI component 不呼叫 `done` 可能永久 pending。
 
-## 未完成與風險
+## 驗證狀態
 
-- ### 下一階段最高優先級
+驗證已完成：精準測試套件 87 通過／0 失敗／0 略過；`npm test` 128 通過／0 失敗／0 略過；`npm run check` 兩段 tsc 均通過；scripted PI TUI 精準 1/1、完整 4/4 通過。最終 Standards review 0 findings；最終 Spec review 0 findings。runtime／test 在最終測試後未再修改，後續僅進行文件翻譯與狀態同步。
 
-  - WAIT_USER sticky marker：`publishWaitUser` 在 `requireWaitUser`、`publishState`、`ctx.ui.select`／`ctx.ui.custom` 完成前即寫入 published marker；若後續拋錯、選擇取消、custom 不存在或 UI 不存在，stage／marker 可能殘留，相同 `decisionId` 重試會被視為已發布而 no-op。
-  - 下一階段先以 RED 測試覆蓋失敗、取消、無 UI、相同 ID 重試，再定義並實作 rollback／commit 語意。
-  - answered `decisionId` 的 runtime reuse enforcement，以及 WAIT_USER 期間不同 `decisionId` reentry 應 reject、ignore 或 replace，分列為尚待使用者決策，不宣稱已解決。
-  - 2026-08-16 使用者已知悉並接受這項風險，授權本次照樣 commit；此授權不代表問題已解決。
+```text
+cd forge-runtime
+npx tsx --test tests/extensions/forge-runtime-extension.test.ts tests/grill/grill-skill.test.ts tests/ui/wait-user-panel.test.ts
+npm test
+npm run check
+```
 
-- `selectList` formatter 尚無實際 autocomplete render coverage。
-- Plan B 人工視覺驗收、固定 widget tree、selectList autocomplete render coverage 尚未完成，需使用者核准與驗收。
-- prompt contract 不能機器證明自然語言 options 一定是完整答案。
-- `ctx.ui.custom`／`Editor` 僅適用 TUI；非 TUI 自然文字路徑必須保留。
-- 不修改 `pi-main/`，不執行舊 OOM 探針，不擴大成 harness refactor。
+## 下一步
 
-## 起手訊息
-
-請先閱讀本檔與相關 durable 文件，向使用者說明 Plan A 已完成，並等待使用者決定是否進入 Plan B 人工視覺驗收。不修改 `pi-main/`；不要把 Plan B 未完成項目宣稱為已完成。
-
-## 2026-08-16 設計確認與下一 session（歷史）
-
-- 使用者已確認 WAIT_USER 的開放回答、語意不足時的新 clarification decision、單次 pending WAIT_USER、無通用 Confirm／Reject、Evidence 摘要與 completion 後無 assistant prose；詳見 `CONTEXT.md`、`docs/adr/ADR-0009-wait-user-fixed-custom-input.md`。
-- 舊流程與 47/44/OOM 數字保留作歷史；目前以本檔「目前狀態」與最終驗證基線為準。
-
-## 最終交接結論
-
-- Plan A implementation、focused/full automated tests、static check、scripted PI TUI gates 與 final review 均完成。
-- 未解風險：無 decisionId ingress 無法做 pending-id dedupe；Plan B 人工視覺驗收仍待使用者決定。
+本 ticket 已完成，無待實作或 re-review；下一步僅等待使用者另行決定方案 B 人工視覺驗收，或開立新 ticket。
