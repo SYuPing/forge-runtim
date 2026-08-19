@@ -149,7 +149,6 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	const grillToolNames = ["forge_grill_evidence", "forge_grill_complete"];
 	let pendingGrillRun = false;
 	let pendingKnowledgeRequest: { missingAssets: string[]; request: string; rootDir: string } | undefined;
-	let pendingUserMessageRewrite: string | undefined;
 	let activeWorkflow: ActiveWorkflowContext | undefined;
 	let savedActiveTools: string[] | undefined;
 	let suppressCompletionTurn = false;
@@ -180,8 +179,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			pendingGrillRun = false;
 		pendingKnowledgeRequest = undefined;
 		pendingReplayInvocation = undefined;
-		pendingUserMessageRewrite = undefined;
-		pendingWaitUserDecisionId = undefined;
+			pendingWaitUserDecisionId = undefined;
 		activeWaitUserUiLeaseDecisionId = undefined;
 			suppressCompletionTurn = false;
 		};
@@ -236,7 +234,6 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		}
 		const nextRound = sessionState.startGrillRound(currentRound.request, currentRound.snapshot);
 		pendingGrillRun = true;
-		pendingUserMessageRewrite = answer;
 		activateGrillTools();
 		await publishState(pi, ctx, state);
 		return buildGrillingSkillInvocation(
@@ -320,19 +317,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		},
 	});
 
-	pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx?: CommandContext) => {
-		if (pendingUserMessageRewrite && event.message?.role === "user") {
-			const rewrittenText = pendingUserMessageRewrite;
-			pendingUserMessageRewrite = undefined;
-			return {
-				message: {
-					...event.message,
-					content: [{ type: "text", text: rewrittenText }],
-				},
-			};
-		}
-
-		if (event.message?.role !== "assistant") {
+		pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx?: CommandContext) => {
+			if (event.message?.role !== "assistant") {
 			return;
 		}
 		if (suppressCompletionTurn) {
@@ -432,7 +418,6 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			await publishState(pi, ctx ?? {}, sessionState.beginIntent(approvedRequest));
 			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(approvedRequest));
 			pendingGrillRun = true;
-			pendingUserMessageRewrite = text;
 			const lightDiscovery = await runLightDiscovery(approvedRootDir, extractDiscoverySeeds(approvedRequest));
 			const round = sessionState.startGrillRound(approvedRequest, lightDiscovery.snapshot);
 			activeWorkflow = {
@@ -520,7 +505,6 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		await publishState(pi, ctx ?? {}, sessionState.beginIntent(intent.goal));
 		await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(intent.goal));
 		pendingGrillRun = true;
-		pendingUserMessageRewrite = text;
 		const lightDiscovery = await runLightDiscovery(rootDir, intent.lightDiscoverySeeds);
 		const round = sessionState.startGrillRound(intent.goal, lightDiscovery.snapshot);
 		activeWorkflow = {

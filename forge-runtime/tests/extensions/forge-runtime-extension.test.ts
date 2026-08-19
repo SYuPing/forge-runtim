@@ -2676,45 +2676,6 @@ test("Extension_WhenGrillResultDebugCommandReceivesStructuredResult_ShouldPublis
 	assert.doesNotMatch(renderedMessage, /EV-7777/);
 });
 
-test("Extension_WhenForgeInputTransformsPrompt_ShouldKeepOriginalUserTranscript", async (t) => {
-	const rootDir = createTempRoot();
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const { messageEndHandler, sendInput } = await createExtensionHarness({ cwd: rootDir });
-	assert.ok(messageEndHandler, "Expected message_end handler to be registered for grill flow");
-
-	const originalText = "請幫我壓測方案 A";
-	const transformResult = await sendInput(originalText);
-	assert.equal((transformResult as { action?: string }).action, "transform");
-
-	const transformedPrompt = (transformResult as { text?: string }).text ?? "";
-	assert.match(transformedPrompt, /forge_grill_evidence/);
-	assert.match(transformedPrompt, /forge_grill_complete/);
-	assert.match(transformedPrompt, /不得輸出 assistant prose/);
-	assert.doesNotMatch(transformedPrompt, /請只輸出一個最阻塞的確認問題/);
-
-	const result = await messageEndHandler({
-		message: {
-			role: "user",
-			content: [{ type: "text", text: transformedPrompt }],
-		},
-	});
-
-	assert.equal(typeof result, "object");
-	assert.ok(result && "message" in (result as object), "Expected transformed user message to be rewritten");
-	const rewrittenText = (
-		(result as {
-			message: {
-				content?: Array<{ type?: string; text?: string }>;
-			};
-		}).message.content?.[0]?.text ?? ""
-	);
-	assert.equal(rewrittenText, originalText);
-	assert.doesNotMatch(rewrittenText, /請只輸出一個最阻塞的確認問題/);
-});
-
 test("Extension_WhenStructuredGrillResultStreams_ShouldSuppressAssistantTextDuringMessageUpdate", async (t) => {
 	const rootDir = createTempRoot();
 	t.after(() => {

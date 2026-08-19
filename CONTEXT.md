@@ -1,6 +1,6 @@
 # Forge Runtime v4 Context
 
-日期：2026-08-16
+日期：2026-08-17
 
 ## 目標
 
@@ -32,6 +32,8 @@
 
 ## Grill Recovery 術語
 
+- `Grill Invocation Transport`：從 Forge `input` transform 到模型 provider request 的完整受控傳遞鏈；其內容在 provider 消費前不得被顯示或歷史整理邏輯改寫。
+- `Provider-Facing Grill Invocation`：實際送交模型的結構化 Grill 訊息，包含 completion contract、runtime-issued `roundId`、snapshot manifest 與目前任務；它不同於使用者原始請求的畫面呈現。
 - `Completion Omission`：一個 Grill attempt 以 assistant 終局結束，但未呼叫 `forge_grill_complete`。
 - `Grill Attempt`：同一 round／snapshot 的一次有界執行；明確 retry 會建立新 attempt，但不建立新 round 或 snapshot。
 - `RECOVERY_REQUIRED`：completion omission 後的 Grill substate／marker，不是新的 top-level workflow stage。
@@ -186,3 +188,11 @@
 - 紅燈測試必須因目標契約缺失而失敗。編譯、缺依賴、缺生成資料或無關例外，都不是有效紅燈。
 - 驗證失敗時，先判定是產品回歸還是環境阻礙。既有 manifest、lock 與正式 hydration 流程能修復環境時，不可改正式程式碼掩蓋問題。
 - `CONTEXT.md`、ADR、Plan、handoff 與 agent-state 必須跟完成狀態同步；保留舊狀態時要標示為歷史。
+
+## Grill 呼叫傳輸完整性同步（2026-08-17）
+
+- 三條 production slice 已完成：初始 ingress、知識庫缺失後 approval、`WAIT_USER` 回答後下一 round 均保留完整 Grill invocation 送給 provider。
+- 已移除 `pendingUserMessageRewrite` 的宣告、三個 setter、clear 與 user `message_end` replacement；assistant suppression／recovery 行為不變。
+- 實際 provider-context 測試為 `PiIngress_WhenInitialGrillIngress_ShouldPreserveFullGrillInvocationInProviderContext`、`PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInvocationInsteadOfApprovalText`、`PiProvider_WhenWaitUserAnswerStartsNextRound_ShouldReceiveStructuredInvocationInsteadOfAnswer`；post-cleanup targeted batch 為 3 pass、0 fail。
+- post-review-fix 驗證：full PI TUI 7 pass／0 fail／0 skip；canonical `npm test` 130 pass／0 fail／0 skip；`npm run check` 兩段 tsc 均 pass、no diagnostics。final review 已完成：Standards 0 findings、Spec 0 findings；本 ticket acceptance／closure 完成。
+- 「顯示訊息」與「送給 provider 的訊息」分離 seam 列為後續設計待辦，不屬本 ticket scope，尚未核准或實作；若要推進，必須另走 `design-plan-workflow` 並取得人類決策。

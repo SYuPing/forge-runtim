@@ -1,8 +1,8 @@
 # Plan A：Grill Completion Recovery 與真實互動驗收
 
-日期：2026-08-13
+日期：2026-08-13（2026-08-17 新增 active follow-up）
 
-狀態：原 Plan #1 至 #17 已 Completed（2026-08-14）；2026-08-15 prompt-contract 增補已完成。增補當時 focused 5/5、`npm test` 116/116、`npm run check` exit 0、Standards／Spec review 各 0 findings。這些結果不代表 Plan B current 驗證；不重開 #1 至 #17。
+狀態：原 Plan #1 至 #17、既有增補與 2026-08-17「Grill 呼叫傳輸完整性」follow-up 的 implementation、validation、final review 與 acceptance／closure 均已完成（2026-08-18）。舊完成紀錄保留，不重開 #1 至 #17。
 
 Prerequisite
 
@@ -788,8 +788,87 @@ npm run check
 
 若上游強制關閉 component 而沒有呼叫 `done`，Promise／lease 可能 pending；本 Plan A 不加入 reset lifecycle，後續若要處理需另行核准。
 
-## Ticket closure（2026-08-17）
+## Ticket closure（2026-08-17；歷史 WAIT_USER ticket）
 
 Plan A 與本 ticket 已完成，無待實作或 re-review。最終 Standards review 為 0 findings；最終 Spec review 為 0 findings。精準測試套件 87/87、完整 `npm test` 128/128、`npm run check` 兩段 tsc 均通過；runtime／test 在最終測試後未再修改，後續僅進行文件翻譯與狀態同步。下一步只能由使用者另行決定方案 B 人工視覺驗收，或開立新 ticket。
 
 保留三個已知 gap：缺少 `decisionId` 的 ingress 不做 dedupe；上游 UI component 不呼叫 `done` 可能使 Promise／lease 永久 pending；Plan B 人工視覺驗收尚未完成。
+
+---
+
+## 2026-08-17 Active Follow-up：Grill 呼叫傳輸完整性
+
+狀態：implementation complete；post-review-fix validation complete；final review complete（2026-08-18）。
+
+驗收／closure：已完成；Standards 0 findings、Spec 0 findings。
+
+### 建置範圍
+
+- 確保初始 Forge ingress、知識庫缺失後 approval、`WAIT_USER` 回答後下一 round 三條路徑，都把完整 Grill invocation 送到 provider。
+- 移除會在 provider 消費前把 invocation 改回原始 request／answer 的 `pendingUserMessageRewrite` 生命週期。
+- 保留 completion-only contract、runtime-issued `roundId`、snapshot manifest、candidate ids 與 task 文字。
+- 保留既有工具 gate、assistant completion suppression、completion omission 與 `RECOVERY_REQUIRED` 行為。
+
+### 不建置
+
+- 不修改 `pi-main/`。
+- 不修改 retry／cancel／switch、settled 或 auto-retry policy。
+- 不新增 provider hook、message model、queue、parallel workflow 或第三種 completion status。
+- 不建立短版 transcript／history presentation seam；「顯示訊息」與「送給 provider 的訊息」分離不屬本 ticket scope，尚未核准或實作。
+- 不修改 Plan B UI，也不把此底層 bug 包裝成視覺驗收工作。
+
+### 實作方式
+
+在 `forge-runtime/extensions/forge-runtime.ts` 做單點刪除：移除 `pendingUserMessageRewrite` 宣告、三個設值點，以及 user `message_end` replacement 分支。保留 `buildGrillingSkillInvocation(...)` 產生的訊息，讓 finalized user message 與 provider payload 使用同一份完整 invocation。
+
+本 ticket 不新增 provider timing seam，也不實作 display/provider message 分離；後者列為後續設計待辦，需另走 `design-plan-workflow` 並取得人類決策。
+
+脆弱假設：使用者可接受 session history 顯示完整 Grill invocation。若新 session 不接受此結果，必須先停止實作並回到設計，另開 presentation seam 決策；不得把 rewrite 偷渡回 provider lifecycle。
+
+### 檔案
+
+| 檔案 | 變動 |
+| --- | --- |
+| `forge-runtime/tests/extensions/pi-grill-interactive.test.ts` | 新增三條 provider-facing invocation 回歸測試 |
+| `forge-runtime/extensions/forge-runtime.ts` | 移除 user message rewrite 狀態與生命週期 |
+
+正式程式與測試只涉及 2 個檔案；三條 production slice、post-review-fix validation、final review 與 acceptance／closure 已完成，本文件、Context、ADR、handoff 與 agent state 已同步狀態。
+
+### 測試
+
+| 測試 | 驗收條件 |
+| --- | --- |
+| `PiIngress_WhenInitialGrillIngress_ShouldPreserveFullGrillInvocationInProviderContext` | 首次 provider request 包含 completion contract、目前 `roundId`、snapshot manifest 與 task，且不等於原始 request |
+| `PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInvocationInsteadOfApprovalText` | approval 後 provider 收到完整 invocation，不等於 approval 文字 |
+| `PiProvider_WhenWaitUserAnswerStartsNextRound_ShouldReceiveStructuredInvocationInsteadOfAnswer` | 回答後下一 round 保留新 roundId、既有 snapshot 與 completion contract，不等於使用者答案 |
+
+三條測試在舊程式上均因 provider payload 被改寫而 RED；目前實際測試名稱如上，post-cleanup targeted batch 為 3 pass、0 fail。post-review-fix 的真 PI TUI、canonical suite、TypeScript checks 與 final review 已完成。
+
+### Post-review 修正與驗證（2026-08-18）
+
+- 首輪 review findings 已修正：英文 ponytail 註解改為繁中、initial 測試補上 `roundId` 與 manifest assertion、文件驗證狀態與測試名稱同步。
+- 三條 integration path 的 fixture duplication 是刻意保留的 judgement call，不抽象共用 fixture，以維持 independent integration paths。
+- canonical 首次 130 pass／1 fail 為 obsolete original-transcript rewrite test；刪除該 obsolete test 後為 130 pass／0 fail／0 skip。
+- post-review-fix：full PI TUI 7 pass／0 fail／0 skip；`npm run check` 兩段 tsc 均 pass、no diagnostics。
+- final review：Standards 0 findings、Spec 0 findings；acceptance／closure complete。
+
+### 執行順序
+
+1. 已新增 initial ingress、approval 與 `WAIT_USER` resume 三條 provider-context 測試。
+2. 已確認三條紅燈，並移除 `pendingUserMessageRewrite` 及 user `message_end` replacement，完成最小 production slice。
+3. 已取得三條 post-cleanup targeted GREEN，並完成 post-review-fix full PI TUI、canonical suite 與兩段 TypeScript check。
+4. 首輪 review findings 已修正；獨立兩軸 final review 已完成，Standards 0 findings、Spec 0 findings。
+5. 本 ticket acceptance／closure 已完成；後續僅保留另案 presentation/provider seam 設計待辦。
+
+### 驗證
+
+```text
+# 僅由獨立驗證子代理執行，從 repo root
+cd forge-runtime
+npx tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/extensions/pi-grill-interactive.test.ts
+npx tsx --test tests/extensions/forge-runtime-extension.test.ts
+npm test
+npm run check
+```
+
+驗證結果：三個實際 provider-context 案例 post-cleanup 3 pass／0 fail；post-review-fix full PI TUI 7 pass／0 fail／0 skip；canonical `npm test` 130 pass／0 fail／0 skip（首次 130/1 為 obsolete original-transcript rewrite test，刪除後重跑）；`npm run check` 兩段 tsc 均 pass、no diagnostics。final review：Standards 0 findings、Spec 0 findings；acceptance／closure complete。

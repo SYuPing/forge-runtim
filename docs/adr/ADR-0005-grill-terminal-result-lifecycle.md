@@ -3,6 +3,8 @@
 狀態：Accepted
 
 > 2026-08-13 補充：本 ADR 對 tool-call iteration 的辨識仍有效；completion omission 的 recovery lifecycle 已由 ADR-0008 supersede。streaming `message_end` 不得觸發 steer／follow-up replay。
+>
+> 2026-08-17 補充：PI 的 `message_end` replacement 會原地改寫 agent message。Forge 不得用 user `message_end` replacement 清理尚未被 provider 消費的 Grill invocation；顯示整理不能改變 provider-facing prompt。此補充不改 assistant terminal result 與 recovery lifecycle。
 
 PI 會為每個 assistant response（含 `toolCall` iteration）發送 `message_end`。Forge 應只把不含 `toolCall` 的 assistant message 視為可解析的終局 Grill result；含工具呼叫的訊息必須保留 `pendingGrillRun`，避免提前跳出 `GRILL`。這維持 Workflow 對 `WAIT_USER` 與 Deep Knowledge transition 的控制權，且不需修改 `pi-main/`。
 

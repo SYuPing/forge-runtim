@@ -23,6 +23,7 @@ Accepted
 - 舊規範只保留 round 並提示 `continue`；它沒有明確記錄 omission、沒有把單次嘗試封口，也容易讓 streaming `message_end` 中的 follow-up 形成 steer／replay 迴圈。
 - 正常 `NEEDS_CONFIRMATION` 與 `READY_FOR_DEEP` 轉移也必須與 omission recovery 分離：前者是有效 completion，後者是缺少 completion 的故障狀態。
 - 空 discovery manifest 若仍要求首輪 evidence，會建立模型永遠無法完成的 Grill；relevance gate 失敗若只顯示錯誤，也沒有可供使用者解除阻塞的 decision path。
+- 2026-08-17 的 runtime probe 證明一次實際 omission 是由 provider-facing Grill invocation 在送出前被改回原始 request 所觸發。`RECOVERY_REQUIRED` 與 settled 行為本身正確；修復位於 invocation transport，不改本 ADR 的 retry／cancel／switch policy。
 
 ## Decision
 

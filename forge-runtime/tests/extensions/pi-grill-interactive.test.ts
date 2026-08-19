@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -35,10 +36,10 @@ async function waitForViewport(terminal: VirtualTerminal, text: string): Promise
 
 test("PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnswer", async () => {
 	const tempDir = join(tmpdir(), `pi-grill-tui-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-	mkdirSync(tempDir, { recursive: true });
-	mkdirSync(join(tempDir, "wiki"), { recursive: true });
-	mkdirSync(join(tempDir, "code_base"), { recursive: true });
-	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+		mkdirSync(tempDir, { recursive: true });
+		mkdirSync(join(tempDir, "wiki"), { recursive: true });
+		mkdirSync(join(tempDir, "code_base"), { recursive: true });
+		const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
 	const terminal = new VirtualTerminal(100, 30);
 	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
 	let mode: InteractiveMode | undefined;
@@ -408,6 +409,328 @@ test("PiTui_WhenSingleInputRuns_ShouldBoundAssistantTurns", async () => {
 		);
 		assert.equal(faux.getPendingResponseCount(), 0);
 		assert.equal(runtime.session.messages.filter((message) => message.role === "user").length, 1);
+	} finally {
+		mode?.stop();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("PiProvider_WhenWaitUserAnswerStartsNextRound_ShouldReceiveStructuredInvocationInsteadOfAnswer", async () => {
+		const tempDir = join(tmpdir(), `pi-grill-round-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+		mkdirSync(join(tempDir, "wiki"), { recursive: true });
+		mkdirSync(join(tempDir, "code_base"), { recursive: true });
+		await writeFile(join(tempDir, "code_base", "auth.md"), "auth implementation target\n");
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+		const request = "請實作 auth";
+		const contexts: unknown[] = [];
+		let firstRoundId: string | undefined;
+		let firstCandidateId: string | undefined;
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const extensionFactory: ExtensionFactory = installForgeRuntimeExtension;
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id, name: model.name, api: model.api, reasoning: model.reasoning,
+								input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
+							})),
+						});
+						extensionFactory(pi);
+					},
+				],
+				noSkills: true, noPromptTemplates: true, noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: runtimeOptions.model })),
+				services, diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, { cwd: tempDir, agentDir: tempDir, sessionManager: SessionManager.create(tempDir) });
+		await runtime.session.bindExtensions({});
+			faux.setResponses([
+				(context) => {
+					contexts.push(context);
+					const invocation = JSON.stringify(context.messages);
+					firstRoundId = invocation.match(/目前 Grill roundId:\s*(grill-\d+)/)?.[1];
+					firstCandidateId = invocation.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+					assert.ok(firstRoundId, "first provider invocation did not include a roundId");
+					assert.ok(firstCandidateId, "first provider invocation did not include a code_base candidateId");
+					return fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
+						candidateId: firstCandidateId,
+					}, { id: "call-evidence-1" })]);
+				},
+				(context) => {
+					contexts.push(context);
+					assert.ok(firstRoundId);
+					assert.ok(firstCandidateId);
+					return fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+						evidence: [firstCandidateId],
+						questions: [{ id: "q-proceed", question: "是否進入 deep knowledge？", options: ["是", "否"] }],
+						recommendation: { reason: "需要使用者確認。", value: "是" }, requiresUserConfirmation: true, roundId: firstRoundId,
+						status: "NEEDS_CONFIRMATION",
+						}, { id: "call-complete-1" })]);
+					},
+					(context) => { contexts.push(context); return fauxAssistantMessage("首輪 completion suppress。"); },
+					(context) => {
+					contexts.push(context);
+					return fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+						evidence: [], questions: [], recommendation: { value: "繼續" }, requiresUserConfirmation: false,
+						status: "READY_FOR_DEEP", roundId: "grill-2",
+					}, { id: "call-complete-2" })]);
+				},
+				(context) => { contexts.push(context); return fauxAssistantMessage("第二輪已收到結構化決策。"); },
+					// ponytail: 預留四個回應；只有 PI 增加導引回合時才提高。
+				...Array.from({ length: 4 }, () => (context: { messages: unknown[] }) => {
+					contexts.push(context);
+					return fauxAssistantMessage("headroom");
+				}),
+			]);
+		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		void mode.run();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		terminal.sendInput(request); terminal.sendInput("\r");
+		await waitForViewport(terminal, "是否進入 deep knowledge？");
+		terminal.sendInput("\r");
+		await Promise.race([
+			runtime.session.waitForIdle(),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("session did not become idle within 5 seconds")), 5000)),
+		]);
+		assert.ok(contexts.length >= 3, "provider requests were not captured");
+		const userTexts = contexts.flatMap((context) =>
+			(context as { messages: Array<{ role: string; content: unknown }> }).messages
+				.filter((message) => message.role === "user")
+				.map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content))),
+		);
+		const secondUserText = userTexts.find((text) => text.includes("completion payload") && text.includes("grill-2"));
+		assert.ok(secondUserText, "provider requests did not include a structured grill-2 invocation");
+		assert.match(secondUserText, /completion payload/);
+		for (const field of ["evidence", "questions", "recommendation", "requiresUserConfirmation", "status", "roundId"]) assert.match(secondUserText, new RegExp(field));
+		assert.match(secondUserText, /grill-2/); assert.match(secondUserText, /是/); assert.match(secondUserText, new RegExp(request));
+		const completionContext = contexts.find((context) =>
+			(context as { messages: Array<{ role: string; content: unknown }> }).messages.some(
+				(message) =>
+					message.role === "user" &&
+					(typeof message.content === "string" ? message.content : JSON.stringify(message.content)) === secondUserText,
+			),
+		);
+		assert.ok(completionContext, "structured grill-2 invocation context was not captured");
+		const firstManifestContext = contexts.find((context) => /manifest/i.test(JSON.stringify(context)));
+		const firstManifest = firstManifestContext && JSON.stringify(firstManifestContext).match(/manifest[^\n]{0,500}/i)?.[0];
+		assert.ok(typeof firstManifest === "string", "first provider request did not include the snapshot manifest");
+		assert.match(JSON.stringify(completionContext), new RegExp(firstManifest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+		assert.equal(userTexts.includes("是"), false, "provider context contained the submitted answer as a standalone user message");
+	} finally {
+		mode?.stop(); await runtime?.dispose(); faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("PiIngress_WhenInitialGrillIngress_ShouldPreserveFullGrillInvocationInProviderContext", async () => {
+	const tempDir = join(tmpdir(), `pi-grill-ingress-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(tempDir, { recursive: true });
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+		const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+	const request = "請幫我測試 Forge，並保留 Grill 傳輸完整性";
+	let providerUserMessage: string | undefined;
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const extensionFactory: ExtensionFactory = installForgeRuntimeExtension;
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id,
+								name: model.name,
+								api: model.api,
+								reasoning: model.reasoning,
+								input: model.input,
+								cost: model.cost,
+								contextWindow: model.contextWindow,
+								maxTokens: model.maxTokens,
+							}))
+						});
+						extensionFactory(pi);
+					}
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			}
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model: runtimeOptions.model,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.create(tempDir),
+		});
+		await runtime.session.bindExtensions({});
+		faux.setResponses([
+			(context) => {
+				const userMessage = [...context.messages].reverse().find((message) => message.role === "user");
+				providerUserMessage = userMessage
+					? typeof userMessage.content === "string"
+						? userMessage.content
+						: JSON.stringify(userMessage.content)
+					: undefined;
+				return fauxAssistantMessage("模型回覆未完成。");
+			},
+		]);
+		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		void mode.run();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		terminal.sendInput(request);
+		terminal.sendInput("\r");
+		for (let attempt = 0; attempt < 100 && providerUserMessage === undefined; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+			assert.ok(providerUserMessage, "provider request was not captured");
+			assert.match(providerUserMessage, /completion payload/);
+			assert.match(providerUserMessage, /目前 Grill roundId:\s*grill-1/);
+			assert.match(providerUserMessage, /可查核來源只限以下 snapshot manifest；不得猜測或傳入 path。/);
+			assert.match(providerUserMessage, new RegExp(request));
+		assert.notEqual(providerUserMessage, request);
+	} finally {
+		mode?.stop();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInvocationInsteadOfApprovalText", async () => {
+	const tempDir = join(tmpdir(), `pi-grill-approval-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(tempDir, { recursive: true });
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+	const request = "請幫我測試 Forge，並保留 Grill 傳輸完整性";
+	let providerUserMessage: string | undefined;
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const extensionFactory: ExtensionFactory = installForgeRuntimeExtension;
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id,
+								name: model.name,
+								api: model.api,
+								reasoning: model.reasoning,
+								input: model.input,
+								cost: model.cost,
+								contextWindow: model.contextWindow,
+								maxTokens: model.maxTokens,
+							})),
+						});
+						extensionFactory(pi);
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model: runtimeOptions.model,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.create(tempDir),
+		});
+		await runtime.session.bindExtensions({});
+		faux.setResponses([
+			(context) => {
+				const userMessage = [...context.messages].reverse().find((message) => message.role === "user");
+				providerUserMessage = userMessage
+					? typeof userMessage.content === "string"
+						? userMessage.content
+						: JSON.stringify(userMessage.content)
+					: undefined;
+				return fauxAssistantMessage("模型回覆未完成。");
+			},
+		]);
+		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		void mode.run();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		terminal.sendInput(request);
+		terminal.sendInput("\r");
+		await waitForViewport(terminal, "請明確回覆同意");
+		assert.equal(faux.state.callCount, 0);
+		terminal.sendInput("同意");
+		terminal.sendInput("\r");
+		for (let attempt = 0; attempt < 100 && providerUserMessage === undefined; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.ok(providerUserMessage, "provider request was not captured after approval");
+		assert.match(providerUserMessage, /completion payload/);
+		assert.match(providerUserMessage, /roundId/);
+		assert.match(providerUserMessage, new RegExp(request));
+		assert.notEqual(providerUserMessage, "同意");
 	} finally {
 		mode?.stop();
 		await runtime?.dispose();

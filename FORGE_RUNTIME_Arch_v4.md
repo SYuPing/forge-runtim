@@ -503,6 +503,12 @@ DEEP_KNOWLEDGE
 
 ## 九之一、Grill Completion 與 Recovery 的最高規範（2026-08-13）
 
+### Grill 呼叫傳輸不變量（2026-08-17）
+
+`input` transform 產生的完整 Grill invocation 必須原樣進入該 attempt 的 provider request。provider-facing invocation 至少必須保留 Grill completion contract、runtime-issued `roundId`、snapshot manifest 與目前任務；在 provider 消費前，任何 `message_end`、history cleanup 或顯示用途的 rewrite 都不得原地改寫同一個 message object。
+
+使用者原始請求的短版顯示屬於 presentation concern，不得與 provider transport 共用會互相覆寫的訊息生命週期。若沒有獨立且可驗證的 presentation seam，v1 優先保留完整 invocation；不可為了縮短 transcript 而破壞 completion-tool-only contract。
+
 `forge_grill_complete` 是每個 Grill attempt 的唯一正常完成通道。正常 completion 與 completion omission 必須走不同 lifecycle：
 
 ```text

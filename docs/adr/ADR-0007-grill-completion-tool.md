@@ -17,6 +17,15 @@
 - assistant 終局若未呼叫 completion tool，runtime 記錄該 attempt 的首次 omission，保留目前 round，並進入 `GRILL + RECOVERY_REQUIRED`。可見 panel 提供 `/forge-runtime retry`、`cancel`、`switch`；禁止 background steer、follow-up retry 與自動 Deep。`continue` 不再承擔 omission recovery。
 - completion payload 固定為既有 `StructuredGrillResult` 加 runtime-issued `roundId`：`roundId`、`status`、`questions`、`recommendation`、`evidence`、`requiresUserConfirmation`；`questions[0].id` 是 `decisionId`，不新增其他 status 或欄位。
 - completion tool schema 與使用者作答後的 resume transport 已由 Plan A 定義；ADR-0005 的既有 terminal `message_end` lifecycle 維持歷史／測試相容性描述。
+- completion-tool-only contract 必須完整送達 provider；任何顯示或 history rewrite 都不得在 provider 消費前把 Grill invocation 改回原始使用者文字。
+
+## Grill 呼叫傳輸完整性補充（2026-08-17）
+
+診斷已證明：Forge 雖建立完整 Grill invocation，既有 user `message_end` rewrite 卻在 provider 執行前原地改寫同一個 message object，使模型只收到原始請求。Plan A follow-up 採最小修正：移除這條 rewrite 生命週期，讓完整 invocation 同時成為 finalized user message 與 provider payload。短版 transcript 顯示不屬於本次 completion contract 修復；若日後確有需求，必須另建不會修改 provider message 的 presentation seam。
+
+目前實作事實：已移除 `pendingUserMessageRewrite` 宣告、三個 setter、clear 與 user `message_end` replacement；初始 ingress、approval、`WAIT_USER` resume 三條 provider-context 測試的 post-cleanup targeted batch 為 3 pass、0 fail。assistant suppression／recovery 未改動。post-review-fix full PI TUI 為 7 pass／0 fail／0 skip，canonical `npm test` 為 130 pass／0 fail／0 skip，`npm run check` 兩段 tsc 均 pass、no diagnostics；final review 已完成，Standards 0 findings、Spec 0 findings。
+
+後續設計待辦：分離「顯示訊息」與「送給 provider 的訊息」的 presentation/provider seam。本待辦不屬本 ticket scope，尚未核准或實作；任何方案選擇都必須另走 `design-plan-workflow` 並由人類決策。
 
 ## 實作進度（2026-08-12）
 

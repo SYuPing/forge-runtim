@@ -5,6 +5,7 @@
 Prerequisite（若有）
 
 - `docs/PLAN-A.md` 必須先完成，因為 UI 只能建立在已穩定的 workflow contract 之上。
+- 2026-08-17 的 Grill invocation transport integrity 屬於 Plan A 底層修復，不納入本 Plan 的 UI／人工視覺驗收；本次不要求保留原始 request 的短版 transcript 顯示。
 
 ---
 Building
