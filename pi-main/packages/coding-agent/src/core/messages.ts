@@ -120,13 +120,14 @@ export function createCompactionSummaryMessage(
 }
 
 /** Convert CustomMessageEntry to AgentMessage format */
-export function createCustomMessage(
+export function createCustomMessage<T = unknown>(
 	customType: string,
 	content: string | (TextContent | ImageContent)[],
 	display: boolean,
-	details: unknown | undefined,
+	details: T | undefined,
 	timestamp: string,
-): CustomMessage {
+	excludeFromContext?: boolean,
+): CustomMessage<T> & { excludeFromContext?: boolean } {
 	return {
 		role: "custom",
 		customType,
@@ -134,6 +135,7 @@ export function createCustomMessage(
 		display,
 		details,
 		timestamp: new Date(timestamp).getTime(),
+		excludeFromContext,
 	};
 }
 
@@ -160,6 +162,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						timestamp: m.timestamp,
 					};
 				case "custom": {
+					if ("excludeFromContext" in m && m.excludeFromContext === true) return undefined;
 					const content = typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
 					return {
 						role: "user",

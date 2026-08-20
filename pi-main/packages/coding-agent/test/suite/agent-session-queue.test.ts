@@ -3,6 +3,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTestSession } from "../utilities.ts";
 import { createHarness, getAssistantTexts, getMessageText, getUserTexts, type Harness } from "./harness.ts";
 
 async function createWaitingHarness(
@@ -323,6 +324,85 @@ describe("AgentSession queue characterization", () => {
 		expect(
 			harness.session.messages.some((message) => message.role === "custom" && message.customType === "queue-test"),
 		).toBe(true);
+	});
+
+	it("keeps display-only custom messages observable without starting another turn while streaming", async () => {
+		let sent = false;
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("message_update", async (event) => {
+						if (sent || event.message.role !== "assistant") return;
+						sent = true;
+						await pi.sendMessage(
+							{
+								customType: "display-only-test",
+								content: "display only custom",
+								display: true,
+								details: { value: 1 },
+							},
+							{ deliverAs: "displayOnly" },
+						);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		const customMessageStarts: string[] = [];
+		let providerCalls = 0;
+
+		harness.session.subscribe((event) => {
+			if (event.type === "message_start" && event.message.role === "custom") {
+				customMessageStarts.push(getMessageText(event.message));
+			}
+		});
+		harness.setResponses([
+			() => {
+				providerCalls++;
+				return fauxAssistantMessage("ordinary assistant completion");
+			},
+			() => {
+				providerCalls++;
+				return fauxAssistantMessage("unexpected second turn");
+			},
+		]);
+
+		await harness.session.prompt("start");
+
+		expect(customMessageStarts).toEqual(["display only custom"]);
+		expect(
+			harness.session.messages.some(
+				(message) => message.role === "custom" && message.customType === "display-only-test",
+			),
+		).toBe(true);
+		expect(harness.session.pendingMessageCount).toBe(0);
+		expect(getUserTexts(harness)).toEqual(["start"]);
+		expect(providerCalls).toBe(1);
+	});
+
+	it("forwards displayOnly marker to persisted custom message entries", async () => {
+		const ctx = await createTestSession();
+		try {
+			await ctx.session.sendCustomMessage(
+				{
+					customType: "display-only-entry-test",
+					content: "display only persisted",
+					display: true,
+					details: {},
+				},
+				{ deliverAs: "displayOnly" },
+			);
+
+			const entry = ctx.sessionManager
+				.getEntries()
+				.find((entry) => entry.type === "custom_message" && entry.customType === "display-only-entry-test");
+			if (entry?.type !== "custom_message") {
+				throw new Error("Expected persisted custom message entry");
+			}
+			expect(entry.excludeFromContext).toBe(true);
+		} finally {
+			ctx.cleanup();
+		}
 	});
 
 	it("injects nextTurn custom messages into the next prompt", async () => {

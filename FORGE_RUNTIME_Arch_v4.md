@@ -509,6 +509,12 @@ DEEP_KNOWLEDGE
 
 使用者原始請求的短版顯示屬於 presentation concern，不得與 provider transport 共用會互相覆寫的訊息生命週期。若沒有獨立且可驗證的 presentation seam，v1 優先保留完整 invocation；不可為了縮短 transcript 而破壞 completion-tool-only contract。
 
+### Display-only 自訂訊息契約（2026-08-20）
+
+coding-agent ExtensionAPI 新增真正的 display-only custom message：`deliverAs: "displayOnly"` 優先於 `triggerTurn`／`steer`／`followUp`／`nextTurn`。訊息仍進入 UI、transcript、session persistence 與 reload，但永不排入 provider／LLM context，也永不觸發 turn。其持久 marker 為 `excludeFromContext?: boolean`，建立 display-only 訊息時固定為 `true`；讀取缺少 marker 的舊 session 維持舊語意，不重用 `display` 欄位。顯示抑制與 display-only 是兩個獨立的 core contract。
+
+Forge 僅讓成功 `forge_grill_complete` 的 `NEEDS_CONFIRMATION` WAIT_USER state message 使用 display-only；其他 command、retry、cancel、switch、deep knowledge 與一般 state message 維持現況。`excludeFromContext` 的 rehydrate 排除也涵蓋 branch summarization，不只一般 compaction。
+
 `forge_grill_complete` 是每個 Grill attempt 的唯一正常完成通道。正常 completion 與 completion omission 必須走不同 lifecycle：
 
 ```text
@@ -1292,7 +1298,7 @@ S18 JUDGE
 
 這點我會特別建議：
 
-## **不要 Fork PI Core。**
+## **預設不 Fork PI Core。**
 
 Forge 應該是：
 
@@ -1309,7 +1315,9 @@ Forge Package
      └── Workflow Runtime
 ```
 
-PI 官方目前的架構也是讓 workflow-specific behavior 透過 Extensions / Skills / Packages 擴充，而不是修改 core；Extension 可以提供 custom tools、事件處理與 UI。([GitHub][1])
+PI 官方目前的架構也是讓 workflow-specific behavior 透過 Extensions / Skills / Packages 擴充，而不是修改 core；Extension 可以提供 custom tools、事件處理與 UI。只有使用者明確核准、且由 ADR-0012／Plan A 限定的 display-only 最小 core 例外可修改 coding-agent core；其他 core 變更仍禁止，亦不 fork PI。([GitHub][1])
+
+本輪唯一支援基線是 coding-agent `0.83.0`，repo commit `321bbe69e909de9551906967629908a99167d11e`（`321bbe6`），branch `main`。方案 C 是窄化的 core 例外：只在 coding-agent ExtensionAPI／session 路徑加入 display-only custom message contract；不 fork PI、不改 `packages/agent/src/harness/*`，也不保證跨 package 共用 JSONL。
 
 而且 PI Package 本身可以透過 `package.json` 的 `pi` manifest 掛載 extensions、skills、prompts、themes。([GitHub][2])
 
@@ -1560,9 +1568,9 @@ Implement
 
 ---
 
-# 二十七、v4 的 10 條正式 Architecture Decision
+# 二十七、v4 的 11 條正式 Architecture Decision
 
-我建議你把這 10 條直接寫進正式的 `ADR-0001 Forge Runtime v4 Architecture.md`。
+我建議你把這 11 條直接寫進正式的 ADR 文件集。
 
 ### ADR-001 — Workflow Sovereignty
 
@@ -1669,6 +1677,12 @@ PI 官方目前也維持這種「core minimal、透過 extension/skills/package 
 
 ---
 
+### ADR-011 — Grill Completion Terminal Boundary
+
+成功 `forge_grill_complete` 使用既有 `AgentToolResult.terminate: true` 封口當前代理回合；`NEEDS_CONFIRMATION` 使用獨立 display-only custom message 進入 `WAIT_USER`，`READY_FOR_DEEP` 進入既有深度知識分流。完整決策見 `docs/adr/ADR-0011-grill-completion-terminal-boundary.md` 與 `docs/adr/ADR-0012-display-only-custom-message.md`。
+
+---
+
 # 最終的 v4 核心圖
 
 如果把整個架構濃縮成一張圖，我會把它定義成：
@@ -1759,6 +1773,18 @@ PI 官方目前也維持這種「core minimal、透過 extension/skills/package 
 
 ## 我會把這版定義為真正的 **Forge Runtime v4**
 
+### 完成生命週期補充（2026-08-19）
+
+`forge_grill_complete` 成功接受後，必須封口目前的代理回合，並依既有狀態分流：`NEEDS_CONFIRMATION` 進入 `WAIT_USER`、`READY_FOR_DEEP` 進入深度知識並穩定結束在 `KNOWLEDGE_UNDERSTANDING`。顯示抑制只能控制可見輸出，不能代替成功完成的終止邊界；display-only 是獨立的 PI core contract，負責「仍可見且可持久化、但不進 context 且不觸發 turn」。正常分流、完成遺漏復原、重試／取消／切換與穩定結束政策維持原決策。
+
+### 最終實作同步（2026-08-20）
+
+- Plan A 已實作完成，使用者已授權 `pi-main`；不執行 Plan B。
+- `displayOnly` 為 public delivery union；streaming 不 steer/followUp、不 trigger turn，但仍 append/event/persist。`excludeFromContext` 經 provider conversion、compaction rehydrate、branch summarization rehydrate、session-file round-trip；不修改 agent harness wire。public `CustomMessage` 與 `CustomAgentMessages.custom` 維持 HEAD，marker 僅在 internal intersection。
+- Forge 僅在 successful `NEEDS_CONFIRMATION` 傳 display-only WAIT_USER state message，tool result `terminate=true`；其他 state delivery 不擴張。READY 仍自動進 Deep，不要求 idle。
+- 人類回答固定為 `WAIT_USER → USER_CONFIRMED → GRILL`；UI/command 先 resume、重用 `pendingReplayInvocation`，再送完整 followUp invocation；direct human input 用 `transform`，避免 nested `emitInput`。
+- 已知風險：queued steer、extension API fire-and-forget lifecycle、Node `DEP0190` warning、PI `packages/ai` 六個 baseline errors；這些不改變本架構契約。
+
 而且和之前 v3 最大的差別可以濃縮成四句話：
 
 > **v3：Workflow 自動調用 Skill。**
@@ -1769,7 +1795,7 @@ PI 官方目前也維持這種「core minimal、透過 extension/skills/package 
 
 > **v4：Two-Stage Knowledge First — Light Discovery → Grill → Deep Knowledge。**
 
-最重要的是，這個 v4 **非常適合從乾淨的 PI 0.83.0 開始做**：不要把 Forge 做成一堆 Prompt，也不要修改 PI core，而是把 PI 當底層 Agent Runtime，再在其上建立一個 **Forge Workflow Runtime Extension/Package**。PI 本身提供 Extension、Skill、Package、SDK 等擴充點；目前官方 coding-agent package 也就是透過這些機制來保持核心精簡。([GitHub][1])
+最重要的是，這個 v4 **非常適合從乾淨的 PI 0.83.0 開始做**：不要把 Forge 做成一堆 Prompt；預設不要修改 PI core，而是把 PI 當底層 Agent Runtime，再在其上建立一個 **Forge Workflow Runtime Extension/Package**。唯一例外是使用者核准且由 ADR-0012／Plan A 限定的 display-only 最小 core 變更，其他 core 變更仍禁止。PI 本身提供 Extension、Skill、Package、SDK 等擴充點；目前官方 coding-agent package 也就是透過這些機制來保持核心精簡。([GitHub][1])
 
 另外，PI 的官方文件目前可查到的 `coding-agent` 主線 package 版本顯示為 **0.82.1**，所以如果你手上的基線確定是 **0.83.0**，我會把「0.83.0」視為你的實際開發基線，而不是假設 GitHub 主線目前已經對應 0.83.0。([GitHub][4])
 

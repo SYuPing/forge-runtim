@@ -34,6 +34,244 @@ async function waitForViewport(terminal: VirtualTerminal, text: string): Promise
 	assert.fail(`TUI viewport did not contain ${JSON.stringify(text)}`);
 }
 
+test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", async () => {
+	const tempDir = join(tmpdir(), `pi-grill-boundary-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(tempDir, { recursive: true });
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	let boundaryTimer: ReturnType<typeof setTimeout> | undefined;
+	let unsubscribeBoundary: () => void = () => {};
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const extensionFactory: ExtensionFactory = installForgeRuntimeExtension;
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id,
+								name: model.name,
+								api: model.api,
+								reasoning: model.reasoning,
+								input: model.input,
+								cost: model.cost,
+								contextWindow: model.contextWindow,
+								maxTokens: model.maxTokens,
+							}))
+						});
+						extensionFactory(pi);
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: runtimeOptions.model })),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+		});
+		await runtime.session.bindExtensions({});
+		const sentinelResponse = fauxAssistantMessage("舊回合 sentinel 不應被消耗");
+		let boundaryResult: "idle" | "second-call" | "deadline" | undefined;
+		let resolveBoundary!: (result: "idle" | "second-call" | "deadline") => void;
+		const boundary = new Promise<"idle" | "second-call" | "deadline">((resolve) => {
+			resolveBoundary = (result) => {
+				if (boundaryResult) return;
+				boundaryResult = result;
+				if (boundaryTimer) {
+					clearTimeout(boundaryTimer);
+					boundaryTimer = undefined;
+				}
+				unsubscribeBoundary();
+				unsubscribeBoundary = () => {};
+				resolve(result);
+			};
+		});
+		const boundaryDeadline = new Promise<"deadline">((resolve) => {
+			boundaryTimer = setTimeout(() => {
+				resolveBoundary("deadline");
+				resolve("deadline");
+			}, 2000);
+		});
+		unsubscribeBoundary = runtime.session.subscribe((event) => {
+			if (event.type === "agent_settled") resolveBoundary("idle");
+		});
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+				evidence: [],
+				questions: [{ id: "q-proceed", question: "是否進入 deep knowledge？", options: ["是", "否"] }],
+				recommendation: { reason: "需要使用者確認。", value: "是" },
+				requiresUserConfirmation: true,
+				roundId: "grill-1",
+				status: "NEEDS_CONFIRMATION",
+			}, { id: "call-complete-1" })]),
+			() => {
+				resolveBoundary("second-call");
+				return sentinelResponse;
+			},
+		]);
+		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		void mode.run();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		terminal.sendInput("請幫我測試 Forge");
+		terminal.sendInput("\r");
+		await waitForViewport(terminal, "是否進入 deep knowledge？");
+		const boundaryOutcome = await Promise.race([boundary, boundaryDeadline]);
+		assert.equal(
+			boundaryOutcome,
+			"idle",
+			"WAIT_USER 顯示後舊回合未先終止：agent turn 未在使用者回答前 settle。",
+		);
+		const callCountAtWaitUser = faux.state.callCount;
+		const assistantMessagesAtWaitUser = runtime.session.messages.filter((message) => message.role === "assistant").length;
+		assert.equal(callCountAtWaitUser, 1);
+		assert.equal(faux.getPendingResponseCount(), 1);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.equal(faux.state.callCount, callCountAtWaitUser);
+		assert.equal(runtime.session.messages.filter((message) => message.role === "assistant").length, assistantMessagesAtWaitUser);
+
+			terminal.sendInput("是");
+			terminal.sendInput("\r");
+			for (let attempt = 0; attempt < 100; attempt += 1) {
+				const userMessages = runtime.session.messages.filter((message) => message.role === "user");
+				if (userMessages.length === 2 && JSON.stringify(userMessages[1]).includes("grill-2")) break;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			assert.equal(runtime.session.messages.filter((message) => message.role === "user").length, 2);
+		assert.match(JSON.stringify(runtime.session.messages), /grill-2/);
+	} finally {
+		if (boundaryTimer) {
+			clearTimeout(boundaryTimer);
+			boundaryTimer = undefined;
+		}
+		unsubscribeBoundary();
+		mode?.stop();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("SuccessfulReadyForDeepCompletion_ReturnsTerminatingResultWithoutConfirmationUi", async () => {
+	const tempDir = join(tmpdir(), `pi-grill-ready-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(tempDir, { recursive: true });
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(join(tempDir, "code_base", "test.ts"), "// test candidate\nexport const test = true;\n");
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	let unsubscribeCompletion: () => void = () => {};
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const extensionFactory: ExtensionFactory = installForgeRuntimeExtension;
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id, name: model.name, api: model.api, reasoning: model.reasoning,
+								input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
+							})),
+						});
+						extensionFactory(pi);
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: runtimeOptions.model })),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+		});
+		await runtime.session.bindExtensions({});
+		const lightDiscovery = await runLightDiscovery(tempDir, ["test"]);
+		const candidateId = lightDiscovery.snapshot.manifest.find((entry) => entry.kind === "code_base")?.candidateId;
+		assert.ok(candidateId, "expected a code_base evidence candidate");
+		let resolveCompletion!: (result: unknown) => void;
+		const completion = new Promise<unknown>((resolve) => {
+			resolveCompletion = resolve;
+		});
+		unsubscribeCompletion = runtime.session.subscribe((event) => {
+			if (event.type === "tool_execution_end" && event.toolName === "forge_grill_complete") {
+				resolveCompletion(event.result);
+			}
+		});
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("forge_grill_evidence", { candidateId }, { id: "call-evidence-ready-regression" })]),
+			() => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+					evidence: [candidateId],
+					questions: [],
+					recommendation: { reason: "候選相關性足夠。", value: "進入 deep knowledge" },
+					requiresUserConfirmation: false,
+					roundId: "grill-1",
+					status: "READY_FOR_DEEP",
+				}, { id: "call-complete-ready-regression" })]),
+			() => fauxAssistantMessage("已完成 deep knowledge。"),
+		]);
+		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		void mode.run();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		terminal.sendInput("請幫我測試 test");
+		terminal.sendInput("\r");
+		const completionResult = await completion as { terminate?: unknown; details?: { status?: unknown } };
+		await runtime.session.waitForIdle();
+		assert.equal(completionResult.terminate, true);
+		assert.equal(completionResult.details?.status, "READY_FOR_DEEP");
+		const messages = runtime.session.messages.map((message) => JSON.stringify(message));
+		assert.equal(messages.some((message) => message.includes("是否進入 deep knowledge？")), false);
+		assert.equal(messages.some((message) => message.includes('"deliverAs":"displayOnly"') && message.includes("WAIT_USER")), false);
+	} finally {
+		unsubscribeCompletion();
+		mode?.stop();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
 test("PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnswer", async () => {
 	const tempDir = join(tmpdir(), `pi-grill-tui-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
@@ -118,8 +356,13 @@ test("PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnsw
 		await waitForViewport(terminal, "是否進入 deep knowledge？");
 		terminal.sendInput("是");
 		terminal.sendInput("\r");
-		await waitForViewport(terminal, "grill-2");
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			const userMessages = runtime.session.messages.filter((message) => message.role === "user");
+			if (userMessages.length >= 2 && JSON.stringify(userMessages[1]).includes("grill-2")) break;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
 		assert.equal(runtime.session.messages.some((message) => JSON.stringify(message).includes("grill-2")), true);
+		await runtime.session.waitForIdle();
 	} finally {
 		mode?.stop();
 		await runtime?.dispose();
@@ -510,10 +753,14 @@ test("PiProvider_WhenWaitUserAnswerStartsNextRound_ShouldReceiveStructuredInvoca
 		terminal.sendInput(request); terminal.sendInput("\r");
 		await waitForViewport(terminal, "是否進入 deep knowledge？");
 		terminal.sendInput("\r");
-		await Promise.race([
-			runtime.session.waitForIdle(),
-			new Promise((_, reject) => setTimeout(() => reject(new Error("session did not become idle within 5 seconds")), 5000)),
-		]);
+		let nextRoundRequestCaptured = false;
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			nextRoundRequestCaptured = contexts.some((context) => JSON.stringify(context).includes("grill-2"));
+			if (nextRoundRequestCaptured) break;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.ok(nextRoundRequestCaptured, "next-round provider request was not captured");
+		await runtime.session.waitForIdle();
 		assert.ok(contexts.length >= 3, "provider requests were not captured");
 		const userTexts = contexts.flatMap((context) =>
 			(context as { messages: Array<{ role: string; content: unknown }> }).messages

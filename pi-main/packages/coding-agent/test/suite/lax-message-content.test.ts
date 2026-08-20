@@ -11,6 +11,7 @@ import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-cor
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { convertToLlm } from "../../src/core/messages.ts";
 import { type SessionEntry, sessionEntryToContextMessages } from "../../src/core/session-manager.ts";
 import type { ExtensionFactory } from "../../src/index.ts";
 import { createHarness } from "./harness.ts";
@@ -97,6 +98,23 @@ describe("lax message content handling", () => {
 			const customMessages = harness.session.messages.filter((message) => message.role === "custom");
 			expect(customMessages).toHaveLength(1);
 			expect(customMessages[0].content).toEqual([]);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it("keeps display-only custom messages visible without sending them to the provider", async () => {
+		const marker = "WAIT_USER_DISPLAY_ONLY_TEST";
+		const harness = await createHarness();
+
+		try {
+			await harness.session.sendCustomMessage(
+				{ customType: "test", content: marker, display: false, details: undefined },
+				{ deliverAs: "displayOnly" },
+			);
+
+			expect(harness.session.messages).toContainEqual(expect.objectContaining({ role: "custom", content: marker }));
+			expect(JSON.stringify(convertToLlm(harness.session.messages))).not.toContain(marker);
 		} finally {
 			harness.cleanup();
 		}

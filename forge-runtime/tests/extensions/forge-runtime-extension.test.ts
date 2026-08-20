@@ -22,6 +22,7 @@ type RegisteredTool = {
 	) => Promise<{
 		content: Array<{ type: string; text: string }>;
 		details: Record<string, unknown>;
+		terminate?: boolean;
 	}>;
 };
 type SentUserMessage = {
@@ -167,7 +168,6 @@ test("Extension_WhenRelevanceGateFails_ShouldDisplayScopeQuestionAndEnterWaitUse
 		undefined,
 		harness.buildContext(),
 	);
-
 	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
 	assert.doesNotMatch(harness.observedMessages.join("\n"), /DEEP_KNOWLEDGE_RETRIEVAL/);
 	assert.deepEqual(
@@ -320,7 +320,7 @@ test("Extension_WhenEvidenceCandidateIsUnknown_ShouldReject", async (t) => {
 	);
 });
 
-test("Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWaitUser", async (t) => {
+test("Extension_WhenCompletionNeedsConfirmation_ShouldTerminateToolTurnAndEnterWaitUser", async (t) => {
 	const rootDir = createTempRoot();
 	writeWorkspaceFile(
 		rootDir,
@@ -342,7 +342,7 @@ test("Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWai
 
 	const completionTool = harness.registeredTools.get("forge_grill_complete");
 	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
-	await completionTool.execute(
+	const completionResult = await completionTool.execute(
 		"call-completion",
 		{
 			roundId: "grill-1",
@@ -356,24 +356,14 @@ test("Extension_WhenCompletionNeedsConfirmation_ShouldDisplayQuestionAndEnterWai
 		undefined,
 		harness.buildContext(),
 	);
+	assert.equal(completionResult.terminate, true);
+	const waitUserPanel = harness.observedMessagePayloads.at(-1);
+	assert.equal(waitUserPanel?.options?.deliverAs, "displayOnly");
 
 	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
 	assert.match(harness.observedMessages.join("\n"), /WAIT_USER/);
 	assert.deepEqual(harness.getActiveTools(), ["forge_grill_evidence", "forge_grill_complete"]);
 
-	assert.ok(harness.messageUpdateHandler, "Expected message_update handler to be registered for Grill suppression");
-	const updateEvent = {
-		message: {
-			role: "assistant",
-			content: [
-				{ type: "text", text: "completion prose must not leak" },
-				{ type: "thinking", thinking: "completion thinking must not leak" },
-			],
-		},
-	};
-	await harness.messageUpdateHandler(updateEvent);
-	assert.equal(updateEvent.message.content[0]?.text, "");
-	assert.equal(updateEvent.message.content[1]?.thinking, "");
 });
 
 test("Extension_WhenPanelIsEmitted_ShouldUseVisibleContentContract", async () => {
@@ -594,7 +584,7 @@ test("Extension_WhenContinueDuringActiveGrill_ShouldReplaySameRoundWithoutDecisi
 	assert.deepEqual((replay?.content ?? "").match(/\bev-[0-9a-f]{64}\b/g), [candidateId]);
 });
 
-test("Extension_WhenCompletionSuccessIsFollowedByTerminalProse_ShouldSuppressOnlyThatTurn", async (t) => {
+test("Extension_WhenCompletionSucceeds_ShouldTerminateAtToolBoundary", async (t) => {
 	const rootDir = createTempRoot();
 	writeWorkspaceFile(
 		rootDir,
@@ -616,7 +606,7 @@ test("Extension_WhenCompletionSuccessIsFollowedByTerminalProse_ShouldSuppressOnl
 
 	const completionTool = harness.registeredTools.get("forge_grill_complete");
 	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
-	await completionTool.execute(
+	const completionResult = await completionTool.execute(
 		"call-completion-turn",
 		{
 			roundId: "grill-1",
@@ -631,39 +621,11 @@ test("Extension_WhenCompletionSuccessIsFollowedByTerminalProse_ShouldSuppressOnl
 		harness.buildContext(),
 	);
 
-	assert.ok(harness.messageEndHandler, "Expected message_end handler to suppress completed Grill prose");
-	const terminalProse = "same completed Grill turn prose must not leak";
-	const terminalResult = await harness.messageEndHandler(
-		{
-			message: {
-				role: "assistant",
-				content: [{ type: "text", text: terminalProse }],
-			},
-		},
-		harness.buildContext(),
-	);
-
-	assert.doesNotMatch(harness.observedMessages.join("\n"), /GRILL_RESULT_PARSE_ERROR|GRILL_COMPLETION_REQUIRED/);
-	assert.ok(terminalResult && typeof terminalResult === "object" && "message" in terminalResult, "Expected terminal prose to be replaced");
-	assert.doesNotMatch(JSON.stringify(terminalResult), new RegExp(escapeRegExp(terminalProse)));
+	assert.equal(completionResult.terminate, true);
 	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
-
-	assert.ok(harness.messageUpdateHandler, "Expected message_update handler to be registered for Grill suppression");
-	const nextTurnUpdate = {
-		message: {
-			role: "assistant",
-			content: [
-				{ type: "text", text: "new turn prose remains visible" },
-				{ type: "thinking", thinking: "new turn thinking remains visible" },
-			],
-		},
-	};
-	await harness.messageUpdateHandler(nextTurnUpdate);
-	assert.equal(nextTurnUpdate.message.content[0]?.text, "new turn prose remains visible");
-	assert.equal(nextTurnUpdate.message.content[1]?.thinking, "new turn thinking remains visible");
 });
 
-test("Extension_WhenReadyCompletionExitsGrill_ShouldRestorePriorActiveToolsAndEnterDeepKnowledge", async (t) => {
+test("Extension_WhenReadyCompletionExitsGrill_ShouldTerminateToolTurnAndEnterDeepKnowledge", async (t) => {
 	const rootDir = createTempRoot();
 	writeWorkspaceFile(
 		rootDir,
@@ -685,7 +647,7 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldRestorePriorActiveToolsAndEn
 
 	const completionTool = harness.registeredTools.get("forge_grill_complete");
 	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
-	await completionTool.execute(
+	const completionResult = await completionTool.execute(
 		"call-ready-completion",
 		{
 			roundId: "grill-1",
@@ -699,6 +661,7 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldRestorePriorActiveToolsAndEn
 		undefined,
 		harness.buildContext(),
 	);
+	assert.equal(completionResult.terminate, true);
 
 	assert.match(harness.observedStatuses.at(-1) ?? "", /KNOWLEDGE_UNDERSTANDING/);
 	assert.match(harness.observedMessages.join("\n"), /KNOWLEDGE_UNDERSTANDING/);
@@ -715,8 +678,8 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldRestorePriorActiveToolsAndEn
 		},
 	};
 	await harness.messageUpdateHandler(updateEvent);
-	assert.equal(updateEvent.message.content[0]?.text, "");
-	assert.equal(updateEvent.message.content[1]?.thinking, "");
+	assert.equal(updateEvent.message.content[0]?.text, "ready completion prose must not leak");
+	assert.equal(updateEvent.message.content[1]?.thinking, "ready completion thinking must not leak");
 });
 
 test("Extension_WhenCompletionOmissionOccurs_ShouldShowRetryCancelSwitchAndSettle", async (t) => {
@@ -828,7 +791,12 @@ async function createExtensionHarness(options: {
 	const registeredTools = new Map<string, RegisteredTool>();
 	let activeTools = [...(options.initialActiveTools ?? [])];
 	const observedMessages: string[] = [];
-	const observedMessagePayloads: Array<{ content?: unknown; display?: unknown; customType?: unknown }> = [];
+	const observedMessagePayloads: Array<{
+		content?: unknown;
+		display?: unknown;
+		customType?: unknown;
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" | "displayOnly" };
+	}> = [];
 	const observedStatuses: string[] = [];
 	const observedNotifications: string[] = [];
 	const observedUserMessages: string[] = [];
@@ -854,8 +822,11 @@ async function createExtensionHarness(options: {
 		setActiveTools(toolNames: string[]) {
 			activeTools = [...toolNames];
 		},
-		sendMessage(message: { content?: unknown; display?: unknown; customType?: unknown }) {
-			observedMessagePayloads.push(message);
+		sendMessage(
+			message: { content?: unknown; display?: unknown; customType?: unknown },
+			options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" | "displayOnly" },
+		) {
+			observedMessagePayloads.push({ ...message, options });
 			observedMessages.push(`${String(message.display ?? "")}\n${String(message.content ?? "")}\n${String(message.customType ?? "")}`);
 		},
 		async sendUserMessage(
@@ -1188,6 +1159,26 @@ function formalWaitUserCommand(manifestCandidate: string): string {
 	})}`;
 }
 
+function assertWaitUserFollowUp(
+	call: SentUserMessage | undefined,
+	manifestCandidate: string,
+	decisionId: string,
+	answer: string,
+): void {
+	assert.ok(call, "Expected exactly one outbound followUp invocation");
+	assert.equal(call.options?.deliverAs, "followUp");
+	assertFollowUpInvocation(call.content, manifestCandidate, decisionId, answer);
+}
+
+function assertFollowUpInvocation(content: string, manifestCandidate: string, decisionId: string, answer: string): void {
+	assert.match(content, /roundId\s*[:：]\s*grill-\d+/);
+	assert.match(content, new RegExp(`\\b${manifestCandidate}\\b`));
+	assert.match(
+		content,
+		new RegExp(escapeRegExp(`User answered decision "${decisionId}" with ${JSON.stringify(answer)}.`)),
+	);
+}
+
 test("Extension_WhenOpenWorkflowGetsNewTopic_ShouldShowContinueCancelSwitchControls", async (t) => {
 	const rootDir = createTempRoot();
 	t.after(() => {
@@ -1212,8 +1203,9 @@ test("Extension_WhenCancelCommandUsedInOpenWorkflow_ShouldResetToReceive", async
 	});
 
 	const { command, observedStatuses, sendInput, ui } = await createExtensionHarness({ cwd: rootDir });
+	const manifestCandidate = await startFormalGrillRound(rootDir, sendInput);
 
-	await openWorkflow(command);
+	await command.handler(formalWaitUserCommand(manifestCandidate), {});
 	await command.handler("cancel", { ui } as never);
 
 	assert.equal(observedStatuses.at(-1), "Forge RECEIVE [active]");
@@ -1368,11 +1360,16 @@ test("Extension_WhenUserConfirmed_ShouldResumeDeepKnowledge", async (t) => {
 
 	await harness.runCommand("confirm");
 
-	assert.deepEqual(harness.observedUserMessageCalls, [{ content: "confirm", options: { deliverAs: "followUp" } }]);
+	assert.equal(harness.observedUserMessageCalls.length, 1);
+	assertWaitUserFollowUp(harness.observedUserMessageCalls[0], manifestCandidate, "confirm", "confirm");
 	assert.equal(harness.reenteredFollowUpEvents.length, 1, "預期 confirm 會重新進入共用 input 路徑");
-	assert.deepEqual(harness.reenteredFollowUpEvents[0]?.event, { text: "confirm" });
-	assert.equal((harness.reenteredFollowUpEvents[0]?.result as { action?: string }).action, "transform");
-	const nextInvocation = (harness.reenteredFollowUpEvents[0]?.result as { text?: string }).text ?? "";
+	assertFollowUpInvocation(harness.reenteredFollowUpEvents[0]?.event.text ?? "", manifestCandidate, "confirm", "confirm");
+	assert.equal(
+		(harness.reenteredFollowUpEvents[0]?.result as { action?: string }).action,
+		"continue",
+		"followUp replay bypass 應略過共用 input transform",
+	);
+	const nextInvocation = harness.observedUserMessageCalls[0]?.content ?? "";
 	assert.match(nextInvocation, /grill-2/);
 	assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
 	assert.match(nextInvocation, /User answered decision "confirm" with "confirm"\./);
@@ -1401,11 +1398,16 @@ test("Extension_WhenUiSelectAvailable_ShouldUseSelectorToResumeWaitUser", async 
 	assert.equal(selectCalls.length, 1, "Expected ctx.ui.select to be called once");
 	assert.match(selectCalls[0]?.title ?? "", /Proceed to deep knowledge retrieval\?/);
 	assert.deepEqual(selectCalls[0]?.options ?? [], ["confirm", "reject", "自行輸入…"]);
-	assert.deepEqual(harness.observedUserMessageCalls, [{ content: "confirm", options: { deliverAs: "followUp" } }]);
+	assert.equal(harness.observedUserMessageCalls.length, 1);
+	assertWaitUserFollowUp(harness.observedUserMessageCalls[0], manifestCandidate, "confirm", "confirm");
 	assert.equal(harness.reenteredFollowUpEvents.length, 1, "預期 selector 會剛好一次重新進入共用 input 路徑");
-	assert.deepEqual(harness.reenteredFollowUpEvents[0]?.event, { text: "confirm" });
-	assert.equal((harness.reenteredFollowUpEvents[0]?.result as { action?: string }).action, "transform");
-	const nextInvocation = (harness.reenteredFollowUpEvents[0]?.result as { text?: string }).text ?? "";
+	assertFollowUpInvocation(harness.reenteredFollowUpEvents[0]?.event.text ?? "", manifestCandidate, "confirm", "confirm");
+	assert.equal(
+		(harness.reenteredFollowUpEvents[0]?.result as { action?: string }).action,
+		"continue",
+		"selector followUp replay bypass 應略過共用 input transform",
+	);
+	const nextInvocation = harness.observedUserMessageCalls[0]?.content ?? "";
 	assert.match(nextInvocation, /grill-2/);
 	assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
 	assert.doesNotMatch(nextInvocation, /DEEP_KNOWLEDGE_RETRIEVAL|KNOWLEDGE_UNDERSTANDING/);
@@ -2156,9 +2158,18 @@ test("Extension_WhenIdleAndChitChat_ShouldContinue", async () => {
 	assert.deepEqual(result, { action: "continue" });
 });
 
-test("Extension_WhenWaitUserUiThrows_ShouldPreservePendingDecisionAndAllowRetry", async () => {
-	const harness = await createExtensionHarness();
-	const decisionPayload = JSON.stringify({ ...JSON.parse(waitUserPayload), decisionId: "decision-ui-throw" });
+test("Extension_WhenWaitUserUiThrows_ShouldPreservePendingDecisionAndAllowRetry", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+	const harness = await createExtensionHarness({ cwd: rootDir });
+	const manifestCandidate = await startFormalGrillRound(rootDir, harness.sendInput);
+	const decisionPayload = JSON.stringify({
+		...JSON.parse(waitUserPayload),
+		decisionId: "decision-ui-throw",
+		evidenceIds: [manifestCandidate],
+	});
 	const sentinel = new Error("WAIT_USER_UI_SENTINEL");
 	let customAttempts = 0;
 	const context = {
@@ -2176,13 +2187,14 @@ test("Extension_WhenWaitUserUiThrows_ShouldPreservePendingDecisionAndAllowRetry"
 
 	await assert.rejects(harness.runCommand(`grill ambiguous ${decisionPayload}`, context), (error) => error === sentinel);
 	const waitUserStatus = harness.observedStatuses.at(-1);
-	assert.ok(waitUserStatus?.includes("WAIT_USER"));
+	assert.equal(waitUserStatus, "Forge WAIT_USER [waiting-user]");
 
 	await harness.runCommand(`grill ambiguous ${decisionPayload}`, context);
 
 	assert.equal(customAttempts, 2);
-	assert.deepEqual(harness.observedUserMessages, ["retry answer"]);
-	assert.equal(harness.observedStatuses.at(-1), waitUserStatus);
+	assert.equal(harness.observedUserMessageCalls.length, 1);
+	assertWaitUserFollowUp(harness.observedUserMessageCalls[0], manifestCandidate, "decision-ui-throw", "retry answer");
+	assert.equal(harness.observedStatuses.at(-1), "Forge GRILL [active]");
 });
 
 test("Extension_WhenCustomWaitUserFactoryRuns_ShouldRenderAndSubmitTrimmedAnswer", async (t) => {
@@ -2221,7 +2233,7 @@ test("Extension_WhenCustomWaitUserFactoryRuns_ShouldRenderAndSubmitTrimmedAnswer
 		},
 	});
 
-	assert.equal(harness.observedUserMessageCalls.at(-1)?.content, "自訂回答");
+	assertWaitUserFollowUp(harness.observedUserMessageCalls.at(-1), manifestCandidate, "confirm", "自訂回答");
 	assert.equal(customCalls, 1);
 });
 
@@ -2275,7 +2287,7 @@ test("Extension_WhenCustomWaitUserFactoryReceivesBlankThenEscape_ShouldReturnToS
 	assert.equal(selectCalls, 2);
 	assert.equal(customCalls, 1);
 	assert.equal(harness.observedUserMessageCalls.length, 1);
-	assert.equal(harness.observedUserMessageCalls[0]?.content, "confirm");
+	assertWaitUserFollowUp(harness.observedUserMessageCalls[0], manifestCandidate, "confirm", "confirm");
 });
 
 test("Extension_WhenWaitUserOptionCannotResume_ShouldKeepWaitUserAndCloseSelector", async (t) => {
@@ -2599,9 +2611,8 @@ test("Extension_WhenWaitUserAnswerComesFromSelectorOrCommand_ShouldFollowUpThrou
 			await harness.runCommand(row.command);
 		}
 
-		assert.deepEqual(harness.observedUserMessageCalls, [
-			{ content: row.answer, options: { deliverAs: "followUp" } },
-		]);
+		assert.equal(harness.observedUserMessageCalls.length, 1);
+		assertWaitUserFollowUp(harness.observedUserMessageCalls[0], manifestCandidate, "unknown", row.answer);
 
 		const reenteredFollowUpEvents = (
 			harness as typeof harness & {
@@ -2612,10 +2623,14 @@ test("Extension_WhenWaitUserAnswerComesFromSelectorOrCommand_ShouldFollowUpThrou
 			}
 		).reenteredFollowUpEvents;
 		assert.equal(reenteredFollowUpEvents?.length, 1, "Expected exactly one followUp to re-enter the shared input path");
-		assert.deepEqual(reenteredFollowUpEvents?.[0]?.event, { text: row.answer });
-		assert.equal(reenteredFollowUpEvents?.[0]?.result.action, "transform");
+		assertFollowUpInvocation(reenteredFollowUpEvents?.[0]?.event.text ?? "", manifestCandidate, "unknown", row.answer);
+		assert.equal(
+			reenteredFollowUpEvents?.[0]?.result.action,
+			"continue",
+			"followUp replay bypass 應略過共用 input transform",
+		);
 
-		const nextInvocation = reenteredFollowUpEvents?.[0]?.result.text ?? "";
+		const nextInvocation = harness.observedUserMessageCalls[0]?.content ?? "";
 		assert.match(nextInvocation, /grill-2/);
 		assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
 		assert.match(nextInvocation, /forge_grill_evidence 只接受 manifest 中的 candidateId/);

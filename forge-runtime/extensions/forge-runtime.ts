@@ -132,7 +132,10 @@ interface ForgeExtensionApi {
 	}): void;
 	getActiveTools?(): string[];
 	setActiveTools?(toolNames: string[]): void;
-	sendMessage?(message: ExtensionMessage): Promise<void> | void;
+	sendMessage?(
+		message: ExtensionMessage,
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" | "displayOnly" },
+	): Promise<void> | void;
 	sendUserMessage?(content: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> | void;
 }
 
@@ -151,7 +154,6 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let pendingKnowledgeRequest: { missingAssets: string[]; request: string; rootDir: string } | undefined;
 	let activeWorkflow: ActiveWorkflowContext | undefined;
 	let savedActiveTools: string[] | undefined;
-	let suppressCompletionTurn = false;
 	let pendingReplayInvocation: string | undefined;
 	let pendingWaitUserDecisionId: string | undefined;
 	let activeWaitUserUiLeaseDecisionId: string | undefined;
@@ -181,9 +183,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		pendingReplayInvocation = undefined;
 			pendingWaitUserDecisionId = undefined;
 		activeWaitUserUiLeaseDecisionId = undefined;
-			suppressCompletionTurn = false;
 		};
-		const publishWaitUser = async (payload: WaitUserPayload, ctx: CommandContext): Promise<void> => {
+		const publishWaitUser = async (
+			payload: WaitUserPayload,
+			ctx: CommandContext,
+			options?: { deliverAs?: "displayOnly" },
+		): Promise<void> => {
 			const decisionId = payload.decisionId;
 			const hasDecisionId = typeof decisionId === "string" && decisionId.length > 0;
 			const currentState = sessionState.current();
@@ -201,7 +206,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				}
 				activeWaitUserUiLeaseDecisionId = decisionId;
 				try {
-					await handleWaitUserState(pi, ctx, currentState);
+					await handleWaitUserState(pi, ctx, currentState, options, resumeWaitUserAnswer);
 				} finally {
 					if (activeWaitUserUiLeaseDecisionId === decisionId) {
 						activeWaitUserUiLeaseDecisionId = undefined;
@@ -214,7 +219,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				activeWaitUserUiLeaseDecisionId = decisionId;
 			}
 			try {
-				await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(payload));
+				await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(payload), options, resumeWaitUserAnswer);
 			} finally {
 				if (hasDecisionId && activeWaitUserUiLeaseDecisionId === decisionId) {
 					activeWaitUserUiLeaseDecisionId = undefined;
@@ -242,6 +247,17 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			nextRound.snapshot.manifest,
 		);
 	};
+		const resumeWaitUserAnswer = async (answer: string, ctx: CommandContext): Promise<boolean> => {
+			if (!pi.sendUserMessage) {
+				return false;
+			}
+			const invocation = await resumeGrillWithAnswer(answer, ctx);
+			if (invocation) {
+				pendingReplayInvocation = invocation;
+				await pi.sendUserMessage(invocation, { deliverAs: "followUp" });
+			}
+			return true;
+		};
 
 	pi.registerTool?.({
 		name: "forge_grill_evidence",
@@ -293,7 +309,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						...toWaitUserPayload(completion),
 						decisionId: completion.questions[0]?.id,
 					};
-					await publishWaitUser(waitUser, ctx as CommandContext);
+					void publishWaitUser(waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
+						(ctx as CommandContext).ui?.notify?.(
+							`Forge WAIT_USER UI 失敗：${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					});
 				} else {
 					await continueDeepKnowledge(
 						pi,
@@ -309,10 +330,10 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					}
 				}
 				pendingGrillRun = sessionState.current().stage === "GRILL";
-				suppressCompletionTurn = true;
 			return {
 				content: [{ type: "text", text: "Forge Grill completion accepted." }],
 				details: { roundId: completion.roundId, status: completion.status },
+				terminate: true,
 			};
 		},
 	});
@@ -320,15 +341,6 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx?: CommandContext) => {
 			if (event.message?.role !== "assistant") {
 			return;
-		}
-		if (suppressCompletionTurn) {
-			suppressCompletionTurn = false;
-			return {
-				message: {
-					...event.message,
-					content: [{ type: "text", text: "" }],
-				},
-			};
 		}
 		if (!pendingGrillRun) {
 			return;
@@ -357,8 +369,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		};
 	});
 
-	pi.on?.("message_update", async (event: AssistantMessageEvent) => {
-		if ((!pendingGrillRun && !suppressCompletionTurn) || event.message?.role !== "assistant") {
+		pi.on?.("message_update", async (event: AssistantMessageEvent) => {
+		if (!pendingGrillRun || event.message?.role !== "assistant") {
 			return;
 		}
 
@@ -455,13 +467,16 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			userMessage: text,
 		});
 
-		if (intent.route === "resume_wait_user") {
-			if (!requireGrillToolBoundary(ctx ?? {})) {
-				return { action: "handled" as const };
+			if (intent.route === "resume_wait_user") {
+					if (!requireGrillToolBoundary(ctx ?? {})) {
+						return { action: "handled" as const };
+					}
+					const invocation = await resumeGrillWithAnswer(intent.resumeSelection ?? text, ctx ?? {});
+					if (!invocation) {
+						return { action: "handled" as const };
+					}
+					return { action: "transform" as const, text: invocation };
 			}
-			const invocation = await resumeGrillWithAnswer(intent.resumeSelection ?? text, ctx ?? {});
-			return invocation ? { action: "transform" as const, text: invocation } : { action: "handled" as const };
-		}
 
 		if (intent.route === "resume_open_workflow") {
 			// ponytail: v1 先硬擋雙開；真的需要換題/排隊，再補 explicit switch 或 queue。
@@ -649,7 +664,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (command === "confirm") {
 				const state = sessionState.current();
 				if (state.stage === "WAIT_USER" && state.waitUser) {
-					if (await resumeWaitUserByFollowUp(pi, state.waitUser.recommendation)) {
+					if (await resumeWaitUserAnswer(state.waitUser.recommendation, ctx)) {
 						return;
 					}
 					await publishState(pi, ctx, state);
@@ -662,7 +677,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (command === "reject") {
 				const state = sessionState.current();
 				if (state.stage === "WAIT_USER" && state.waitUser) {
-					if (await resumeWaitUserByFollowUp(pi, "reject")) {
+					if (await resumeWaitUserAnswer("reject", ctx)) {
 						return;
 					}
 					await publishState(pi, ctx, state);
@@ -676,7 +691,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				const answer = command.slice("reject ".length).trim();
 				const state = sessionState.current();
 				if (state.stage === "WAIT_USER" && state.waitUser) {
-					if (await resumeWaitUserByFollowUp(pi, answer)) {
+					if (await resumeWaitUserAnswer(answer, ctx)) {
 						return;
 					}
 					await publishState(pi, ctx, state);
@@ -707,9 +722,11 @@ async function handleWaitUserState(
 	pi: ForgeExtensionApi,
 	ctx: CommandContext,
 	state: ForgeUiState,
+	options?: { deliverAs?: "displayOnly" },
+	resumeAnswer?: (answer: string, ctx: CommandContext) => Promise<boolean>,
 ): Promise<void> {
 	const RUNTIME_OWNED_INPUT_LABEL = "自行輸入…";
-	await publishState(pi, ctx, state);
+	await publishState(pi, ctx, state, options);
 
 	if (!ctx.ui?.select || !state.waitUser) {
 		return;
@@ -761,20 +778,12 @@ async function handleWaitUserState(
 			if (trimmed.length === 0) {
 				continue;
 			}
-			await resumeWaitUserByFollowUp(pi, trimmed);
+				await resumeAnswer?.(trimmed, ctx);
 			return;
 		}
-		await resumeWaitUserByFollowUp(pi, selection);
+			await resumeAnswer?.(selection, ctx);
 		return;
 	}
-}
-
-async function resumeWaitUserByFollowUp(pi: ForgeExtensionApi, answer: string): Promise<boolean> {
-	if (!pi.sendUserMessage) {
-		return false;
-	}
-	await pi.sendUserMessage(answer, { deliverAs: "followUp" });
-	return true;
 }
 
 async function confirmAndContinueDeepKnowledge(
@@ -928,7 +937,12 @@ function parseWaitUserPayload(raw: string): WaitUserPayload {
 	};
 }
 
-async function publishState(pi: ForgeExtensionApi, ctx: CommandContext, state: ForgeUiState): Promise<void> {
+async function publishState(
+	pi: ForgeExtensionApi,
+	ctx: CommandContext,
+	state: ForgeUiState,
+	options?: { deliverAs?: "displayOnly" },
+): Promise<void> {
 	const status = buildWorkflowStatusText(state);
 	const sections = [
 		buildWaitUserPanel(state),
@@ -939,5 +953,5 @@ async function publishState(pi: ForgeExtensionApi, ctx: CommandContext, state: F
 	);
 	const panelText = [status, ...sections].join("\n\n");
 	ctx.ui?.setStatus?.(status);
-	await pi.sendMessage?.({ content: panelText, customType: "forge-stage", display: true });
+	await pi.sendMessage?.({ content: panelText, customType: "forge-stage", display: true }, options);
 }

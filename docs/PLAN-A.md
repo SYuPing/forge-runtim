@@ -872,3 +872,70 @@ npm run check
 ```
 
 驗證結果：三個實際 provider-context 案例 post-cleanup 3 pass／0 fail；post-review-fix full PI TUI 7 pass／0 fail／0 skip；canonical `npm test` 130 pass／0 fail／0 skip（首次 130/1 為 obsolete original-transcript rewrite test，刪除後重跑）；`npm run check` 兩段 tsc 均 pass、no diagnostics。final review：Standards 0 findings、Spec 0 findings；acceptance／closure complete。
+
+---
+
+## 2026-08-20 最終 Plan A：Grill 完成終止邊界與 display-only
+
+工作項目：`grill-completion-terminal-boundary-20260819`。Plan A 已實作完成；使用者已授權修改 `pi-main`。不執行 Plan B，因為本 ticket 是 core contract／行為缺口，沒有獨立視覺工作。
+
+### 建置範圍
+
+- PI coding-agent `0.83.0`、commit `321bbe69e909de9551906967629908a99167d11e`（`321bbe6`）、main：新增窄化 display-only custom message contract；public `CustomMessage`／`CustomAgentMessages.custom` 維持 HEAD，marker 僅在 internal intersection。
+- `deliverAs: "displayOnly"` 的 message 進 UI、transcript、persistence/reload，不進 provider context、不觸發 turn；marker 為 `excludeFromContext?: boolean`。
+- Forge 成功 `forge_grill_complete` 的 `NEEDS_CONFIRMATION` WAIT_USER state message 使用 display-only；成功結果仍 `terminate: true`。
+
+### 不建置
+
+- 不修改 `packages/agent/src/harness/*`、不保證跨 package 共用 JSONL、不降版、不回填舊 session。
+- 不改其他 Forge command/retry/cancel/switch/deep knowledge/state message、不改完成遺漏政策、不用 `abort()`。
+- 不做 Plan B 視覺工作、不處理 queued steer 的全結果終止強化或 Deep 後新歧義轉移。
+
+### 實作方式
+
+TDD 垂直切片已完成：core streaming RED → minimal route；persistence/convert/compaction/branch summarization RED → minimal marker/filter；Forge NEEDS_CONFIRMATION RED → displayOnly integration GREEN；READY regression 以 characterization GREEN 完成，未增加 production。
+
+### 檔案
+
+本次已修改 implementation code/test 10 檔，並同步 durable docs 7 檔；以下為實際範圍。
+
+- PI 正式程式 5：`pi-main/packages/coding-agent/src/core/extensions/types.ts`、`agent-session.ts`、`messages.ts`、`session-manager.ts`、`core/compaction/branch-summarization.ts`。
+- PI 測試 5：`pi-main/packages/coding-agent/test/suite/agent-session-queue.test.ts`、`test/suite/lax-message-content.test.ts`、`test/compaction.test.ts`、`test/session-manager/file-operations.test.ts`、`test/branch-summarization.test.ts`。
+- Forge 正式程式／測試 2：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。
+- 持久文件 7：`FORGE_RUNTIME_Arch_v4.md`、`CONTEXT.md`、`docs/adr/ADR-0011-grill-completion-terminal-boundary.md`、`docs/adr/ADR-0012-display-only-custom-message.md`、`docs/PLAN-A.md`、`docs/handoff.md`、`agent-state/grill-completion-terminal-boundary-20260819.md`。
+
+### 測試
+
+- 新增 core 5 案例：streaming route、message persistence/convert、compaction filter、branch summarization marker rehydrate、session file round-trip。
+- Forge 2 案例：`SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer`、`SuccessfulReadyForDeepCompletion_TerminatesTurnAtKnowledgeUnderstanding`。
+- Forge successful NEEDS_CONFIRMATION 與 READY regression 均已完成；測試等待觀測點以 session/provider marker 為準，不以 roundId viewport 作為唯一依據。
+
+### 執行順序
+
+1. PI core streaming、provider conversion、compaction、branch summarization、session-file round-trip 依序完成 RED→GREEN。
+2. Forge NEEDS_CONFIRMATION 完成 displayOnly integration；回答後先 resume、重用 `pendingReplayInvocation`，再送完整 followUp invocation。
+3. READY regression 完成 characterization GREEN；READY 仍自動進 Deep，不要求 idle。
+4. 完成 Forge／PI focused、full、check、lock/import 與 review 前置驗證，並同步 durable docs。
+
+### 驗證
+
+```text
+# 驗證由獨立子代理執行；完整 log 位於 agent-state/logs/
+```
+
+最終結果：Forge `npm test` 132 passed、exit 0（`forge-full-test-green-final-20260820.log`）；Forge post-review check/full 均 exit 0（`forge-check-after-review-20260820.log`、`forge-full-after-review-20260820.log`）；Forge interactive 9 passed（`forge-pi-interactive-full-green-20260820.log`）；PI focused 5 files 76 passed／2 skipped、exit 0（`pi-display-only-five-files-final-20260820.log`）；PI Biome 991 files exit 0（`pi-readonly-biome-final-final-20260820.log`）。branch summarization RED／GREEN 證據為 `branch-summary-displayonly-red-20260820.log`／`branch-summary-displayonly-green-final-20260820.log`。PI tsgo 僅剩 `packages/ai` 六個 untouched baseline errors（`pi-readonly-tsgo-final-final-20260820.log`），本次 CustomMessage／branch test 無錯；canonical `npm run check` 未跑，因含 `--write`，改跑唯讀子命令。
+
+### 脆弱假設
+
+`terminate` 可能被 queued steer 延續；display-only 的 context exclusion 必須在 streaming、persistence、convert、compaction 與 branch summarization rehydrate 五條路徑一致，否則會出現可見但誤入 provider context 的訊息。
+
+已知風險另包括 extension API `send`／`sendUserMessage` 的 fire-and-forget lifecycle、Node `DEP0190` warning；兩者均不在本次重定義範圍。最終 review 後下一步為 targeted re-review 與 final handoff。
+
+### Final closeout（2026-08-20）
+
+- targeted final review：Standards 0 findings、Spec 0 findings；P2 public union 與 hard `any` finding 均已解決。
+- branch summarization final GREEN：`agent-state/logs/branch-summary-final-final-green-20260820.log`，1 passed、0 failed、exit 0；no-`any` 後驗證已完成。
+- 最新 PI tsgo：`agent-state/logs/pi-tsgo-final-six-baseline-20260820.log`，僅剩 `packages/ai` 六個 untouched baseline errors。
+- 新測試使用具體 `Model<"openai-completions">`，無 `any`；`Model.cost`／`Usage.cost` fixture 正確。
+- modified files 清單確認包含 `pi-main/packages/coding-agent/src/core/compaction/branch-summarization.ts` 與 `pi-main/packages/coding-agent/test/branch-summarization.test.ts`。
+- Plan A completed，無待實作；下一步僅使用者決定 commit／PR，或後續處理 baseline／out-of-scope 風險。Plan B 未執行。

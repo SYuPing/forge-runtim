@@ -1439,7 +1439,7 @@ export class AgentSession {
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" | "displayOnly" },
 	): Promise<void> {
 		const appMessage = {
 			role: "custom" as const,
@@ -1448,17 +1448,18 @@ export class AgentSession {
 			content: message.content ?? [],
 			display: message.display,
 			details: message.details,
+			excludeFromContext: options?.deliverAs === "displayOnly",
 			timestamp: Date.now(),
-		} satisfies CustomMessage<T>;
+		} satisfies CustomMessage<T> & { excludeFromContext?: boolean };
 		if (options?.deliverAs === "nextTurn") {
 			this._pendingNextTurnMessages.push(appMessage);
-		} else if (this.isStreaming) {
+		} else if (this.isStreaming && options?.deliverAs !== "displayOnly") {
 			if (options?.deliverAs === "followUp") {
 				this.agent.followUp(appMessage);
 			} else {
 				this.agent.steer(appMessage);
 			}
-		} else if (options?.triggerTurn) {
+		} else if (options?.triggerTurn && options?.deliverAs !== "displayOnly") {
 			await this._runAgentPrompt(appMessage);
 		} else {
 			this.agent.state.messages.push(appMessage);
@@ -1467,6 +1468,7 @@ export class AgentSession {
 				message.content,
 				message.display,
 				message.details,
+				appMessage.excludeFromContext,
 			);
 			this._emit({ type: "message_start", message: appMessage });
 			this._emit({ type: "message_end", message: appMessage });

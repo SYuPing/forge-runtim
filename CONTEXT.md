@@ -6,7 +6,7 @@
 
 - 在 `forge-runtime/` 內建立 Forge Runtime v4 的可實作基線。
 - 基線必須遵守 `FORGE_RUNTIME_Arch_v4.md`：Workflow 決定流程與 state，LLM 只負責理解、推理、產生候選與寫碼。
-- 實作形式必須是 PI package / extension / skill，不修改 `pi-main/` core。
+- 實作形式預設是 PI package / extension / skill，不修改 `pi-main/` core；只有使用者核准且由 ADR-0012／Plan A 限定的 display-only 最小 core 例外可修改 coding-agent core，其他 core 變更仍禁止。
 
 ## 目前 repo 狀態
 
@@ -85,7 +85,7 @@
 ## 已確定決策
 
 - 使用 `forge-runtime/` 作為唯一新實作根目錄。
-- 以 package + extension + skills 形式落地，不碰 `pi-main/`。
+- 以 package + extension + skills 形式落地，預設不碰 `pi-main/`；僅使用者核准且由 ADR-0012／Plan A 限定的 display-only 最小 core 例外可修改，其他 `pi-main`／core 仍不碰。
 - 真 PI TUI #14 至 #17 是明確核准的 test-only 例外：只增加 `InteractiveModeOptions.terminal` seam，不改 pi-main runtime workflow 或其他功能。
 - 先把 workflow contract 做對，再補 TUI / custom UI。
 - TDD 與獨立 review 是 runtime policy，不是提示詞建議。
@@ -105,7 +105,7 @@
 - `forge_grill_complete` 的結果只保留 `NEEDS_CONFIRMATION` 與 `READY_FOR_DEEP`；候選證據不足時以單一 `NEEDS_CONFIRMATION` 問題請使用者補來源或明確改變 Discovery 範圍。
 - completion payload 的 `evidence` 僅能引用本 workflow 已由 `forge_grill_evidence` 回傳的 candidate id；非空 snapshot 的第一輪至少須成功查核一筆 evidence，空 manifest 則允許零 evidence 的單一來源／scope 問題，後續 round 可重用既有查核結果。
 - `WAIT_USER` 的 options 是快捷選擇與 recommendation，不限制使用者；每個 TUI selector 固定把 runtime 擁有的「自行輸入…」排在最後，選取後在同一互動中接受自由文字。trim 後的非空自由回答與選項回答同樣記錄為該 `decisionId` 的人類決策，再進入下一輪 `GRILL`；空白不送出，取消只返回 selector。UI 不得依選項文案猜測是否需要自訂輸入。
-- 為符合 PI coding-agent 的 `ctx.ui.custom` factory contract，Forge 以四參數 `(tui, hostTheme, keybindings, done)` 接收 callback，並在 Forge 內將 host `Theme` 轉成 `EditorTheme`：`borderColor` 使用 `hostTheme.fg("borderMuted", text)`，`selectList` 使用既有 accent／muted formatter。Forge package runtime dependency 固定為 `@earendil-works/pi-tui@0.83.0`；只修改 `forge-runtime` package manifest／lockfile，不修改 `pi-main/`，不改用 `ctx.ui.editor`／`input`，也不自製 Editor。
+- 為符合 PI coding-agent 的 `ctx.ui.custom` factory contract，Forge 以四參數 `(tui, hostTheme, keybindings, done)` 接收 callback，並在 Forge 內將 host `Theme` 轉成 `EditorTheme`：`borderColor` 使用 `hostTheme.fg("borderMuted", text)`，`selectList` 使用既有 accent／muted formatter。Forge package runtime dependency 固定為 `@earendil-works/pi-tui@0.83.0`；除使用者核准的 ADR-0012 display-only core 例外外，不修改 `pi-main/`，不改用 `ctx.ui.editor`／`input`，也不自製 Editor。
 - 只有明確 `/forge-runtime switch <request>` 可要求改變 task scope；replacement 必須經正式 ingress 建立新的 Light Discovery snapshot，不得經 `/grill-run` bridge。其他自由回答皆保留在現有 decision loop，候選不足時只能請使用者使用 switch。
 - 若 assistant 終局未呼叫 `forge_grill_complete`，runtime 必須記錄該 attempt 首次 `Completion Omission`，保留目前 round，並進入 `GRILL + RECOVERY_REQUIRED`；顯示 `retry / cancel / switch` 後 settled，不做 background steer、auto replay 或自動 Deep。
 - `/forge-runtime retry` 是 completion omission 的唯一重跑入口：使用同一 round／snapshot 建立新 attempt；`/forge-runtime continue` 不再承擔 omission recovery。
@@ -135,12 +135,12 @@
 - **Grill Completion Recovery**：completion omission 進 `GRILL + RECOVERY_REQUIRED` 並 settled；只有明確 `retry` 可重跑同 round／snapshot 的新 attempt，`continue` 不承擔 omission recovery。
 - **Discovery Completion Guard**：非空 manifest 的首輪需要已查核 evidence；空 manifest 與 relevance failure 必須轉成可回答的來源／scope 問題。
 - **Visible Panel**：面向使用者的問題、狀態與 recovery action 必須可見；不可只存在於隱藏 details 或 tool result。
-- **PI Extension Surface**：PI 是 Forge 的承載 runtime；Forge 只使用 PI 公開的 extension、session、tool 與 UI surface，不修改 PI core。
+- **PI Extension Surface**：PI 是 Forge 的承載 runtime；Forge 預設只使用 PI 公開的 extension、session、tool 與 UI surface，不修改 PI core；唯一例外是使用者核准且由 ADR-0012／Plan A 限定的 display-only 最小 core 變更，其他 core 變更仍禁止。
 - **Extension Loader Compatibility**：Forge package 只依賴 PI extension loader 公開支援的 runtime module alias；package 匯入相容性不改變 workflow 或 completion contract。
 
 ## Not Building
 
-- 不修改 `pi-main/` 的 runtime workflow、其他功能或依賴；僅依核准的 Plan A #14 增加 test-only terminal injection seam。
+- 不修改 `pi-main/` 的 runtime workflow、其他功能或依賴；本 ticket 的唯一核准例外是 ADR-0012 所定義的 coding-agent display-only core 路徑。Plan A #14 的 test-only terminal injection seam 亦維持原界線。
 - 不在第一版導入完整 REST / Web / CI 介面層。
 - 不在第一版接上所有知識來源。
 - 不在第一版做大型 reasoning plugin 生態。
@@ -196,3 +196,33 @@
 - 實際 provider-context 測試為 `PiIngress_WhenInitialGrillIngress_ShouldPreserveFullGrillInvocationInProviderContext`、`PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInvocationInsteadOfApprovalText`、`PiProvider_WhenWaitUserAnswerStartsNextRound_ShouldReceiveStructuredInvocationInsteadOfAnswer`；post-cleanup targeted batch 為 3 pass、0 fail。
 - post-review-fix 驗證：full PI TUI 7 pass／0 fail／0 skip；canonical `npm test` 130 pass／0 fail／0 skip；`npm run check` 兩段 tsc 均 pass、no diagnostics。final review 已完成：Standards 0 findings、Spec 0 findings；本 ticket acceptance／closure 完成。
 - 「顯示訊息」與「送給 provider 的訊息」分離 seam 列為後續設計待辦，不屬本 ticket scope，尚未核准或實作；若要推進，必須另走 `design-plan-workflow` 並取得人類決策。
+
+## Grill 成功完成的終止邊界（2026-08-19）
+
+- **Grill 成功完成**：`forge_grill_complete` 成功接受後，是目前 Grill 嘗試的終止邊界；該完成事件封口當前代理回合，不能只靠顯示抑制表示結束。
+- **WAIT_USER**：代表工作流程正在等待人類回答；產生該狀態的前一個代理回合已經終止，回答後才建立新的 Grill 回合。
+- **KNOWLEDGE_UNDERSTANDING**：v1 `READY_FOR_DEEP` 路徑在深度知識完成後的穩定結束點；後續工作流程可由此進入既有下游階段。
+- **深度知識後的歧義**：`KNOWLEDGE_UNDERSTANDING → GRILL → WAIT_USER` 的新轉移尚未定義，不由本 ticket 推測或實作。
+
+## Grill 完成終止邊界最終同步（2026-08-20）
+
+- Plan A 已實作完成，使用者已授權修改 `pi-main`；不執行 Plan B。
+- `displayOnly` 是 public delivery union；streaming 不 steer/followUp、不 trigger turn，但仍 append/event/persist。`excludeFromContext` 經 provider conversion、compaction rehydrate、branch summarization rehydrate 與 session-file round-trip；不修改 agent harness wire。public `CustomMessage` 與 `CustomAgentMessages.custom` 維持 HEAD，marker 僅在 internal intersection。
+- Forge 只在 successful `NEEDS_CONFIRMATION` 傳送 display-only WAIT_USER state message；tool result `terminate=true`。其他 state delivery 不擴張。READY 仍自動進 Deep，不要求 idle。
+- 人類回答流程固定為 `WAIT_USER → USER_CONFIRMED → GRILL`：UI/command 先 resume，重用 `pendingReplayInvocation`，再送完整 followUp invocation；direct human input 仍用 `transform`，避免 nested `emitInput`。
+- READY regression 與 NEEDS regression 的觀測點以 session/provider marker 為準，不以 roundId viewport 作唯一等待條件。
+- 最終驗證見 `docs/PLAN-A.md` 與 state：Forge 132 passed、interactive 9 passed；PI focused 5 files 76 passed／2 skipped；Biome 991 files；branch summarization RED／GREEN 均有 log；PI tsgo 僅保留 `packages/ai` 六個 baseline errors。Forge post-review check/full 均 exit 0；canonical `npm run check` 未跑，因含 `--write`，已改跑唯讀子命令。
+- 已知風險：queued steer、extension API fire-and-forget lifecycle、Node `DEP0190` warning、PI `packages/ai` 六個 baseline errors。
+
+## Canonical 語意補充（2026-08-20）
+
+- **Display-only Custom Message**：ExtensionAPI 的 `deliverAs: "displayOnly"`；優先於 `triggerTurn`／`steer`／`followUp`／`nextTurn`。訊息進入 UI、transcript、session persistence/reload，但永不進 provider／LLM context，也永不觸發 turn。持久 marker 是 `excludeFromContext?: boolean`；建立時為 `true`，舊 session 缺欄位時維持舊語意，不重用 `display`。
+- **Grill Completion Termination Boundary**：成功 `forge_grill_complete` 回傳 `terminate: true` 封口目前代理回合；`NEEDS_CONFIRMATION` 的 WAIT_USER state message 使用 display-only，回答後建立新 Grill round；`READY_FOR_DEEP` 依既有分流進深度知識。terminate 仍可能被已排入的 steer 延續，需由 PI core queue 語意另行驗證。
+- **支援基線**：coding-agent `0.83.0`、repo commit `321bbe69e909de9551906967629908a99167d11e`（`321bbe6`）、branch `main`。不建議降版、不保證降版相容、不回填舊 session；舊 PI 不應重開含 display-only 訊息的 session，若必須降版請使用新 session。
+- **Not Building**：不修改 `packages/agent/src/harness/*`，不保證跨 package 共用 JSONL；不改 Forge 其他 command/retry/cancel/switch/deep knowledge/state message 的 delivery 語意；不回填舊 session 或提供降版轉換器。
+
+## 2026-08-20 Post-review durable sync
+
+- Spec review P2 已修正：移除 public custom augmentation；public `CustomMessage` 與 `CustomAgentMessages.custom` 回到 HEAD，只有 internal intersection 保留 `excludeFromContext` marker。
+- display-only 的排除範圍明確包含 branch summarization rehydrate，不只一般 compaction；summarizer provider conversion 不得洩漏 marker 訊息。
+- 最終 review 後下一步為 targeted re-review 與 final handoff；不得再描述為僅完成普通 compaction。

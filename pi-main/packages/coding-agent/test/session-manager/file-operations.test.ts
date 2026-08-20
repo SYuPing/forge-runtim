@@ -3,6 +3,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync, w
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { convertToLlm } from "../../src/core/messages.ts";
 import { findMostRecentSession, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.ts";
 
 const HEADER_SCAN_LIMIT_BYTES = 1024 * 1024;
@@ -294,6 +295,42 @@ describe("SessionManager custom flat session directory", () => {
 
 		const continuedA = SessionManager.continueRecent(projectA, tempDir);
 		expect(continuedA.getSessionFile()).toBe(sessionA);
+	});
+
+	it("round-trips display-only custom entries without provider conversion", () => {
+		const sessionFile = createPersistedSession(projectA, "display-only");
+		const session = SessionManager.open(sessionFile, tempDir);
+		const customType = "session-file-round-trip";
+		const marker = "SESSION_FILE_DISPLAY_ONLY_MARKER";
+		(
+			session.appendCustomMessageEntry as unknown as (
+				customType: string,
+				content: string,
+				display: boolean,
+				details?: unknown,
+				excludeFromContext?: boolean,
+			) => void
+		)(customType, marker, true, undefined, true);
+
+		const rawEntries = readFileSync(sessionFile, "utf-8")
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line));
+		const rawCustomEntry = rawEntries.find((entry) => entry.customType === customType);
+		const reopened = SessionManager.open(sessionFile, tempDir);
+		const reopenedCustomEntry = reopened
+			.getEntries()
+			.find((entry) => (entry as { customType?: string }).customType === customType) as
+			| { excludeFromContext?: boolean }
+			| undefined;
+		const context = reopened.buildSessionContext();
+		const providerMessages = convertToLlm(context.messages);
+
+		expect(rawCustomEntry?.excludeFromContext).toBe(true);
+		expect(reopenedCustomEntry?.excludeFromContext).toBe(true);
+		expect(JSON.stringify(context.messages)).toContain(marker);
+		expect(JSON.stringify(providerMessages)).not.toContain(marker);
 	});
 });
 
