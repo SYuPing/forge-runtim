@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-21
+updated: 2026-08-22
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: active
 ---
@@ -13,7 +13,7 @@ status: active
 
 本文件只記錄「發現什麼問題、根因是什麼、如何修復、下次怎麼避免」。每筆教訓都應附可核對的檔案或測試證據；沒有證據時只記錄觀察，不把假設寫成結論。開發目標與重大實作請查 [`record.md`](./record.md)。
 
-本輪文件整理未發現新的 runtime bug；以下內容是從原記憶錄重新分類的既有問題與教訓。
+本輪已發現並修復 production regression；以下內容只記錄可由檔案、測試或 log 核對的 bug 與教訓。
 
 ## Bug 與修復索引
 
@@ -33,8 +33,17 @@ status: active
 14. **顯示抑制被誤當成回合終止**：完成後不顯示 prose 不代表代理回合停止。改由 `forge_grill_complete` 回傳 `terminate: true`，移除 `suppressCompletionTurn`；證據：`docs/adr/ADR-0011-grill-completion-terminal-boundary.md`。
 15. **display-only context 洩漏風險**：只改 UI 不能同時保留 transcript/persistence 又排除 provider。新增 `deliverAs: "displayOnly"` 與 `excludeFromContext`，並覆蓋 conversion、compaction、branch summarization、session round-trip；證據：`docs/adr/ADR-0012-display-only-custom-message.md`。
 16. **public 型別與測試 `any` 過度擴張**：final review 發現 public custom augmentation 與 hard `any`。移除 public augmentation，marker 留在 internal intersection，測試改用具體 `Model<"openai-completions">` 與正確 cost fixture；證據：`docs/handoff.md`。
+17. **resume guard 遺失 affirmative normalization**：搬出 resume guard 後，affirmative input 未再做 normalization，造成既有 resume regression。修復為在共用 guard 保留 affirmative normalization；證據：`forge-runtime/extensions/forge-runtime.ts`、`.tmp/intent-route-only-finalgreen-forge-runtime-extension.log`。
+18. **router completion 改變 faux provider call sequence**：新 router completion 讓 faux provider 多一個分類 call，舊測試把 router 與 Grill call 混為同一個序列而失敗。測試 seam 改為區分 router 與 Grill provider 呼叫；證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`.tmp/intent-route-only-finalgreen-forge-runtime-extension.log`。
+19. **搬移輸入資料邏輯造成 contract 退化風險**：搬移 seed、rawText、command wrapper 時若未對照 fixed point，會退化 trim、`/grill-run` canonical wrapper 與 token 規則。修復以 extension handoff private helper 與公開 seed characterization regression 固定行為；證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`.tmp/intent-route-only-scoped-forge-runtime-extension.log`。
+20. **loader smoke 混入不相關 LLM prompt**：loader smoke 若夾帶 LLM prompt，runtime 對照約 21.5s；純 loader smoke 約 1.4s。拆開 smoke 與 prompt 驗證，避免把耗時誤判為 loader 問題；證據：`forge-runtime/tests/extensions/pi-extension-loader.test.ts`、`.tmp/intent-route-only-scoped-pi-extension-loader.log`。
+21. **路由規則與不可信輸入未明確隔離的 injection 風險**：router 規則固定放在 `systemPrompt`，raw input 以獨立 `user` message 傳入；新增 injection structure regression，並調整 faux provider queue／route call-count，確認分類 call 與 Grill call 不混序。教訓是不要把使用者文字拼入 system prompt，也不要用共享序列位置猜測路由是否成功；證據：`forge-runtime/src/intent/intent-understanding.ts`、`forge-runtime/tests/intent/intent-understanding.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、`.tmp/intent-route-only-systemprompt-focused-intent.log`、`.tmp/intent-route-only-systemprompt-focused-extension.log`。
 
 ## 可重用教訓
+
+## 2026-08-22 最終審查
+
+- 最終 Standards 與 Spec review 均為 0 findings，未發現額外新 bug；既有驗證證據見 `agent-state/intent-route-only-llm-20260821.md` 與 `.tmp/intent-route-only-systemprompt-*.log`。
 
 - 先驗證 host 的真實 callback contract，再建立 adapter；名稱相似不代表介面相同。
 - 測試必須走實際 distribution path、factory、render path 與 provider transport；fake harness 只能證明局部 wiring。

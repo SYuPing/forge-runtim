@@ -1,4 +1,68 @@
-# Plan A：Grill Completion Recovery 與真實互動驗收
+# Plan A：Intent Route-Only LLM（現行 ticket）
+
+日期：2026-08-21
+
+狀態：Approved，供 `intent-route-only-llm-20260821` 獨立實作與驗證。
+
+本文件下方的 Grill Completion Recovery 內容是已完成的歷史 Plan A 基線，不屬本 ticket 的執行範圍。
+
+## Scope
+
+只修改使用者輸入到 Intent Understanding 的路由邊界：workflow guard 先處理 WAIT_USER、open workflow 與 slash control；idle 自然語句交由 LLM 分成 `passthrough` 或 `start_forge`。不改 Light Discovery production／內部測試、Grill、Deep Knowledge 或 `pi-main/`。
+
+## Contract
+
+- 輸入：現有 workflow context 的原始 `userMessage` 與官方 `ctx.model`／`ctx.modelRegistry.complete()`。
+- 輸出：TypeBox 驗證後只能是 `{ "route": "passthrough" | "start_forge" }`。
+- `passthrough`：明確聊天、翻譯、改寫、一次性資訊查詢或非工程任務。
+- `start_forge`：工程請求、不確定輸入，以及 missing model、completion error、timeout、abort、invalid JSON、invalid schema。
+- 原始 `userMessage` 保留在 workflow context；goal 從原始有效文字取得，其他衍生欄位不由 Intent 輸出；seed fixed-point helper 留在 extension handoff private helper。
+- `IntentModelContext` 是 `understandIntent` 的唯一第二參數 model seam，供 runtime 與測試注入 PI `model`／`modelRegistry`；`IntentInput` 不含 model context。
+- prompt isolation：路由規則只在 `systemPrompt`；raw input 以獨立 `user` message 傳入。加入 injection structure regression，確認 raw input 不能改寫 system prompt 或訊息角色結構。
+- timeout 固定 10 秒；`/grill-run` 由 guard 直接進 `start_forge`；本 ticket 不新增永久 audit log。
+
+## Exact files
+
+| 檔案 | 變動 |
+| --- | --- |
+| `forge-runtime/src/intent/intent-types.ts` | 將 Intent input/output 收斂為 route-only contract，保留原始輸入 context 所需型別。 |
+| `forge-runtime/src/intent/intent-understanding.ts` | 加入 LLM completion、10 秒 timeout、JSON.parse、TypeBox 驗證與 fail-closed fallback；移除本層 task/goal/seed 推導。 |
+| `forge-runtime/extensions/forge-runtime.ts` | 在 Intent 前套用既有 workflow guard，消費 route 並從原始文字建立 start_forge 所需最小資料。 |
+| `forge-runtime/tests/intent/intent-understanding.test.ts` | 覆蓋兩種 route、嚴格 schema、錯誤 fallback、guard bypass 與原始輸入保留。 |
+| `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | 公開 seed characterization test、raw input 與 `/grill-run` handoff regression。 |
+| `forge-runtime/tests/extensions/pi-extension-loader.test.ts` | 修正 loader smoke，使其只驗證 extension load，不混入無關 LLM prompt。 |
+| `forge-runtime/tests/extensions/pi-grill-interactive.test.ts` | 調整 faux provider queue 與 route call-count，覆蓋 router completion 後 Grill 呼叫序列及 prompt isolation regression。 |
+| `forge-runtime/src/intent/resume-check.ts` | 刪除；session resume guard 已移到 extension／共用 model 前置流程，避免舊五欄位 Intent contract 殘留。 |
+
+不新增 dependency，不修改 `pi-main/`；Light Discovery production 與內部測試不在本 ticket scope。
+
+## Test matrix
+
+| 案例 | 預期 |
+| --- | --- |
+| 明確聊天／翻譯／改寫／一次性資訊／非工程查詢 | `passthrough` |
+| 明確工程請求 | `start_forge` |
+| 不確定自然語句 | `start_forge` |
+| valid JSON 且只有 route 欄位 | 接受該 route |
+| 多欄位、缺欄位、錯 route、非 JSON | `start_forge` |
+| missing model、completion error、timeout、abort | `start_forge` |
+| WAIT_USER、open workflow、slash control | 不呼叫 LLM，由 guard 決定；`/grill-run` 為 `start_forge` |
+| start_forge | 原始 `userMessage` 完整保留；goal 由原始文字取得，seed 由 extension handoff private helper 準備，不由 Intent contract 提供 |
+
+## Execution order
+
+1. 先補 route-only 型別與 focused tests，確認舊五欄位 caller 的失敗位置。
+2. 實作 LLM route、schema validation、timeout 與 fallback。
+3. 接回 workflow guard 與 router，確認下游只消費兩種 route，並固定 faux provider queue／route call-count。
+4. 執行 focused tests、package check，再由獨立 review 確認無 Light Discovery／下游 scope 漂移。
+
+## Rollback
+
+若驗證未通過，回退本 ticket 的四個 implementation/test 檔與本 Plan 的現行區塊，保留 `ADR-0013`、`CONTEXT.md` 的決策歷史；不得恢復五欄位為新的現行 contract，需先取得使用者重新決策。
+
+---
+
+# Plan A 歷史基線：Grill Completion Recovery 與真實互動驗收
 
 日期：2026-08-13（2026-08-17 新增 active follow-up）
 
@@ -939,3 +1003,42 @@ TDD 垂直切片已完成：core streaming RED → minimal route；persistence/c
 - 新測試使用具體 `Model<"openai-completions">`，無 `any`；`Model.cost`／`Usage.cost` fixture 正確。
 - modified files 清單確認包含 `pi-main/packages/coding-agent/src/core/compaction/branch-summarization.ts` 與 `pi-main/packages/coding-agent/test/branch-summarization.test.ts`。
 - Plan A completed，無待實作；下一步僅使用者決定 commit／PR，或後續處理 baseline／out-of-scope 風險。Plan B 未執行。
+
+---
+
+## 2026-08-21 Plan A：Intent route-only LLM
+
+工作項目：`intent-route-only-llm-20260821`。
+
+### 狀態
+
+實作、驗證與獨立 final review 均完成；Standards 與 Spec 皆為 0 findings，ticket 已完成。下一步只能等待使用者確認後再進入 Light Discovery。
+
+### 建置範圍與決策
+
+- Intent 只做 LLM 路由，嚴格輸出 `{"route":"passthrough"}` 或 `{"route":"start_forge"}`。
+- workflow guard 先處理 WAIT_USER、open workflow、slash control；`/grill-run` 以 canonical payload wrapper 進 `start_forge`。
+- 10 秒 timeout、missing model、completion error、abort、invalid JSON/schema 一律 fail-closed 為 `start_forge`。
+- 自然輸入以 rawText 原樣保存；goal 由 start_forge 後取得，seed fixed-point helper 留在 extension handoff private helper。
+- 使用共用 `IntentModelContext` model seam；不修改 `pi-main/`。
+
+### 修改檔案
+
+- Production：`forge-runtime/src/intent/intent-understanding.ts`、`forge-runtime/src/intent/intent-types.ts`、`forge-runtime/extensions/forge-runtime.ts`；刪除 `forge-runtime/src/intent/resume-check.ts`（session resume guard 移到 extension／共用 model 前置流程）。
+- Tests：`forge-runtime/tests/intent/intent-understanding.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`（公開 seed characterization test）、`forge-runtime/tests/extensions/pi-extension-loader.test.ts`（loader smoke 修正）。Light Discovery production／內部測試不在 scope。
+- Durable docs：`CONTEXT.md`、`docs/adr/ADR-0013-intent-route-only-llm.md`、`docs/PLAN-A.md`、`docs/handoff.md`、`Memory/record.md`、`Memory/lesson_learn.md`、`agent-state/intent-route-only-llm-20260821.md`。
+
+### 最終驗證
+
+- intent 12/12、Forge extension 91/91、loader smoke 2/2。
+- `npm run check` exit 0；完整 `npm test` 146/146 pass。
+- 證據：`.tmp/intent-route-only-systemprompt-*.log`。
+
+### Final closeout（2026-08-22）
+
+- Standards final review：0 findings；Spec final review：0 findings。
+- 本 ticket acceptance／closure 已完成，沒有進入 Light Discovery；下一步只能等待使用者確認。
+
+### Rollback
+
+回退本 ticket 的 production/test commit，並同步回退 ADR、Context、Plan、handoff、Memory 與 agent-state；不回退或修改 `pi-main/`。

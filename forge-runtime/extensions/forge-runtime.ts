@@ -20,6 +20,7 @@ import {
 } from "../src/discovery/discovery-sources.ts";
 import { runLightDiscovery, type LightDiscoveryResult } from "../src/discovery/light-discovery.ts";
 import { understandIntent } from "../src/intent/intent-understanding.ts";
+import type { IntentModelContext } from "../src/intent/intent-types.ts";
 import { buildEvidenceSummaryText } from "../src/ui/evidence-summary-widget.ts";
 import { createForgeSessionState, type GrillEvidenceSnapshot, type WaitUserPayload } from "../src/runtime/session-state.ts";
 import type { ForgeUiState } from "../src/ui/ui-state.ts";
@@ -27,7 +28,7 @@ import { buildValidationRepairText } from "../src/ui/validation-repair-widget.ts
 import { buildWaitUserPanel } from "../src/ui/wait-user-panel.ts";
 import { buildWorkflowStatusText } from "../src/ui/workflow-status-widget.ts";
 
-interface CommandContext {
+interface CommandContext extends IntentModelContext {
 	cwd?: string;
 	newSession?: (options?: {
 		withSession?: (ctx: { sendUserMessage(content: string): Promise<void> | void }) => Promise<void> | void;
@@ -399,21 +400,22 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return { action: "continue" as const };
 		}
 
-		let text = typeof event.text === "string" ? event.text.trim() : "";
-		if (text === pendingReplayInvocation) {
+		const rawText = typeof event.text === "string" ? event.text : "";
+		const routingText = rawText.trim();
+		if (routingText === pendingReplayInvocation) {
 			pendingReplayInvocation = undefined;
 			return { action: "continue" as const };
 		}
-		if (text.startsWith("/grill-run ")) {
-			text = text.slice("/grill-run ".length).trim();
-		}
-		const rootDir = ctx?.cwd ?? process.cwd();
-		if (text.startsWith("/")) {
+			const grillRun = routingText === "/grill-run" || routingText.startsWith("/grill-run ");
+			const grillRunRequest = grillRun ? routingText.slice("/grill-run".length).trim() : "";
+			const canonicalRequest = grillRun ? grillRunRequest : rawText;
+			const rootDir = ctx?.cwd ?? process.cwd();
+		if (routingText.startsWith("/") && !grillRun) {
 			return { action: "continue" as const };
 		}
 
 		if (pendingKnowledgeRequest) {
-			if (!isApproval(text)) {
+			if (!isApproval(routingText)) {
 				ctx?.ui?.notify?.(
 					`目前缺少 ${pendingKnowledgeRequest.missingAssets.join(" / ")}；若要在無完整參考基底下繼續，請明確回覆同意。`,
 					"warn",
@@ -430,13 +432,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			await publishState(pi, ctx ?? {}, sessionState.beginIntent(approvedRequest));
 			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(approvedRequest));
 			pendingGrillRun = true;
-			const lightDiscovery = await runLightDiscovery(approvedRootDir, extractDiscoverySeeds(approvedRequest));
+				const seeds = extractDiscoverySeeds(approvedRequest);
+				const lightDiscovery = await runLightDiscovery(approvedRootDir, seeds);
 			const round = sessionState.startGrillRound(approvedRequest, lightDiscovery.snapshot);
 			activeWorkflow = {
 				goal: approvedRequest,
 				lightDiscovery,
 				rootDir: approvedRootDir,
-				seeds: extractDiscoverySeeds(approvedRequest),
+					seeds,
 				snapshot: round.snapshot,
 			};
 			activateGrillTools();
@@ -451,34 +454,30 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			};
 		}
 
-		const currentState = sessionState.current();
-		const intent = understandIntent({
-			hasSlashCommand: false,
-			openWorkflowGoal: currentState.decisionSummary,
-			openWorkflowStage: currentState.stage,
-			recommendedOption: currentState.waitUser?.recommendation,
-			resumeSelectionOptions: currentState.waitUser?.options,
-			sessionState:
-				currentState.stage === "WAIT_USER"
-					? "wait_user"
-					: currentState.stage === "RECEIVE"
-						? "idle"
-						: "open_workflow",
-			userMessage: text,
-		});
-
-			if (intent.route === "resume_wait_user") {
-					if (!requireGrillToolBoundary(ctx ?? {})) {
-						return { action: "handled" as const };
-					}
-					const invocation = await resumeGrillWithAnswer(intent.resumeSelection ?? text, ctx ?? {});
+			const currentState = sessionState.current();
+			if (currentState.stage === "WAIT_USER") {
+						if (!requireGrillToolBoundary(ctx ?? {})) {
+							return { action: "handled" as const };
+						}
+						const waitUser = currentState.waitUser;
+			const normalized = routingText.toLowerCase();
+						const selectedOption = waitUser?.options.find(
+							(option) => option.trim().toLowerCase() === normalized,
+						);
+						const answer =
+							selectedOption ??
+							(waitUser?.recommendation &&
+								(isApproval(routingText) || waitUser.recommendation.trim().toLowerCase() === normalized)
+								? waitUser.recommendation
+								: routingText);
+						const invocation = await resumeGrillWithAnswer(answer, ctx ?? {});
 					if (!invocation) {
 						return { action: "handled" as const };
 					}
 					return { action: "transform" as const, text: invocation };
-			}
+		}
 
-		if (intent.route === "resume_open_workflow") {
+		if (currentState.stage !== "RECEIVE") {
 			// ponytail: v1 先硬擋雙開；真的需要換題/排隊，再補 explicit switch 或 queue。
 			ctx?.ui?.notify?.(
 				"Forge 已有進行中的 workflow。請用 /forge-runtime continue、/forge-runtime cancel，或 /forge-runtime switch <request>。",
@@ -487,6 +486,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return { action: "handled" as const };
 		}
 
+		const intent = grillRun
+			? { route: "start_forge" as const }
+			: await understandIntent(
+					{ hasSlashCommand: false, sessionState: "idle", userMessage: rawText },
+					ctx ?? {},
+			  );
+
 		if (intent.route !== "start_forge") {
 			return { action: "continue" as const };
 		}
@@ -494,13 +500,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return { action: "handled" as const };
 		}
 
-		const knowledgeAssets = getKnowledgeAssetStatus(rootDir);
-		if (knowledgeAssets.missingAssets.length > 0) {
-			pendingKnowledgeRequest = {
-				missingAssets: knowledgeAssets.missingAssets,
-				request: intent.goal,
-				rootDir,
-			};
+			const knowledgeAssets = getKnowledgeAssetStatus(rootDir);
+			if (knowledgeAssets.missingAssets.length > 0) {
+				pendingKnowledgeRequest = {
+					missingAssets: knowledgeAssets.missingAssets,
+					request: canonicalRequest,
+					rootDir,
+				};
 			ctx?.ui?.notify?.(
 				`目前缺少 ${knowledgeAssets.missingAssets.join(" / ")}。若接受在沒有完整知識庫或代碼庫的情況下繼續，請明確回覆同意。`,
 				"warn",
@@ -508,7 +514,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return { action: "handled" as const };
 		}
 
-		const conflict = detectCodeBaseConflict(rootDir, intent.lightDiscoverySeeds);
+			const seeds = extractDiscoverySeeds(canonicalRequest);
+		const conflict = detectCodeBaseConflict(rootDir, seeds);
 		if (conflict) {
 			ctx?.ui?.notify?.(
 				`Target Conflict\n偵測到 code_base 衝突：${conflict.relativePath}\ncode_base: ${conflict.codeBasePath}\ntarget: ${conflict.targetSourcePath}\n請先釐清後再繼續。`,
@@ -517,24 +524,24 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return { action: "handled" as const };
 		}
 
-		await publishState(pi, ctx ?? {}, sessionState.beginIntent(intent.goal));
-		await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(intent.goal));
-		pendingGrillRun = true;
-		const lightDiscovery = await runLightDiscovery(rootDir, intent.lightDiscoverySeeds);
-		const round = sessionState.startGrillRound(intent.goal, lightDiscovery.snapshot);
-		activeWorkflow = {
-			goal: intent.goal,
+			await publishState(pi, ctx ?? {}, sessionState.beginIntent(canonicalRequest));
+			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(canonicalRequest));
+			pendingGrillRun = true;
+			const lightDiscovery = await runLightDiscovery(rootDir, seeds);
+			const round = sessionState.startGrillRound(canonicalRequest, lightDiscovery.snapshot);
+			activeWorkflow = {
+				goal: canonicalRequest,
 			lightDiscovery,
 			rootDir,
-			seeds: intent.lightDiscoverySeeds,
+			seeds,
 			snapshot: round.snapshot,
 		};
 		activateGrillTools();
-		await publishState(pi, ctx ?? {}, sessionState.beginGrill(intent.goal));
+			await publishState(pi, ctx ?? {}, sessionState.beginGrill(canonicalRequest));
 		return {
 			action: "transform" as const,
-			text: buildGrillingSkillInvocation(
-				[intent.goal, lightDiscovery.summary].filter((value) => value.length > 0).join("\n\n"),
+				text: buildGrillingSkillInvocation(
+					[canonicalRequest, lightDiscovery.summary].filter((value) => value.length > 0).join("\n\n"),
 				round.roundId,
 				lightDiscovery.snapshot.manifest,
 			),
@@ -711,11 +718,25 @@ function isApproval(text: string): boolean {
 	return new Set(["好", "可以", "同意", "照做", "yes", "ok", "okay", "y"]).has(text.trim().toLowerCase());
 }
 
+const FILE_OR_SYMBOL_PATTERN = /[\w./-]+\.[A-Za-z0-9]+|`([^`]+)`|[A-Z]{2,}-\d+/g;
+
 function extractDiscoverySeeds(message: string): string[] {
-	return message
+	const matches = message.match(FILE_OR_SYMBOL_PATTERN) ?? [];
+	const quoted = matches.map((match) => match.replaceAll("`", "").trim()).filter(Boolean);
+	const words = message
 		.split(/\s+/)
-		.filter((token) => token.length >= 2)
-		.slice(0, 8);
+		.flatMap(splitMixedToken)
+		.filter((word) => word.length >= 2 && /[A-Za-z\u4e00-\u9fff]/.test(word))
+		.slice(0, 6);
+
+	return [...new Set([...quoted, ...words])].slice(0, 8);
+}
+
+function splitMixedToken(token: string): string[] {
+	return token
+		.trim()
+		.split(/(?<=[\u4e00-\u9fff])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\u4e00-\u9fff])/)
+		.filter(Boolean);
 }
 
 async function handleWaitUserState(

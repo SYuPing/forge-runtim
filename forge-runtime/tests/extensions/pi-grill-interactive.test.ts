@@ -24,6 +24,7 @@ type ForgeExtensionApi = Parameters<typeof forgeRuntimeExtension>[0];
 // PI 的 on overload 集合與 Forge runtime contract 結構不同；真實 TUI tests 覆蓋 runtime contract。
 // 這是僅限測試的 overload-set bridge；四個真實 TUI lifecycle tests 驗證 runtime contract。
 const installForgeRuntimeExtension = (pi: ExtensionAPI): void => forgeRuntimeExtension(pi as unknown as ForgeExtensionApi);
+const routerStartForgeResponse = () => fauxAssistantMessage('{"route":"start_forge"}');
 
 async function waitForViewport(terminal: VirtualTerminal, text: string): Promise<void> {
 	for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -119,6 +120,7 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 			if (event.type === "agent_settled") resolveBoundary("idle");
 		});
 		faux.setResponses([
+			routerStartForgeResponse(),
 			fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
 				evidence: [],
 				questions: [{ id: "q-proceed", question: "是否進入 deep knowledge？", options: ["是", "否"] }],
@@ -146,7 +148,7 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 		);
 		const callCountAtWaitUser = faux.state.callCount;
 		const assistantMessagesAtWaitUser = runtime.session.messages.filter((message) => message.role === "assistant").length;
-		assert.equal(callCountAtWaitUser, 1);
+		assert.equal(callCountAtWaitUser, 2, "router completion 與 Grill completion 應分開計數");
 		assert.equal(faux.getPendingResponseCount(), 1);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		assert.equal(faux.state.callCount, callCountAtWaitUser);
@@ -240,6 +242,7 @@ test("SuccessfulReadyForDeepCompletion_ReturnsTerminatingResultWithoutConfirmati
 			}
 		});
 		faux.setResponses([
+			routerStartForgeResponse(),
 			fauxAssistantMessage([fauxToolCall("forge_grill_evidence", { candidateId }, { id: "call-evidence-ready-regression" })]),
 			() => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
 					evidence: [candidateId],
@@ -336,6 +339,7 @@ test("PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnsw
 		await runtime.session.bindExtensions({});
 
 		faux.setResponses([
+			routerStartForgeResponse(),
 			fauxAssistantMessage(
 				[fauxToolCall("forge_grill_complete", {
 					evidence: [],
@@ -441,6 +445,7 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 		assert.ok(candidateId, "expected a code_base evidence candidate");
 
 		faux.setResponses([
+			routerStartForgeResponse(),
 			fauxAssistantMessage(
 				[fauxToolCall("forge_grill_evidence", {
 					candidateId,
@@ -539,7 +544,7 @@ test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndSettle", async () => {
 		});
 		await runtime.session.bindExtensions({});
 
-		faux.setResponses([fauxAssistantMessage("模型回覆未完成。"), fauxAssistantMessage("retry-attempt-completed")]);
+		faux.setResponses([routerStartForgeResponse(), fauxAssistantMessage("模型回覆未完成。"), fauxAssistantMessage("retry-attempt-completed")]);
 		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
 		void mode.run();
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -633,7 +638,7 @@ test("PiTui_WhenSingleInputRuns_ShouldBoundAssistantTurns", async () => {
 		});
 		await runtime.session.bindExtensions({});
 
-		faux.setResponses([fauxAssistantMessage("模型回覆未完成。")]);
+		faux.setResponses([routerStartForgeResponse(), fauxAssistantMessage("模型回覆未完成。")]);
 		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
 		void mode.run();
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -710,6 +715,7 @@ test("PiProvider_WhenWaitUserAnswerStartsNextRound_ShouldReceiveStructuredInvoca
 		runtime = await createAgentSessionRuntime(createRuntime, { cwd: tempDir, agentDir: tempDir, sessionManager: SessionManager.create(tempDir) });
 		await runtime.session.bindExtensions({});
 			faux.setResponses([
+				routerStartForgeResponse(),
 				(context) => {
 					contexts.push(context);
 					const invocation = JSON.stringify(context.messages);
@@ -856,6 +862,7 @@ test("PiIngress_WhenInitialGrillIngress_ShouldPreserveFullGrillInvocationInProvi
 		});
 		await runtime.session.bindExtensions({});
 		faux.setResponses([
+			routerStartForgeResponse(),
 			(context) => {
 				const userMessage = [...context.messages].reverse().find((message) => message.role === "user");
 				providerUserMessage = userMessage
@@ -951,6 +958,7 @@ test("PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInv
 		});
 		await runtime.session.bindExtensions({});
 		faux.setResponses([
+			routerStartForgeResponse(),
 			(context) => {
 				const userMessage = [...context.messages].reverse().find((message) => message.role === "user");
 				providerUserMessage = userMessage
@@ -967,7 +975,7 @@ test("PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInv
 		terminal.sendInput(request);
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "請明確回覆同意");
-		assert.equal(faux.state.callCount, 0);
+		assert.equal(faux.state.callCount, 1, "approval should have only the router call; Grill has not completed yet");
 		terminal.sendInput("同意");
 		terminal.sendInput("\r");
 		for (let attempt = 0; attempt < 100 && providerUserMessage === undefined; attempt += 1) {

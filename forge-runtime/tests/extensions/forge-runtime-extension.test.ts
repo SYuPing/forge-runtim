@@ -226,7 +226,7 @@ test("Extension_WhenSuccessfulSwitchReplacesPendingAssetApproval_ShouldNotResume
 
 	await harness.runCommand("switch 請幫我測試新需求");
 
-	assert.deepEqual(await harness.sendInput("同意"), { action: "continue" });
+	assert.deepEqual(await harness.sendInput("同意"), { action: "handled" });
 	assert.equal(harness.observedStatuses.at(-1), undefined);
 });
 
@@ -250,6 +250,29 @@ test("Extension_WhenGrillRunAliasUsesControlledAssets_ShouldCreateFormalRoundAnd
 	assert.match(invocation, /\bev-[0-9a-f]{64}\b/);
 	assert.match(invocation, /forge_grill_evidence 只接受 manifest 中的 candidateId/);
 	assert.match(invocation, /完成時必須呼叫 forge_grill_complete；completion payload 必須原樣包含此 roundId/);
+});
+
+test("Extension_WhenNaturalIngressBuildsGrillInvocation_ShouldPreserveCompatibleDiscoverySeeds", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+
+	const harness = await createExtensionHarness({ cwd: rootDir });
+	const result = await harness.sendInput(
+		"請處理 `src/forge-runtime.ts` PROJ-123 PROJ-123 中英MixedToken 中英MixedToken alpha beta gamma delta epsilon zeta eta theta",
+	);
+	const invocation = (result as { text?: string }).text ?? "";
+	const seedText = invocation.match(/Light discovery seeds: ([^\n]+)/)?.[1];
+	assert.ok(seedText, "自然輸入的 Grill invocation 應保留 Light Discovery seed 摘要");
+	const seeds = seedText.split(", ");
+
+	assert.ok(seeds.includes("`src/forge-runtime.ts`"), "應保留反引號檔案 seed");
+	assert.ok(seeds.includes("PROJ-123"), "應保留 PROJ-123 seed");
+	assert.ok(seeds.includes("中英"), "應拆分中英 mixed token 的中文部分");
+	assert.ok(seeds.includes("MixedToken"), "應拆分中英 mixed token 的英文部分");
+	assert.equal(new Set(seeds).size, seeds.length, "seed 應去重");
+	assert.ok(seeds.length <= 8, "seed 最多保留 8 個");
 });
 
 test("Extension_WhenNonDomainToolIsCalledDuringGrill_ShouldBlock", async (t) => {
@@ -784,6 +807,7 @@ async function createExtensionHarness(options: {
 	withoutGetActiveTools?: boolean;
 	withoutEventHook?: boolean;
 	withoutSetActiveTools?: boolean;
+	intentRoute?: "passthrough" | "start_forge";
 } = {}) {
 	const { default: forgeRuntimeExtension } = await import("../../extensions/forge-runtime.ts");
 	const commands = new Map<string, RegisteredCommand>();
@@ -801,6 +825,7 @@ async function createExtensionHarness(options: {
 	const observedNotifications: string[] = [];
 	const observedUserMessages: string[] = [];
 	const observedUserMessageCalls: SentUserMessage[] = [];
+	const observedModelRequests: string[] = [];
 	const reenteredFollowUpEvents: Array<{ event: { text: string }; result: unknown }> = [];
 	const replacementSessionInputs: ReplacementSessionInput[] = [];
 	const shouldReenterFollowUps = options.reenterFollowUps === true;
@@ -913,6 +938,13 @@ async function createExtensionHarness(options: {
 	} = {}) {
 		return {
 			cwd: overrides.cwd ?? options.cwd,
+			model: {},
+			modelRegistry: {
+				complete: async (_model: object, request: { messages: Array<{ content: Array<{ text: string }> }> }) => {
+					observedModelRequests.push(request.messages[0]?.content[0]?.text ?? "");
+					return { content: [{ type: "text", text: JSON.stringify({ route: options.intentRoute ?? "start_forge" }) }] };
+				},
+			},
 			newSession:
 				overrides.newSession ?? options.newSession ?? (shouldReenterReplacementSession ? startReplacementSession : undefined),
 			ui: {
@@ -943,6 +975,7 @@ async function createExtensionHarness(options: {
 		observedStatuses,
 		observedUserMessageCalls,
 		observedUserMessages,
+		observedModelRequests,
 		reenteredFollowUpEvents,
 		replacementSessionInputs,
 		buildContext,
@@ -1226,7 +1259,7 @@ test("Extension_WhenCancelFollowsAssetApprovalPrompt_ShouldNotResumeCancelledReq
 	assert.deepEqual(await harness.sendInput("請幫我測試已取消的需求"), { action: "handled" });
 	await harness.runCommand("cancel");
 
-	assert.deepEqual(await harness.sendInput("同意"), { action: "continue" });
+	assert.deepEqual(await harness.sendInput("同意"), { action: "handled" });
 	assert.match(harness.observedStatuses.at(-1) ?? "", /RECEIVE/);
 });
 
@@ -1701,6 +1734,40 @@ test("Extension_WhenIdleAndEngineeringRequest_ShouldTransformIntoForgeFlow", asy
 	assert.match((result as { text?: string }).text ?? "", /任務：請幫我壓測方案 A/);
 });
 
+test("Extension_WhenNaturalInputHasWhitespace_ShouldPreserveRawMessageForModelAndWorkflow", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir });
+	const userMessage = "  請幫我測試 RawInputNeedle  ";
+
+	const result = await harness.sendInput(userMessage);
+	const invocation = (result as { text?: string }).text ?? "";
+
+	assert.equal((result as { action?: string }).action, "transform");
+	assert.equal(harness.observedModelRequests.length, 1);
+	assert.equal(harness.observedModelRequests[0], userMessage);
+	assert.match(invocation, new RegExp(escapeRegExp(userMessage)));
+});
+
+test("Extension_WhenGrillRunAliasIsExactOrHasContent_ShouldStartForgeWithoutModelAndKeepRawInput", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	for (const { userMessage, downstreamTask } of [
+		{ userMessage: "/grill-run", downstreamTask: "" },
+		{ userMessage: "/grill-run 請幫我測試 GrillRunRawNeedle", downstreamTask: "請幫我測試 GrillRunRawNeedle" },
+	]) {
+		const harness = await createExtensionHarness({ cwd: rootDir });
+		const result = await harness.sendInput(userMessage);
+		const invocation = (result as { text?: string }).text ?? "";
+
+		assert.equal((result as { action?: string }).action, "transform");
+		assert.equal(harness.observedModelRequests.length, 0);
+		assert.match(invocation, new RegExp(`任務：${escapeRegExp(downstreamTask)}`));
+		assert.doesNotMatch(invocation, new RegExp(escapeRegExp(userMessage)));
+	}
+});
+
 test("Extension_WhenKnowledgeWikiMissing_ShouldStopStartForgeAndAskForConsent", async (t) => {
 	const rootDir = createTempRoot({ withWiki: false });
 	t.after(() => {
@@ -2153,7 +2220,15 @@ test("Extension_WhenIdleAndChitChat_ShouldContinue", async () => {
 	const inputHandler = eventHandlers.get("input");
 	assert.ok(inputHandler, "Expected input handler to be registered for front-door routing");
 
-	const result = await inputHandler({ text: "今天天氣如何？" });
+	const result = await (inputHandler as (message: unknown, context: unknown) => Promise<unknown>)(
+		{ text: "今天天氣如何？" },
+		{
+			model: {},
+			modelRegistry: {
+				complete: async () => ({ content: [{ type: "text", text: '{"route":"passthrough"}' }] }),
+			},
+		},
+	);
 
 	assert.deepEqual(result, { action: "continue" });
 });

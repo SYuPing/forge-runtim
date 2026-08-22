@@ -1,6 +1,6 @@
 # Forge Runtime v4 Context
 
-日期：2026-08-17
+日期：2026-08-21
 
 ## 目標
 
@@ -12,6 +12,15 @@
 
 - repo root 已包含 `docs/`、`agent-state/`、`Memory/` 等交付文件；Forge 新實作仍只位於 `forge-runtime/`，`pi-main/` 維持上游參考用途。
 - `forge-runtime/` 已建立獨立 TypeScript package，含 state machine、orchestrator、light discovery、candidate relevance gate、deep executor、context builder、repair routing 與最小 extension entry。
+
+## 2026-08-21 Intent route-only LLM 現行基線
+
+- `INTENT_UNDERSTANDING` 只輸出嚴格 JSON `{ "route": "passthrough" | "start_forge" }`；輸出不包含 goal、taskKind、ambiguities 或 seeds。
+- router 規則只放在 `systemPrompt`；不可信的 raw user input 以獨立 `user` message 傳入，只作分類資料，不得改變規則。明確聊天、翻譯、改寫、一次性資訊查詢與非工程任務判為 `passthrough`；工程或不確定輸入判為 `start_forge`。missing model、completion error、timeout、abort、無效 JSON／schema 都 fail-closed 為 `start_forge`。
+- workflow guard 先處理 WAIT_USER、open workflow 與 slash control；`/grill-run` 以 canonical payload wrapper 直接進 `start_forge`，不送 LLM 分類。
+- 自然輸入保留 rawText；start_forge 的 goal 與 seed 準備由原始有效文字處理，seed fixed-point helper 留在 extension handoff 的 private helper，不屬 Intent contract；Light Discovery production 與內部測試不在本 ticket scope。
+- `understandIntent(input, context)` 的第二參數是唯一 model seam：`IntentModelContext`；`IntentInput` 不含 model context。使用 PI 提供的 `ctx.model` 與 `ctx.modelRegistry.complete()`，固定 10 秒 timeout；本 ticket 未修改 `pi-main/`。
+- finalgreen 證據：intent 12/12、Forge extension 91/91、loader smoke 2/2、`npm run check` exit 0、完整 `npm test` 146/146；證據位於 `.tmp/intent-route-only-systemprompt-*.log`。獨立 Standards 與 Spec final review 均為 0 findings，本 ticket 已完成；下一步只能等待使用者確認後再進入 Light Discovery。
 - `docs/handoff.md`、`CONTEXT.md`、`docs/adr/` 在本次設計前皆不存在；本次依 workflow 補齊。
 
 ## 已驗證的上游 PI 事實
@@ -91,9 +100,11 @@
 - TDD 與獨立 review 是 runtime policy，不是提示詞建議。
 - 正式 ingress 僅限一般自然工程請求與 asset approval；控制命令不構成新的正式 ingress。
 - v1 每個 session 只允許一個 open workflow；`WAIT_USER` 與 `open_workflow` 皆優先走 resume，不雙開新題。
-- `INTENT_UNDERSTANDING` 的最小 contract 固定為：`route`、`goal`、`taskKind`、`ambiguities`、`lightDiscoverySeeds`。
+- `INTENT_UNDERSTANDING` 的現行最小 contract 只有 `route`：LLM 驗證後輸出嚴格 JSON `{ "route": "passthrough" | "start_forge" }`；原始 `userMessage` 保留在 workflow context，其他理解資料不屬 Intent 輸出。
 - `LIGHT_DISCOVERY` v1 只讀根目錄 `wiki/` 與必要的極窄 local code lookup；`docs/`、`CONTEXT.md`、ADR 與 Plan 不再是 Light Discovery 來源。
 - `passthrough` 只保留給純問答、閒聊、翻譯、改寫與非工程任務；工程請求一律先過 Forge router。
+- Intent 使用官方 `ctx.model` 與 `ctx.modelRegistry.complete()`，固定 10 秒 timeout；missing model、completion error、timeout、abort、invalid JSON 或 invalid schema 一律 fail-closed 為 `start_forge`。WAIT_USER、open workflow 與 slash control 先由 workflow guard 處理；`/grill-run` 明確進 `start_forge`。
+- `goal` 由 start_forge 後的原始有效文字取得；`taskKind`、`ambiguities`、`lightDiscoverySeeds`、`resumeSelection` 移出 Intent，seed fixed-point helper 留在 extension handoff private helper；Light Discovery production 與內部測試不在本 ticket scope。
 - 只要有歧義或跨人類決策邊界，就必須進 `GRILL`；`INTENT_UNDERSTANDING` 不可代替使用者做設計決策。
 - `GRILL` 可使用工具，但只限對 `LIGHT_DISCOVERY` 明確產出的候選來源做唯讀查核；不得擴大成 repo-wide／OS-wide 搜尋，也不得修改 workspace。工具權限必須由 Workflow／Extension gate 控制，不可只靠 LLM prompt。
 - `GRILL` 是受控的多輪決策迴圈：`NEEDS_CONFIRMATION` 必須透過 completion payload 提交恰好一題；使用者每次作答後記錄該決策並自動進入下一輪 `GRILL`，只有 `READY_FOR_DEEP` 可離開迴圈進入 Deep Knowledge。

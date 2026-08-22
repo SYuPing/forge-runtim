@@ -10,8 +10,6 @@ const result = spawnSync(
 		"--no-extensions",
 		"--extension",
 		".pi/extensions/forge-runtime.ts",
-		"-p",
-		"loader smoke",
 	],
 	{ cwd: "..", encoding: "utf8", shell: process.platform === "win32", timeout: 30_000 },
 );
