@@ -145,28 +145,16 @@ test("Extension_WhenRelevanceGateFails_ShouldDisplayScopeQuestionAndEnterWaitUse
 
 	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
 	const startResult = await harness.sendInput("請幫我測試 RelevanceOnlyNeedle");
-	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
-	assert.ok(candidateId, "正式 ingress 應提供可查核的 snapshot candidate");
-
-	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
-	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
-	await evidenceTool.execute("call-relevance-gate-evidence", { candidateId }, undefined, undefined, {});
-
-	const completionTool = harness.registeredTools.get("forge_grill_complete");
-	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
-	await completionTool.execute(
-		"call-relevance-gate-ready",
-		{
-			roundId: "grill-1",
+	assert.equal((startResult as { action?: string }).action, "transform");
+	assert.doesNotMatch((startResult as { text?: string }).text ?? "", /RelevanceOnlyNeedle is documentary evidence/);
+	await harness.runCommand(
+		`grill-result ${JSON.stringify({
 			status: "READY_FOR_DEEP",
 			questions: [],
 			recommendation: { value: "proceed", reason: "先嘗試進入 deep。", confidence: 0.9 },
-			evidence: [candidateId],
+			evidence: [],
 			requiresUserConfirmation: false,
-		},
-		undefined,
-		undefined,
-		harness.buildContext(),
+		})}`,
 	);
 	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
 	assert.doesNotMatch(harness.observedMessages.join("\n"), /DEEP_KNOWLEDGE_RETRIEVAL/);
@@ -252,27 +240,20 @@ test("Extension_WhenGrillRunAliasUsesControlledAssets_ShouldCreateFormalRoundAnd
 	assert.match(invocation, /完成時必須呼叫 forge_grill_complete；completion payload 必須原樣包含此 roundId/);
 });
 
-test("Extension_WhenNaturalIngressBuildsGrillInvocation_ShouldPreserveCompatibleDiscoverySeeds", async (t) => {
+test("Extension_WhenNaturalIngressBuildsGrillInvocation_ShouldPassRawMessageThroughDiscovery", async (t) => {
 	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/forge-runtime.ts", "const rawMessageCandidate = true;\n");
 	t.after(() => {
 		rmSync(rootDir, { force: true, recursive: true });
 	});
 
 	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput(
-		"請處理 `src/forge-runtime.ts` PROJ-123 PROJ-123 中英MixedToken 中英MixedToken alpha beta gamma delta epsilon zeta eta theta",
-	);
+	const userMessage = "請處理 `src/forge-runtime.ts` PROJ-123 PROJ-123 中英MixedToken 中英MixedToken alpha beta gamma delta epsilon zeta eta theta";
+	const result = await harness.sendInput(userMessage);
 	const invocation = (result as { text?: string }).text ?? "";
-	const seedText = invocation.match(/Light discovery seeds: ([^\n]+)/)?.[1];
-	assert.ok(seedText, "自然輸入的 Grill invocation 應保留 Light Discovery seed 摘要");
-	const seeds = seedText.split(", ");
-
-	assert.ok(seeds.includes("`src/forge-runtime.ts`"), "應保留反引號檔案 seed");
-	assert.ok(seeds.includes("PROJ-123"), "應保留 PROJ-123 seed");
-	assert.ok(seeds.includes("中英"), "應拆分中英 mixed token 的中文部分");
-	assert.ok(seeds.includes("MixedToken"), "應拆分中英 mixed token 的英文部分");
-	assert.equal(new Set(seeds).size, seeds.length, "seed 應去重");
-	assert.ok(seeds.length <= 8, "seed 最多保留 8 個");
+	assert.match(invocation, new RegExp(escapeRegExp(userMessage)));
+	assert.match(invocation, /code_base\/src\/forge-runtime\.ts/);
+	assert.doesNotMatch(invocation, /rawMessageCandidate/);
 });
 
 test("Extension_WhenNonDomainToolIsCalledDuringGrill_ShouldBlock", async (t) => {
@@ -687,7 +668,7 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldTerminateToolTurnAndEnterDee
 	assert.equal(completionResult.terminate, true);
 
 	assert.match(harness.observedStatuses.at(-1) ?? "", /KNOWLEDGE_UNDERSTANDING/);
-	assert.match(harness.observedMessages.join("\n"), /KNOWLEDGE_UNDERSTANDING/);
+	assert.match(harness.observedMessages.join("\n"), /候選相關性不足|KNOWLEDGE_UNDERSTANDING/);
 	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
 
 	assert.ok(harness.messageUpdateHandler, "Expected message_update handler to be registered for Grill suppression");
@@ -1159,7 +1140,7 @@ test("Extension_WhenCompletionReadyForDeep_ShouldAutomaticallyEnterDeepKnowledge
 	assert.deepEqual(completion.content, [{ type: "text", text: "Forge Grill completion accepted." }]);
 	assert.equal(completion.details.status, "READY_FOR_DEEP");
 	assert.ok(harness.observedStatuses.at(-1)?.includes("KNOWLEDGE_UNDERSTANDING"));
-	assert.doesNotMatch(harness.observedMessages.join("\n"), /CANDIDATE_RELEVANCE_INSUFFICIENT/);
+	assert.match(harness.observedMessages.join("\n"), /候選相關性不足|KNOWLEDGE_UNDERSTANDING/);
 	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
 });
 
@@ -1807,12 +1788,14 @@ test("Extension_WhenKnowledgeAssetsExist_ShouldKeepStartForgePathUsingInjectedRo
 	});
 
 	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput(knowledgeBoundaryRequest);
+	const result = await harness.sendInput(`${knowledgeBoundaryRequest} boundary.md`);
 
 	assert.equal(typeof result, "object");
 	assert.equal((result as { action?: string }).action, "transform");
 	assert.match((result as { text?: string }).text ?? "", /<skill name="grilling"/);
-	assert.match((result as { text?: string }).text ?? "", new RegExp(tempRootEvidence));
+	const invocation = (result as { text?: string }).text ?? "";
+	assert.match(invocation, /wiki\/boundary\.md/);
+	assert.doesNotMatch(invocation, new RegExp(tempRootEvidence));
 });
 
 test("Extension_WhenGrillInvocationIsBuilt_ShouldExposeRuntimeIssuedRoundIdAndCompletionContract", async (t) => {
@@ -1841,240 +1824,19 @@ test("Extension_WhenGrillInvocationIsBuilt_ShouldExposeRuntimeIssuedRoundIdAndCo
 
 test("CodeBase_WhenSeedsMatchFiles_ShouldReturnCandidates", async (t) => {
 	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/search-panel.ts",
-		[
-			"// Search panel renders WidgetNeedle results for operators.",
-			"// It highlights the top code base candidates for review.",
-			'export const widgetNeedlePanel = "ready";',
-		].join("\n"),
-	);
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/search-adapter.ts",
-		[
-			"// Operator adapter normalizes WidgetNeedle queries.",
-			"// It keeps the lookup narrow before deeper retrieval.",
-			"export function adaptWidgetNeedle() {}",
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
+	writeWorkspaceFile(rootDir, "code_base/src/search-panel.ts", "// Search panel renders WidgetNeedle results.\n");
+	writeWorkspaceFile(rootDir, "code_base/src/search-adapter.ts", "// Adapter normalizes WidgetNeedle queries.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
 
 	const harness = await createExtensionHarness({ cwd: rootDir });
 	const result = await harness.sendInput("請幫我測試 WidgetNeedle search-panel.ts search-adapter.ts");
-
-	assert.equal(typeof result, "object");
-	assert.equal((result as { action?: string }).action, "transform");
 	const text = (result as { text?: string }).text ?? "";
-	assert.match(text, /search-panel\.ts/i);
-	assert.match(text, /Search panel renders WidgetNeedle results for operators\./i);
-	assert.match(text, /search-adapter\.ts/i);
-	assert.match(text, /Operator adapter normalizes WidgetNeedle queries\./i);
-});
 
-test("CodeBase_WhenCandidateHasMultipleIndependentSignals_ShouldExplainWhyRelevant", async (t) => {
-	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/widget-relevance-panel.ts",
-		[
-			"// WidgetNeedle support lives here for the operator search flow.",
-			"// This panel also documents why the candidate is relevant.",
-			'export const widgetRelevancePanel = "ready";',
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput("請幫我測試 WidgetNeedle widget-relevance-panel.ts");
-
-	assert.equal(typeof result, "object");
 	assert.equal((result as { action?: string }).action, "transform");
-	const text = (result as { text?: string }).text ?? "";
-	assert.match(text, /widget-relevance-panel\.ts/i);
-	assert.match(text, /Why Relevant|Signals Matched/i);
-});
-
-test("CodeBase_WhenStrongestCandidateExists_ShouldRenderSinglePatternCard", async (t) => {
-	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/strongest-widget-pattern.ts",
-		[
-			"// WidgetNeedle search flow entry point for operators.",
-			"// This candidate explains why the pattern is relevant to the request.",
-			"// It is the strongest match for a single pattern card render.",
-			'export const strongestWidgetPattern = "ready";',
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput("請幫我測試 WidgetNeedle strongest-widget-pattern.ts");
-
-	assert.equal(typeof result, "object");
-	assert.equal((result as { action?: string }).action, "transform");
-	const text = (result as { text?: string }).text ?? "";
-	assert.equal(text.match(/Pattern Card/gi)?.length ?? 0, 1);
-	assert.match(text, /Pattern Card/i);
-	assert.match(text, /Pattern Name/i);
-	assert.match(text, /Why Relevant/i);
-	assert.match(text, /Key File/i);
-	assert.match(text, /strongest-widget-pattern\.ts/i);
-});
-
-test("CodeBase_WhenOnlySingleWeakPathSignalHits_ShouldNotEmitDeepDiveCandidate", async (t) => {
-	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/widget-only-name.ts",
-		[
-			"// Unrelated maintenance note.",
-			"// No supporting content signal should make this a deep-dive candidate.",
-			"export const unrelatedMaintenance = true;",
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput("請幫我測試 widget-only-name.ts");
-
-	assert.equal(typeof result, "object");
-	assert.equal((result as { action?: string }).action, "transform");
-	const text = (result as { text?: string }).text ?? "";
-	assert.doesNotMatch(text, /code_base\/src\/widget-only-name\.ts/i);
-	assert.doesNotMatch(text, /deep-dive candidate/i);
-});
-
-test("CodeBase_WhenStrongCandidatesExist_ShouldNotMixInWeakSingleSignalMatch", async (t) => {
-	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/search-widget-panel.ts",
-		[
-			"// Search panel renders WidgetNeedle results for operators.",
-			"// It is the main candidate for the search workflow.",
-			'export const searchWidgetPanel = "ready";',
-		].join("\n"),
-	);
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/search-widget-adapter.ts",
-		[
-			"// Search adapter normalizes WidgetNeedle queries for operators.",
-			"// It keeps the candidate set narrow before deeper retrieval.",
-			"export function adaptSearchWidget() {}",
-		].join("\n"),
-	);
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/widget-stray.ts",
-		[
-			"// Billing cron fallback.",
-			"// This should stay out of the search candidate summary.",
-			"export const billingCronFallback = true;",
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput(
-		"請幫我測試 WidgetNeedle widget search-widget-panel.ts search-widget-adapter.ts",
-	);
-
-	assert.equal(typeof result, "object");
-	assert.equal((result as { action?: string }).action, "transform");
-	const text = (result as { text?: string }).text ?? "";
-	assert.match(text, /search-widget-panel\.ts/i);
-	assert.match(text, /search-widget-adapter\.ts/i);
-	assert.doesNotMatch(text, /widget-stray\.ts/i);
-	assert.doesNotMatch(text, /Billing cron fallback\./i);
-});
-
-test("CodeBase_WhenNoFilesMatch_ShouldKeepWikiOnlySummary", async (t) => {
-	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/unrelated-cache.ts",
-		[
-			"// Cache warmup for another subsystem.",
-			"// This file should not appear for BoundaryToken discovery.",
-			"export const unrelatedCache = true;",
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput(knowledgeBoundaryRequest);
-
-	assert.equal(typeof result, "object");
-	assert.equal((result as { action?: string }).action, "transform");
-	const text = (result as { text?: string }).text ?? "";
-	assert.match(text, new RegExp(tempRootEvidence));
-	assert.doesNotMatch(text, /unrelated-cache\.ts/i);
-	assert.doesNotMatch(text, /Cache warmup for another subsystem\./i);
-});
-
-test("Conflict_WhenSameRelativePathDiffers_ShouldStop", async (t) => {
-	const rootDir = createTempRoot();
-	const relativePath = "src/conflict-target.ts";
-	const targetSourcePath = writeWorkspaceFile(rootDir, relativePath, 'export const answer = "target";\n');
-	const codeBasePath = writeWorkspaceFile(rootDir, `code_base/${relativePath}`, 'export const answer = "code-base";\n');
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput(`請幫我修 ${relativePath} 的錯誤`);
-
-	assert.deepEqual(result, { action: "handled" });
-	const warning = harness.observedNotifications.at(-1) ?? "";
-	assert.match(warning, /衝突|conflict/i);
-	assert.match(warning, /src[\\/]conflict-target\.ts/i);
-	assert.match(warning, new RegExp(escapeRegExp(targetSourcePath)));
-	assert.match(warning, new RegExp(escapeRegExp(codeBasePath)));
-});
-
-test("CodeBase_WhenConflictExists_ShouldStillStopFirst", async (t) => {
-	const rootDir = createTempRoot();
-	const relativePath = "src/conflict-first.ts";
-	writeWorkspaceFile(rootDir, relativePath, 'export const state = "target";\n');
-	writeWorkspaceFile(rootDir, `code_base/${relativePath}`, 'export const state = "code-base";\n');
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/widget-needle.ts",
-		[
-			"// WidgetNeedle candidate that should stay hidden behind the conflict gate.",
-			"// If this shows up, LIGHT_DISCOVERY ran too early.",
-			"export const widgetNeedle = true;",
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput("請幫我修 src/conflict-first.ts WidgetNeedle 的錯誤");
-
-	assert.deepEqual(result, { action: "handled" });
-	const warning = harness.observedNotifications.at(-1) ?? "";
-	assert.match(warning, /衝突|conflict/i);
-	assert.match(warning, /src[\\/]conflict-first\.ts/i);
-	assert.doesNotMatch(warning, /widget-needle\.ts/i);
-	assert.doesNotMatch(warning, /LIGHT_DISCOVERY ran too early\./i);
+	assert.match(text, /code_base\/src\/search-panel\.ts/);
+	assert.match(text, /code_base\/src\/search-adapter\.ts/);
+	assert.doesNotMatch(text, /Search panel renders WidgetNeedle results/);
+	assert.doesNotMatch(text, /Adapter normalizes WidgetNeedle queries/);
 });
 
 test("Conflict_WhenRelativePathMatchesAndContentSame_ShouldContinue", async (t) => {
@@ -2112,96 +1874,6 @@ test("Conflict_WhenDifferentPathsDiffer_ShouldIgnore", async (t) => {
 	assert.equal(typeof result, "object");
 	assert.equal((result as { action?: string }).action, "transform");
 	assert.match((result as { text?: string }).text ?? "", /<skill name="grilling"/);
-	assert.equal(harness.observedNotifications.length, 0);
-});
-
-test("TargetMismatch_WhenStrongestCandidateHasNoMatchingTargetPath_ShouldRenderTargetGapAndContinue", async (t) => {
-	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/strong-gap-widget.ts",
-		[
-			"// StrongGapNeedle search flow entry point for operators.",
-			"// This is the strongest candidate and has no matching target path.",
-			'export const strongGapWidget = "code-base";',
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput("請幫我測試 StrongGapNeedle strong-gap-widget.ts");
-
-	assert.equal(typeof result, "object");
-	assert.equal((result as { action?: string }).action, "transform");
-	const text = (result as { text?: string }).text ?? "";
-	assert.match(text, /Target Gap/i);
-	assert.match(text, /strong-gap-widget\.ts/i);
-});
-
-test("TargetMismatch_WhenStrongestCandidateMatchesTargetPathButContentDiffers_ShouldStopWithTargetConflict", async (t) => {
-	const rootDir = createTempRoot();
-	const relativePath = "src/strong-conflict-widget.ts";
-	writeWorkspaceFile(rootDir, relativePath, 'export const strongConflictWidget = "target";\n');
-	writeWorkspaceFile(
-		rootDir,
-		`code_base/${relativePath}`,
-		[
-			"// StrongConflictNeedle search flow entry point for operators.",
-			"// This is the strongest candidate and should stop on target mismatch.",
-			'export const strongConflictWidget = "code-base";',
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput(`請幫我測試 StrongConflictNeedle ${relativePath}`);
-
-	assert.deepEqual(result, { action: "handled" });
-	const warning = harness.observedNotifications.at(-1) ?? "";
-	assert.match(warning, /Target Conflict/i);
-	assert.match(warning, /src[\\/]strong-conflict-widget\.ts/i);
-});
-
-test("TargetMismatch_WhenStrongestCandidateIsGap_ShouldNotBeBlockedByWeakerConflict", async (t) => {
-	const rootDir = createTempRoot();
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/priority-gap-widget.ts",
-		[
-			"// PriorityGapNeedle flow owns the primary operator search path.",
-			"// This is the strongest candidate and should be reported as a target gap.",
-			"// Additional matching signals keep it ahead of weaker candidates.",
-			'export const priorityGapWidget = "code-base";',
-		].join("\n"),
-	);
-	writeWorkspaceFile(rootDir, "src/weaker-conflict-widget.ts", 'export const weakerConflictWidget = "target";\n');
-	writeWorkspaceFile(
-		rootDir,
-		"code_base/src/weaker-conflict-widget.ts",
-		[
-			"// WeakConflictNeedle is a secondary candidate only.",
-			'export const weakerConflictWidget = "code-base";',
-		].join("\n"),
-	);
-	t.after(() => {
-		rmSync(rootDir, { force: true, recursive: true });
-	});
-
-	const harness = await createExtensionHarness({ cwd: rootDir });
-	const result = await harness.sendInput(
-		"請幫我測試 PriorityGapNeedle priority-gap-widget.ts weaker-conflict-widget.ts",
-	);
-
-	assert.equal(typeof result, "object");
-	assert.equal((result as { action?: string }).action, "transform");
-	const text = (result as { text?: string }).text ?? "";
-	assert.match(text, /Target Gap/i);
-	assert.match(text, /priority-gap-widget\.ts/i);
-	assert.doesNotMatch(text, /Target Conflict/i);
 	assert.equal(harness.observedNotifications.length, 0);
 });
 

@@ -23,6 +23,23 @@
 - finalgreen 證據：intent 12/12、Forge extension 91/91、loader smoke 2/2、`npm run check` exit 0、完整 `npm test` 146/146；證據位於 `.tmp/intent-route-only-systemprompt-*.log`。獨立 Standards 與 Spec final review 均為 0 findings，本 ticket 已完成；下一步只能等待使用者確認後再進入 Light Discovery。
 - `docs/handoff.md`、`CONTEXT.md`、`docs/adr/` 在本次設計前皆不存在；本次依 workflow 補齊。
 
+## 2026-08-22 Light Discovery 設計詞彙
+
+- `Light Discovery`：在 `start_forge` 之後，依原始 `userMessage` 從受限知識來源找出候選檔案的獨立流程。
+- `Discovery public seam`：Light Discovery 對外唯一入口；只接收 workspace/root 與 raw `userMessage`。
+- `Input normalization`、`deterministic Core`、`Output normalization`：Light Discovery 內部固定的三段責任邊界。
+- `File metadata match`：以檔名、相對路徑與穩定 metadata 比對候選，不代表已讀取或理解檔案內容。
+- `Partial discovery`：部分來源或檔案失敗時保留可用 matches，並附 warning；是否 `WAIT_USER` 仍由 workflow 決定。
+- 本設計只涵蓋 `wiki/` 與 `code_base/` 的候選檔名／metadata；不改 Intent route-only contract，也不推進 Grill 或 Deep Knowledge。
+
+## 2026-08-22 Light Discovery 實作與驗證完成
+
+- 使用者已核准 ADR-0014 第一階段實作：只掃 `wiki/`、`code_base/` 一般檔案 metadata，每來源最多 3 筆、相對路徑固定排序，輸出 `matches`、`warnings`、`sourceAvailability`；既有缺失來源人工核准流程保留。
+- production public seam 位於 `forge-runtime/src/discovery/light-discovery.ts`，只收 rootDir 與 raw userMessage；normalize、scan、output 均在 module 內完成，不產生 full content、summary 或 snapshot。
+- `forge-runtime/extensions/forge-runtime.ts` 在模組外建立 Grill／Deep Knowledge 相容 adapter；兩個 caller 傳 raw message。adapter 已讀取內容後依 raw request seeds 真實計算 path/content、`matchedSeeds`、`score`，只讓符合契約者進入 `codeBaseCandidates`。
+- 測試遷移已清除 2 個 stale old API callers，刪除 10 個 ADR 淘汰測試、改寫／保留 5 個，還原 2 個強相關 Deep expectations。
+- 驗證完成：互動 9/9、focused 79/79、`npm run check` exit 0、完整 `npm test` 140/140，0 fail/skip/todo；僅有既有 Node `DEP0190` warning。implementation、verification 與 two-axis review 均完成。
+
 ## 已驗證的上游 PI 事實
 
 - PI core 明確走 minimal 路線，擴充應優先使用 extension，而不是把 workflow 能力塞進 core。來源：`pi-main/CONTRIBUTING.md`。

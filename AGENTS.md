@@ -11,6 +11,7 @@
 - 探索委派：主代理需要閱讀使用者工作項目的文件或程式碼來建立理解時，先委派唯讀子代理並等待摘要；子代理名稱**不可**重複使用；此角色固定使用 `gpt-5.6-luna` 與 `high` reasoning effort，且不再遞迴委派。系統、技能與代理規則的讀取不觸發此流程。
 - 子代理收尾：主代理收到任何子代理的回傳結果後，必須優先執行 `close_agent`；工具不可用時，明確終止該次行程，避免閒置子代理被系統自動復用。
 - 執行測試、驗證、或任何會跑程式的檢查時，一律委派子代理；主 context 不直接跑測試命令。
+- 執行markdown文件撰寫時，一律委派子代理；主 context 不直接寫文件，**主程式碼例外，主context不碰測試，但可以寫主程式碼**。
 - `/Memory/record.md` 是開發目標、重大決策、實作里程碑與目前狀態的知識庫；`/Memory/lesson_learn.md` 是 bug、根因、修復方式與可重用教訓的知識庫。開始實作前須先參考兩份檔案。
 - 完成開發時，將目標、重大實作過程、驗證與狀態更新至 `/Memory/record.md`；將本輪發現的 bug、根因、修復方式與教訓更新至 `/Memory/lesson_learn.md`。沒有 bug 時明確記錄「本輪未發現新 bug」，不得捏造。
 - 兩份 Memory 文件都必須保留 YAML metadata，至少包含 `title`、`type`、`scope`、`updated`、`source`、`status`；`updated` 使用 `YYYY-MM-DD`。

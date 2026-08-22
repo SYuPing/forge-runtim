@@ -1,178 +1,99 @@
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, relative, resolve } from "node:path";
-import { discoverEvidence, type LightDiscoveryEvidence } from "../knowledge/discovery-engine.ts";
-import type { GrillEvidenceCandidate, GrillEvidenceKind, GrillEvidenceSnapshot } from "../runtime/session-state.ts";
-import { detectTargetMismatch, findCodeBaseCandidates, loadWikiDiscoverySources, type CodeBaseCandidate } from "./discovery-sources.ts";
+import { readdirSync, statSync } from "node:fs";
+import { basename, extname, relative, resolve } from "node:path";
+
+export type LightDiscoverySource = "wiki" | "code_base";
+
+export interface LightDiscoveryMatch {
+	source: LightDiscoverySource;
+	relativePath: string;
+	fileName: string;
+	extension: string;
+}
 
 export interface LightDiscoveryResult {
-	codeBaseCandidates: CodeBaseCandidate[];
-	snapshot: GrillEvidenceSnapshot;
-	summary: string;
+	matches: LightDiscoveryMatch[];
+	warnings: string[];
+	sourceAvailability: Readonly<Record<LightDiscoverySource, boolean>>;
 }
 
-export async function buildLightDiscoverySummary(rootDir: string, seeds: string[]): Promise<string> {
-	return (await runLightDiscovery(rootDir, seeds)).summary;
-}
+/** Light Discovery 的唯一 public seam：只接受 workspace/root 與原始使用者輸入。 */
+export function runLightDiscovery(rootDir: string, userMessage: string): LightDiscoveryResult {
+	const seeds = normalizeInput(userMessage);
+	const matches: LightDiscoveryMatch[] = [];
+	const warnings: string[] = [];
+	const sourceAvailability = { wiki: false, code_base: false };
 
-export async function runLightDiscovery(rootDir: string, seeds: string[]): Promise<LightDiscoveryResult> {
-	if (seeds.length === 0) {
-		return { codeBaseCandidates: [], snapshot: createGrillEvidenceSnapshot([]), summary: "" };
-	}
-
-	const sourceMatches = loadWikiDiscoverySources(rootDir)
-		.filter((source) => matchesAnySeed(source.content, seeds) || matchesAnySeed(source.path, seeds))
-		.map((source) => ({
-			content: source.content,
-			source: source.path,
-			summary: summarize(source.content),
-			title: basename(source.path),
-		}));
-	const codeBaseCandidates = findCodeBaseCandidates(rootDir, seeds);
-	const selectedWikiSources = sourceMatches.slice(0, 3);
-
-	if (sourceMatches.length === 0 && codeBaseCandidates.length === 0) {
-		return {
-			codeBaseCandidates,
-			snapshot: createGrillEvidenceSnapshot([]),
-			summary: `Light discovery seeds: ${seeds.join(", ")}`,
-		};
-	}
-
-	const evidence = (await discoverEvidence({ documents: selectedWikiSources, mode: "light" })) as LightDiscoveryEvidence[];
-	return {
-		codeBaseCandidates,
-		snapshot: createGrillEvidenceSnapshot([
-			...selectedWikiSources.map((source, index) =>
-				createGrillEvidenceCandidate(
-					"wiki",
-					`wiki/${relative(resolve(rootDir, "wiki"), source.source).replaceAll("\\", "/")}`,
-					source.title,
-					source.content,
-					{ discoveryEvidenceId: evidence[index]?.evidenceId },
-				),
-			),
-			...codeBaseCandidates.flatMap((candidate) => createCodeBaseEvidenceCandidates(rootDir, candidate)),
-		]),
-		summary: [
-			`Light discovery seeds: ${seeds.join(", ")}`,
-			...evidence.map((item) => `- ${item.title}: ${item.summary} [${item.evidenceId}]`),
-			...codeBaseCandidates.map(
-				(candidate) =>
-					[
-						`- code_base/${candidate.relativePath}: ${summarize(candidate.content)} [code-base-candidate score=${candidate.score}]`,
-						`  Signals Matched: ${candidate.matches.join(", ")}`,
-						`  Why Relevant: ${candidate.whyRelevant}`,
-					].join("\n"),
-			),
-			...(codeBaseCandidates[0] ? [buildPatternCard(rootDir, codeBaseCandidates[0])] : []),
-		].join("\n"),
-	};
-}
-
-function createCodeBaseEvidenceCandidates(rootDir: string, candidate: CodeBaseCandidate): GrillEvidenceCandidate[] {
-	const metadata = {
-		matches: [...candidate.matches],
-		relativePath: candidate.relativePath,
-		score: candidate.score,
-		whyRelevant: candidate.whyRelevant,
-	};
-	const evidenceCandidates = [
-		createGrillEvidenceCandidate(
-			"code_base",
-			`code_base/${candidate.relativePath}`,
-			basename(candidate.relativePath),
-			candidate.content,
-			metadata,
-		),
-	];
-	const targetSourcePath = resolve(rootDir, candidate.relativePath);
-	if (existsSync(targetSourcePath) && statSync(targetSourcePath).isFile()) {
-		evidenceCandidates.push(
-			createGrillEvidenceCandidate(
-				"target",
-				`target/${candidate.relativePath}`,
-				basename(candidate.relativePath),
-				readFileSync(targetSourcePath, "utf8"),
-				metadata,
-			),
-		);
-	}
-	return evidenceCandidates;
-}
-
-function createGrillEvidenceSnapshot(candidates: GrillEvidenceCandidate[]): GrillEvidenceSnapshot {
-	return deepFreeze({
-		candidates: Object.fromEntries(candidates.map((candidate) => [candidate.candidateId, candidate])) as Record<
-			string,
-			GrillEvidenceCandidate
-		>,
-		manifest: candidates.map(({ candidateId, kind, source, title }) => ({ candidateId, kind, source, title })),
-	});
-}
-
-function createGrillEvidenceCandidate(
-	kind: GrillEvidenceKind,
-	source: string,
-	title: string,
-	content: string,
-	metadata: GrillEvidenceCandidate["metadata"],
-): GrillEvidenceCandidate {
-	const normalizedContent = content.replace(/\r\n?/g, "\n");
-	const candidateId = `ev-${createHash("sha256")
-		.update(JSON.stringify(["forge-grill-evidence-v1", kind, source, normalizedContent]))
-		.digest("hex")}` as GrillEvidenceCandidate["candidateId"];
-	return { candidateId, content, kind, metadata, source, title };
-}
-
-function deepFreeze<T>(value: T): T {
-	if (value && typeof value === "object" && !Object.isFrozen(value)) {
-		for (const nestedValue of Object.values(value as Record<string, unknown>)) {
-			deepFreeze(nestedValue);
+	for (const source of ["wiki", "code_base"] as const) {
+		const sourceRoot = resolve(rootDir, source);
+		let files: string[];
+		try {
+			files = collectFiles(sourceRoot, warnings, source);
+			sourceAvailability[source] = true;
+		} catch (error) {
+			warnings.push(`${source} 來源無法讀取：${formatError(error)}`);
+			continue;
 		}
-		Object.freeze(value);
+
+		const sourceMatches: LightDiscoveryMatch[] = [];
+		if (seeds.length === 0) continue;
+		for (const filePath of files) {
+			try {
+				const relativePath = relative(sourceRoot, filePath).replaceAll("\\", "/");
+				const fileName = basename(relativePath);
+				if (!seeds.some((seed) => matchesPath(seed, relativePath, fileName))) continue;
+				sourceMatches.push({ source, relativePath, fileName, extension: extname(fileName) });
+			} catch (error) {
+				warnings.push(`${source} 檔案 metadata 失敗：${formatError(error)}`);
+			}
+		}
+
+		matches.push(...sourceMatches.sort(compareMatches).slice(0, 3));
 	}
-	return value;
+
+	return { matches: matches.sort(compareMatches), warnings, sourceAvailability };
 }
 
-function matchesAnySeed(content: string, seeds: string[]): boolean {
-	const lower = content.toLowerCase();
-	return seeds.some((seed) => lower.includes(seed.toLowerCase()));
+function normalizeInput(message: string): string[] {
+	const tokens = message
+		.match(/[\w./-]+\.[A-Za-z0-9]+|`([^`]+)`|[A-Z]{2,}-\d+/g)
+		?.map((token) => token.replaceAll("`", "").trim()) ?? [];
+	const words = message
+		.split(/\s+/)
+		.flatMap((token) => token.trim().split(/(?<=[\u4e00-\u9fff])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\u4e00-\u9fff])/))
+		.filter((word) => word.length >= 2 && /[A-Za-z\u4e00-\u9fff]/.test(word))
+		.slice(0, 6);
+	return [...new Set([...tokens, ...words])].slice(0, 8).map((token) => token.toLowerCase());
 }
 
-function summarize(content: string): string {
-	return content
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0 && !line.startsWith("#"))
-		.slice(0, 2)
-		.join(" ")
-		.slice(0, 220);
+function matchesPath(seed: string, relativePath: string, fileName: string): boolean {
+	return relativePath.toLowerCase().includes(seed) || fileName.toLowerCase().includes(seed);
 }
 
-
-function buildPatternCard(
-	rootDir: string,
-	candidate: { content: string; matches: string[]; path: string; relativePath: string; whyRelevant: string },
-): string {
-	const mismatch = detectTargetMismatch(rootDir, candidate);
-	return [
-		"Pattern Card",
-		`Pattern Name: ${toPatternName(candidate.relativePath)}`,
-		`Why Relevant: ${candidate.whyRelevant}`,
-		`Signals Matched: ${candidate.matches.join(", ")}`,
-		`Key File: code_base/${candidate.relativePath}`,
-		`Core Structure: ${summarize(candidate.content)}`,
-		`Mismatch Against Target: ${mismatch.status}`,
-		`Target File: ${mismatch.targetSourcePath}`,
-	].join("\n");
+function collectFiles(root: string, warnings?: string[], source?: LightDiscoverySource): string[] {
+	const files: string[] = [];
+	for (const entry of readdirSync(root, { withFileTypes: true })) {
+		const path = resolve(root, entry.name);
+		if (entry.isDirectory()) {
+			try {
+				files.push(...collectFiles(path, warnings, source));
+			} catch (error) {
+				warnings?.push(`${source ?? "source"} 目錄 metadata 失敗：${formatError(error)}`);
+			}
+		} else if (entry.isFile()) {
+			try {
+				if (statSync(path).size >= 0) files.push(path);
+			} catch (error) {
+				warnings?.push(`${source ?? "source"} 檔案 metadata 失敗：${formatError(error)}`);
+			}
+		}
+	}
+	return files;
 }
 
-function toPatternName(relativePath: string): string {
-	return basename(relativePath)
-		.replace(/\.[^.]+$/, "")
-		.split(/[-_.]+/)
-		.filter(Boolean)
-		.map((part) => part[0]?.toUpperCase() + part.slice(1))
-		.join(" ");
+function compareMatches(left: LightDiscoveryMatch, right: LightDiscoveryMatch): number {
+	return left.source.localeCompare(right.source) || left.relativePath.localeCompare(right.relativePath);
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

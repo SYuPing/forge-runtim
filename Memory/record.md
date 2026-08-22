@@ -68,6 +68,14 @@ status: complete
 - `pi-main/` 只保留核准的 test-only Terminal seam 與 ADR-0012 display-only core 路徑；其他 core 變更禁止。
 - 未解風險：queued steer、extension API fire-and-forget lifecycle、Node `DEP0190` warning、`packages/ai` 六個 baseline errors。
 
+## 2026-08-22 Light Discovery 設計核准（當時設計階段狀態）
+
+- 目標：建立 `start_forge → Light Discovery` 的單一可插入流程，依原始 `userMessage` 在 `wiki/` 與 `code_base/` 找出候選檔名／metadata。
+- 重大決策：對外只有 workspace/root 與 raw message 的 public seam；內部固定 Input normalization → deterministic Core → Output normalization；每來源最多 3 筆且固定排序。
+- 重大邊界：只輸出 matches 與 warnings/source availability；metadata 僅 `source`、`relativePath`、`fileName`、`extension`；不做全文、不回傳 full-content／summary／Pattern Card／Grill snapshot／決策；不搜尋 target source、docs、Memory、pi-main 或 OS。
+- 相容決策：既有 Grill 所需 full-content/snapshot 由模組外部 adapter 暫時提供；既有 extension seed extraction 於實作時移入 Light Discovery module，caller 只傳 raw message。
+- 當時設計階段狀態：設計已核准，尚未實作或驗證。後續 current completion 見下方「2026-08-22 Light Discovery 實作與驗證」。詳細決策見 [`ADR-0014`](../docs/adr/ADR-0014-light-discovery-file-metadata-module.md)，執行計畫見 [`docs/PLAN-A.md`](../docs/PLAN-A.md)。
+
 ## 來源索引
 
 完整決策與證據見 `FORGE_RUNTIME_Arch_v4.md`、`CONTEXT.md`、`docs/PLAN-A.md`、`docs/PLAN-B.md`、`docs/adr/`、`docs/handoff.md` 與 `agent-state/`。本文件不重複收錄逐筆 bug；請查閱 [`lesson_learn.md`](./lesson_learn.md)。
@@ -78,3 +86,12 @@ status: complete
 - 重大實作：LLM 僅輸出 `passthrough`／`start_forge`；路由規則與 raw input 分離，`IntentModelContext` 是唯一第二參數 seam，`IntentInput` 不含 model context；workflow guard、10 秒 fail-closed、rawText 保留、`/grill-run` canonical wrapper、extension handoff private seed helper 與 faux provider queue／route call-count 調整已完成；未修改 `pi-main/`。
 - 驗證：intent 12/12、extension 91/91、loader 2/2、`npm run check` exit 0、`npm test` 146/146；證據位於 `.tmp/intent-route-only-systemprompt-*.log`。
 - 2026-08-22 最終審查通過：Standards 與 Spec final review 均為 0 findings；本 ticket acceptance／closure 完成。下一步只能等待使用者確認後再進入 Light Discovery。詳細決策見 [`ADR-0013`](../docs/adr/ADR-0013-intent-route-only-llm.md)，狀態見 [`agent-state/intent-route-only-llm-20260821.md`](../agent-state/intent-route-only-llm-20260821.md)。
+
+## 2026-08-22 Light Discovery 實作與驗證
+
+- 使用者核准 ADR-0014 第一階段並完成實作：`wiki/`、`code_base/` metadata-only discovery，各來源最多 3 筆、相對路徑 deterministic，輸出 warnings/sourceAvailability；缺失來源人工核准流程保留。
+- public seam 只收 rootDir 與 raw userMessage；相容 adapter 留在 `forge-runtime.ts` 外部，負責 Grill／Deep Knowledge 所需內容與 relevance 計算，未擴大 Light Discovery contract。
+- 測試遷移清除 2 個 stale callers、移除 10 個淘汰測試、改寫／保留 5 個並還原 2 個強相關 Deep expectations。production bug 已修復：adapter 依 raw request seeds 計算 path/content、`matchedSeeds`、`score`。
+- 驗證：互動 9/9、focused 79/79、`npm run check` exit 0、完整 `npm test` 140/140，0 fail/skip/todo；證據為 `forge-runtime/.tmp/review-fix-verify-*.log`。implementation、verification 與 two-axis review 均完成；僅有既有 Node `DEP0190` warning。
+- 依使用者於 2026-08-22 核准的 v4 分階段交付例外，本輪僅完成 phase one 的 metadata-only discovery；v4 end-state 不變，完整多來源／Summary／Evidence ID 另案處理。
+- 初次 Standards 與 Spec review 各有 3 個 findings；採納修正後 Spec re-review 為 0 findings，Standards re-review 的 stale counts 已完成文件修正。

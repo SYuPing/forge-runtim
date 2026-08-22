@@ -62,6 +62,69 @@
 
 ---
 
+# Plan A：Light Discovery 檔名與 metadata 模組
+
+日期：2026-08-22
+
+工作項目：`light-discovery-file-metadata-20260822`
+
+狀態：本 ticket 實作、驗證、雙軸審查與文件收尾均完成。已依使用者於 2026-08-22 核准的 v4 分階段交付例外完成第一階段。
+
+## Scope
+
+- 接收 Intent 的 `start_forge` 後，由 workflow 將 workspace/root 與原始 `userMessage` 傳入 Light Discovery 唯一 public seam。
+- 以 Input normalization → deterministic Core → Output normalization 三段模組責任搜尋 root `wiki/`、`code_base/`。
+- 依檔名、相對路徑與穩定 metadata 找候選；每個來源最多 3 筆且固定排序。
+- 回傳 `matches` 與 warnings/source availability 狀態；移入既有 extension 私有 seed extraction，caller 只傳 raw message。
+- 保留外部 Grill 相容 adapter 的 full-content/snapshot 行為，不改 Grill／Deep Knowledge 決策。
+
+## Non-scope
+
+- 不改 Intent route-only contract。
+- 不搜尋 target source、`docs/`、`Memory/`、`pi-main/` 或 OS。
+- 不做全文內容、語意向量、summary、Pattern Card、Grill snapshot 或人類決策。
+- 不新增 YAML/frontmatter metadata 規範、dependency、class、factory、plugin registry。
+- 不修改 Grilling、Deep Knowledge 或 WAIT_USER 決策規則。
+
+## Exact candidate files
+
+| 檔案 | 預定變動 |
+| --- | --- |
+| `forge-runtime/src/discovery/light-discovery.ts` | 同一檔案內定義 input/output types，建立單一 public seam，實作 input/core/output 三段流程與 deterministic 檔名／metadata discovery。 |
+| `forge-runtime/extensions/forge-runtime.ts` | 只保留 caller 傳入 raw `userMessage`，移除並交接既有私有 seed extraction；接回外部 Grill adapter。 |
+| `forge-runtime/tests/discovery/light-discovery.test.ts` | focused unit tests：normalization、固定排序、每來源上限、metadata、partial failure。 |
+| `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | integration/regression：`start_forge` 呼叫 seam、raw message、Grill 相容 adapter 與既有流程不變。 |
+
+若實際程式結構顯示候選檔案不適用，須先更新本 Plan 與 ADR，再進入實作；不得默默擴大範圍。
+
+## TDD execution order
+
+1. 建立 focused RED：public seam input/output、兩來源候選、固定排序與每來源 3 筆上限。
+2. 補 RED：metadata 欄位、缺來源、單一檔案／來源失敗的 partial result 與 warning、禁止全文內容輸出。
+3. 補 RED：extension `start_forge` integration、raw message passthrough、Grill adapter regression。
+4. 以最小模組實作 Input normalization → deterministic Core → Output normalization，使 focused tests GREEN。
+5. 執行 focused tests、package check，再執行完整 suite；所有驗證由獨立代理執行。
+6. 由不同代理完成 Standards／Spec review；若有 findings，先修正再重跑受影響驗證。
+
+## Test matrix
+
+| 類型 | 驗收 |
+| --- | --- |
+| happy path | raw message 產生兩來源候選，metadata 欄位完整且排序穩定。 |
+| source limit | 每來源最多 3 筆，超出部分依固定排序截斷。 |
+| deterministic | 相同 input 與 filesystem state 兩次結果完全相同。 |
+| missing source | `wiki/` 或 `code_base/` 缺失時，輸出 source availability／warning，不搜尋邊界外路徑。 |
+| partial failure | 單一檔案或來源失敗時保留其他 matches 並回傳 warning。 |
+| output boundary | output 不含完整內容、summary、Pattern Card、snapshot 或決策。 |
+| integration | `start_forge` 只傳 raw message；Grill 仍由外部 adapter 取得既有 full-content/snapshot。 |
+| edge | 空白輸入、特殊字元、重複檔名、無 metadata、非支援副檔名與不可讀項目不破壞 deterministic contract。 |
+
+## Rollback
+
+回退本 ticket 的 Light Discovery implementation/test 變更與本 Plan 新增區塊，保留 `ADR-0014` 與 `CONTEXT.md` 的設計歷史；恢復 caller 至既有流程時不得重新引入 Intent 衍生欄位，也不得修改 `pi-main/`。
+
+---
+
 # Plan A 歷史基線：Grill Completion Recovery 與真實互動驗收
 
 日期：2026-08-13（2026-08-17 新增 active follow-up）
@@ -1036,9 +1099,46 @@ TDD 垂直切片已完成：core streaming RED → minimal route；persistence/c
 
 ### Final closeout（2026-08-22）
 
-- Standards final review：0 findings；Spec final review：0 findings。
+- Standards final review：0 發現事項；Spec final review：0 發現事項。
 - 本 ticket acceptance／closure 已完成，沒有進入 Light Discovery；下一步只能等待使用者確認。
 
 ### Rollback
 
 回退本 ticket 的 production/test commit，並同步回退 ADR、Context、Plan、handoff、Memory 與 agent-state；不回退或修改 `pi-main/`。
+
+---
+
+## 2026-08-22 Plan A：Light Discovery 檔名與 metadata
+
+### 狀態
+
+實作、驗證與獨立雙軸審查均完成；狀態為 `implementation+verification+two-axis-review-complete`。
+
+### 建置範圍與決策
+
+- 依使用者核准的 ADR-0014 第一階段，只掃 `wiki/`、`code_base/` 一般檔案 metadata；每來源最多 3 筆，依相對路徑 deterministic 排序。
+- public seam 只收 rootDir 與 raw userMessage；module 內完成 normalize、scan、output，輸出 `matches`、`warnings`、`sourceAvailability`。
+- Grill／Deep Knowledge 相容 adapter 留在 module 外並讀取內容計算 relevance；Light Discovery 本身不產生 full content、summary 或 snapshot。缺失來源人工核准流程保留。
+
+### 修改檔案
+
+- Production：`forge-runtime/src/discovery/light-discovery.ts`、`forge-runtime/extensions/forge-runtime.ts`。
+- 參考／證據（未修改）：`forge-runtime/src/discovery/discovery-sources.ts`，僅用於確認既有 discovery source 邊界。
+- Tests：`forge-runtime/tests/discovery/light-discovery.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`，及測試遷移涉及的三個既有 test 檔。
+- 文件：`CONTEXT.md`、`docs/adr/ADR-0014-light-discovery-file-metadata-module.md`、`docs/PLAN-A.md`、`docs/handoff.md`、`Memory/record.md`、`Memory/lesson_learn.md`、`agent-state/light-discovery-file-metadata-20260822.md`。
+
+### 驗證
+
+- 互動 9/9、focused 79/79、`npm run check` exit 0、完整 `npm test` 140/140；0 fail、0 skip、0 todo。
+- 證據：`forge-runtime/.tmp/review-fix-verify-*.log`。僅有既有 Node `DEP0190` warning，無殘留程序。
+
+### 測試遷移與修復紀錄
+
+- 清除 2 個 stale old API callers；刪除 10 個 ADR 淘汰測試、改寫／保留 5 個，並還原 2 個強相關 Deep expectations。
+- 修復 adapter 固定只有 path signal 導致 relevance gate 將 `READY_FOR_DEEP` 誤回 `WAIT_USER` 的 production bug；adapter 現依 raw request seeds 計算 path/content、`matchedSeeds`、`score`。
+
+### 雙軸審查收尾
+
+- 初次 Standards 與 Spec review 各有 3 個發現事項，已採納並完成修正。
+- 修正後 Spec re-review 為 0 發現事項；Standards re-review 僅發現過時數字，已修正本節與交付文件中的目前數字。
+- 實作、驗證與雙軸審查均完成；未解風險僅為既有 Node `DEP0190` warning，v4 後續階段另案處理。

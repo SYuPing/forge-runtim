@@ -39,11 +39,15 @@ status: active
 20. **loader smoke 混入不相關 LLM prompt**：loader smoke 若夾帶 LLM prompt，runtime 對照約 21.5s；純 loader smoke 約 1.4s。拆開 smoke 與 prompt 驗證，避免把耗時誤判為 loader 問題；證據：`forge-runtime/tests/extensions/pi-extension-loader.test.ts`、`.tmp/intent-route-only-scoped-pi-extension-loader.log`。
 21. **路由規則與不可信輸入未明確隔離的 injection 風險**：router 規則固定放在 `systemPrompt`，raw input 以獨立 `user` message 傳入；新增 injection structure regression，並調整 faux provider queue／route call-count，確認分類 call 與 Grill call 不混序。教訓是不要把使用者文字拼入 system prompt，也不要用共享序列位置猜測路由是否成功；證據：`forge-runtime/src/intent/intent-understanding.ts`、`forge-runtime/tests/intent/intent-understanding.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、`.tmp/intent-route-only-systemprompt-focused-intent.log`、`.tmp/intent-route-only-systemprompt-focused-extension.log`。
 
+22. **Light Discovery adapter relevance regression**：adapter 固定只提供 path signal，但 `evaluateCandidateRelevance` 契約要求 path 與 content，造成符合條件的 `READY_FOR_DEEP` 誤回 `WAIT_USER`。修復為 adapter 已讀取內容後依 raw request seeds 真實計算 path、content、`matchedSeeds`、`score`，再篩入 `codeBaseCandidates`；Light Discovery 本體維持 metadata-only。證據：`forge-runtime/extensions/forge-runtime.ts`、`src/discovery/discovery-sources.ts`、`.tmp/verify-interactive.log`、`.tmp/reverify-interactive.log`。
+23. **Light Discovery 測試 API 遷移殘留**：兩個 stale old API callers 與 15 個 skip 使測試不能代表現行 public seam。清除 stale callers，刪除 10 個 ADR 淘汰測試、改寫／保留 5 個，並還原 2 個強相關 Deep expectations；該次歷史 final suite 為 139/139，目前 closeout 驗證為 140/140。證據：`forge-runtime/tests/discovery/light-discovery.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、三個測試遷移檔與 `forge-runtime/.tmp/review-fix-verify-*.log`。
+
 ## 可重用教訓
 
 ## 2026-08-22 最終審查
 
 - 最終 Standards 與 Spec review 均為 0 findings，未發現額外新 bug；既有驗證證據見 `agent-state/intent-route-only-llm-20260821.md` 與 `.tmp/intent-route-only-systemprompt-*.log`。
+- Light Discovery 初次 review 各有 3 個 findings；修正後 Spec re-review 為 0 findings，Standards re-review 的 stale counts 已修正。未發現新 bug。
 
 - 先驗證 host 的真實 callback contract，再建立 adapter；名稱相似不代表介面相同。
 - 測試必須走實際 distribution path、factory、render path 與 provider transport；fake harness 只能證明局部 wiring。

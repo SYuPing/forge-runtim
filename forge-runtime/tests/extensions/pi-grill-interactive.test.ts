@@ -17,7 +17,6 @@ import type { ExtensionAPI, ExtensionFactory } from "../../../pi-main/packages/c
 import { InteractiveMode } from "../../../pi-main/packages/coding-agent/src/modes/interactive/interactive-mode.ts";
 import { VirtualTerminal } from "../../../pi-main/packages/tui/test/virtual-terminal.ts";
 import forgeRuntimeExtension from "../../extensions/forge-runtime.ts";
-import { runLightDiscovery } from "../../src/discovery/light-discovery.ts";
 
 type ForgeExtensionApi = Parameters<typeof forgeRuntimeExtension>[0];
 
@@ -25,6 +24,12 @@ type ForgeExtensionApi = Parameters<typeof forgeRuntimeExtension>[0];
 // 這是僅限測試的 overload-set bridge；四個真實 TUI lifecycle tests 驗證 runtime contract。
 const installForgeRuntimeExtension = (pi: ExtensionAPI): void => forgeRuntimeExtension(pi as unknown as ForgeExtensionApi);
 const routerStartForgeResponse = () => fauxAssistantMessage('{"route":"start_forge"}');
+
+function extractCandidateId(context: unknown): string {
+	const candidateId = JSON.stringify(context).match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "expected the real Grill ingress to expose an opaque candidate id");
+	return candidateId;
+}
 
 async function waitForViewport(terminal: VirtualTerminal, text: string): Promise<void> {
 	for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -229,9 +234,6 @@ test("SuccessfulReadyForDeepCompletion_ReturnsTerminatingResultWithoutConfirmati
 			sessionManager: SessionManager.inMemory(),
 		});
 		await runtime.session.bindExtensions({});
-		const lightDiscovery = await runLightDiscovery(tempDir, ["test"]);
-		const candidateId = lightDiscovery.snapshot.manifest.find((entry) => entry.kind === "code_base")?.candidateId;
-		assert.ok(candidateId, "expected a code_base evidence candidate");
 		let resolveCompletion!: (result: unknown) => void;
 		const completion = new Promise<unknown>((resolve) => {
 			resolveCompletion = resolve;
@@ -243,9 +245,9 @@ test("SuccessfulReadyForDeepCompletion_ReturnsTerminatingResultWithoutConfirmati
 		});
 		faux.setResponses([
 			routerStartForgeResponse(),
-			fauxAssistantMessage([fauxToolCall("forge_grill_evidence", { candidateId }, { id: "call-evidence-ready-regression" })]),
-			() => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
-					evidence: [candidateId],
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_evidence", { candidateId: extractCandidateId(context) }, { id: "call-evidence-ready-regression" })]),
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+				evidence: [extractCandidateId(context)],
 					questions: [],
 					recommendation: { reason: "候選相關性足夠。", value: "進入 deep knowledge" },
 					requiresUserConfirmation: false,
@@ -438,22 +440,14 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 			sessionManager: SessionManager.create(tempDir),
 		});
 		await runtime.session.bindExtensions({});
-		const lightDiscovery = await runLightDiscovery(tempDir, ["test"]);
-		const candidate = lightDiscovery.codeBaseCandidates[0];
-		assert.ok(candidate, "expected a test code_base candidate");
-		const candidateId = lightDiscovery.snapshot.manifest.find((entry) => entry.kind === "code_base")?.candidateId;
-		assert.ok(candidateId, "expected a code_base evidence candidate");
-
 		faux.setResponses([
 			routerStartForgeResponse(),
-			fauxAssistantMessage(
-				[fauxToolCall("forge_grill_evidence", {
-					candidateId,
-				}, { id: "call-evidence-1" })],
-			),
-			fauxAssistantMessage(
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
+				candidateId: extractCandidateId(context),
+			}, { id: "call-evidence-1" })]),
+			(context) => fauxAssistantMessage(
 				[fauxToolCall("forge_grill_complete", {
-					evidence: [candidateId],
+					evidence: [extractCandidateId(context)],
 					questions: [],
 					recommendation: { reason: "候選相關性足夠。", value: "進入 deep knowledge" },
 					requiresUserConfirmation: false,

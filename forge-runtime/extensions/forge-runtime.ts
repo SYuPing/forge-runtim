@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import Type from "typebox";
@@ -13,16 +14,20 @@ import {
 import { discoverEvidence } from "../src/knowledge/discovery-engine.ts";
 import {
 	type CodeBaseCandidate,
-	detectCodeBaseConflict,
 	evaluateCandidateRelevance,
 	getKnowledgeAssetStatus,
 	loadWikiDiscoverySources,
 } from "../src/discovery/discovery-sources.ts";
-import { runLightDiscovery, type LightDiscoveryResult } from "../src/discovery/light-discovery.ts";
+import { runLightDiscovery, type LightDiscoveryMatch, type LightDiscoveryResult } from "../src/discovery/light-discovery.ts";
 import { understandIntent } from "../src/intent/intent-understanding.ts";
 import type { IntentModelContext } from "../src/intent/intent-types.ts";
 import { buildEvidenceSummaryText } from "../src/ui/evidence-summary-widget.ts";
-import { createForgeSessionState, type GrillEvidenceSnapshot, type WaitUserPayload } from "../src/runtime/session-state.ts";
+import {
+	createForgeSessionState,
+	type GrillEvidenceCandidate,
+	type GrillEvidenceSnapshot,
+	type WaitUserPayload,
+} from "../src/runtime/session-state.ts";
 import type { ForgeUiState } from "../src/ui/ui-state.ts";
 import { buildValidationRepairText } from "../src/ui/validation-repair-widget.ts";
 import { buildWaitUserPanel } from "../src/ui/wait-user-panel.ts";
@@ -142,10 +147,16 @@ interface ForgeExtensionApi {
 
 interface ActiveWorkflowContext {
 	goal: string;
-	lightDiscovery: LightDiscoveryResult;
+	lightDiscovery: GrillCompatibleDiscovery;
 	rootDir: string;
 	seeds: string[];
 	snapshot: GrillEvidenceSnapshot;
+}
+
+interface GrillCompatibleDiscovery {
+	codeBaseCandidates: CodeBaseCandidate[];
+	snapshot: GrillEvidenceSnapshot;
+	summary: string;
 }
 
 export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
@@ -432,15 +443,15 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			await publishState(pi, ctx ?? {}, sessionState.beginIntent(approvedRequest));
 			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(approvedRequest));
 			pendingGrillRun = true;
-				const seeds = extractDiscoverySeeds(approvedRequest);
-				const lightDiscovery = await runLightDiscovery(approvedRootDir, seeds);
+				const discovery = runLightDiscovery(approvedRootDir, approvedRequest);
+					const lightDiscovery = buildGrillCompatibleDiscovery(approvedRootDir, discovery, approvedRequest);
 			const round = sessionState.startGrillRound(approvedRequest, lightDiscovery.snapshot);
 			activeWorkflow = {
 				goal: approvedRequest,
 				lightDiscovery,
 				rootDir: approvedRootDir,
-					seeds,
-				snapshot: round.snapshot,
+				seeds: extractDeepDiscoverySeeds(approvedRequest),
+					snapshot: round.snapshot,
 			};
 			activateGrillTools();
 			await publishState(pi, ctx ?? {}, sessionState.beginGrill(approvedRequest));
@@ -514,26 +525,17 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return { action: "handled" as const };
 		}
 
-			const seeds = extractDiscoverySeeds(canonicalRequest);
-		const conflict = detectCodeBaseConflict(rootDir, seeds);
-		if (conflict) {
-			ctx?.ui?.notify?.(
-				`Target Conflict\n偵測到 code_base 衝突：${conflict.relativePath}\ncode_base: ${conflict.codeBasePath}\ntarget: ${conflict.targetSourcePath}\n請先釐清後再繼續。`,
-				"warn",
-			);
-			return { action: "handled" as const };
-		}
-
 			await publishState(pi, ctx ?? {}, sessionState.beginIntent(canonicalRequest));
 			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(canonicalRequest));
 			pendingGrillRun = true;
-			const lightDiscovery = await runLightDiscovery(rootDir, seeds);
+			const discovery = runLightDiscovery(rootDir, canonicalRequest);
+				const lightDiscovery = buildGrillCompatibleDiscovery(rootDir, discovery, canonicalRequest);
 			const round = sessionState.startGrillRound(canonicalRequest, lightDiscovery.snapshot);
 			activeWorkflow = {
 				goal: canonicalRequest,
 			lightDiscovery,
 			rootDir,
-			seeds,
+			seeds: extractDeepDiscoverySeeds(canonicalRequest),
 			snapshot: round.snapshot,
 		};
 		activateGrillTools();
@@ -718,25 +720,89 @@ function isApproval(text: string): boolean {
 	return new Set(["好", "可以", "同意", "照做", "yes", "ok", "okay", "y"]).has(text.trim().toLowerCase());
 }
 
-const FILE_OR_SYMBOL_PATTERN = /[\w./-]+\.[A-Za-z0-9]+|`([^`]+)`|[A-Z]{2,}-\d+/g;
-
-function extractDiscoverySeeds(message: string): string[] {
-	const matches = message.match(FILE_OR_SYMBOL_PATTERN) ?? [];
-	const quoted = matches.map((match) => match.replaceAll("`", "").trim()).filter(Boolean);
-	const words = message
-		.split(/\s+/)
-		.flatMap(splitMixedToken)
-		.filter((word) => word.length >= 2 && /[A-Za-z\u4e00-\u9fff]/.test(word))
-		.slice(0, 6);
-
-	return [...new Set([...quoted, ...words])].slice(0, 8);
+function extractDeepDiscoverySeeds(message: string): string[] {
+	const tokens = message.match(/[\w./-]+\.[A-Za-z0-9]+|`([^`]+)`|[A-Z]{2,}-\d+/g) ?? [];
+	const words = message.split(/\s+/).flatMap((token) => token.trim().split(/(?<=[\u4e00-\u9fff])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\u4e00-\u9fff])/));
+	return [...new Set([...tokens, ...words].map((value) => value.replaceAll("`", "").trim()))]
+		.filter((value) => value.length >= 2)
+		.slice(0, 8);
 }
 
-function splitMixedToken(token: string): string[] {
-	return token
-		.trim()
-		.split(/(?<=[\u4e00-\u9fff])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\u4e00-\u9fff])/)
-		.filter(Boolean);
+function buildGrillCompatibleDiscovery(rootDir: string, discovery: LightDiscoveryResult, rawMessage: string): GrillCompatibleDiscovery {
+	const candidates: CodeBaseCandidate[] = [];
+	const evidence: GrillEvidenceCandidate[] = [];
+	const seeds = extractDeepDiscoverySeeds(rawMessage);
+	for (const match of discovery.matches) {
+		const contentPath = resolve(rootDir, match.source, match.relativePath);
+		let content: string;
+		try {
+			content = readFileSync(contentPath, "utf8");
+		} catch {
+			continue;
+		}
+		const source = `${match.source}/${match.relativePath}`;
+		const candidateId = createEvidenceId(match.source, source, content);
+		const metadata = { relativePath: match.relativePath, matches: ["path"] };
+			evidence.push({ candidateId, content, kind: match.source, metadata, source, title: match.fileName });
+			if (match.source === "code_base") {
+				const lowerPath = match.relativePath.toLowerCase();
+				const lowerContent = content.toLowerCase();
+				const pathScore = scoreDiscoverySeeds(match.relativePath, seeds);
+				const contentScore = scoreDiscoverySeeds(content, seeds);
+				const matches = [pathScore > 0 ? "path" : undefined, contentScore > 0 ? "content" : undefined].filter(
+					(value): value is string => Boolean(value),
+				);
+				if (matches.length < 2) {
+					continue;
+				}
+				const matchedSeeds = seeds.filter((seed) => {
+					const normalizedSeed = seed.trim().toLowerCase();
+					return normalizedSeed.length > 0 && (lowerPath.includes(normalizedSeed) || lowerContent.includes(normalizedSeed));
+				});
+				candidates.push({
+					content,
+					matches,
+					matchedSeeds,
+					path: contentPath,
+					pathScore,
+					relativePath: match.relativePath,
+					score: pathScore + contentScore,
+					whyRelevant: `已於 ${match.relativePath} 命中 ${matches.join(" + ")} 訊號。`,
+				});
+			}
+	}
+	const snapshot = deepFreeze({
+		candidates: Object.fromEntries(evidence.map((item) => [item.candidateId, item])),
+		manifest: evidence.map(({ candidateId, kind, source, title }) => ({ candidateId, kind, source, title })),
+	}) as GrillEvidenceSnapshot;
+	const summary = [
+		...discovery.matches.map((match) => `- ${match.source}/${match.relativePath}`),
+		...discovery.warnings.map((warning) => `警告：${warning}`),
+	].join("\n");
+	return { codeBaseCandidates: candidates, snapshot, summary };
+}
+
+function scoreDiscoverySeeds(haystack: string, seeds: string[]): number {
+	const lowerHaystack = haystack.toLowerCase();
+	return seeds.reduce((score, seed) => {
+		const normalizedSeed = seed.trim().toLowerCase();
+		return normalizedSeed.length > 0 && lowerHaystack.includes(normalizedSeed)
+			? score + (normalizedSeed.includes(".") ? 3 : 1)
+			: score;
+	}, 0);
+}
+
+function createEvidenceId(kind: "wiki" | "code_base", source: string, content: string): `ev-${string}` {
+	const normalized = content.replace(/\r\n?/g, "\n");
+	return `ev-${createHash("sha256").update(JSON.stringify(["forge-grill-evidence-v1", kind, source, normalized])).digest("hex")}` as `ev-${string}`;
+}
+
+function deepFreeze<T>(value: T): T {
+	if (value && typeof value === "object" && !Object.isFrozen(value)) {
+		for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+		Object.freeze(value);
+	}
+	return value;
 }
 
 async function handleWaitUserState(
