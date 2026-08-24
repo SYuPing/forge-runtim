@@ -191,9 +191,12 @@ function normalizeQuestionOption(option: unknown): string | undefined {
 	return typeof objectOption.value === "string" && objectOption.value.length > 0 ? objectOption.value : undefined;
 }
 
-export function toWaitUserPayload(result: StructuredGrillResult): WaitUserPayload {
+export function toWaitUserPayload(result: GrillCompletionPayload): WaitUserPayload {
 	const question = result.questions[0];
 	return {
+		kind: "grill_confirmation",
+		roundId: result.roundId,
+		decisionId: question.id,
 		decisionSummary: result.recommendation.reason,
 		evidenceIds: result.evidence,
 		options: question.options,

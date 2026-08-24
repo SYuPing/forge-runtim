@@ -192,6 +192,19 @@ testGrillCompletion("GrillCompletion_WhenRoundMatchesAndEvidenceFetched_ShouldPa
 	assertForGrillCompletion.deepEqual(result.evidence, ["EV-1"]);
 });
 
+testGrillCompletion("GrillCompletion_WhenWaitUserPayloadIsBuilt_ShouldPreserveRoundId", () => {
+	const payload = grillResultForCompletion.toWaitUserPayload({
+		evidence: ["EV-1"],
+		questions: [{ id: "Q-1", options: ["A"], question: "Proceed?" }],
+		recommendation: { reason: "R-1 is ready.", value: "A" },
+		requiresUserConfirmation: true,
+		status: "NEEDS_CONFIRMATION",
+		roundId: "R-1",
+	} as Parameters<typeof grillResultForCompletion.toWaitUserPayload>[0] & { roundId: string });
+
+	assertForGrillCompletion.equal((payload as unknown as { roundId?: string }).roundId, "R-1");
+});
+
 testGrillCompletion("GrillCompletion_WhenRoundIsStale_ShouldReject", () => {
 	const payload = JSON.stringify({
 		evidence: ["EV-1"],

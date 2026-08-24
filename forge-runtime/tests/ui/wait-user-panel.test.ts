@@ -7,6 +7,9 @@ test("WaitUserPanel_WhenEvidenceIdsRepeat_ShouldShowUniqueEvidenceCountWithoutGe
 		lastEvidenceIds: [],
 		stage: "WAIT_USER",
 		waitUser: {
+			kind: "grill_confirmation",
+			roundId: "grill-1",
+			decisionId: "decision-1",
 			evidenceIds: ["ev-a", "ev-a", "ev-b"],
 			options: ["採用方案 A"],
 			question: "要採用哪個方案？",

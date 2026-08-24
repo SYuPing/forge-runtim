@@ -19,3 +19,13 @@ test("StateMachine_WhenUserConfirms_ShouldAllowReturnToGrill", async () => {
 	machine.transitionTo("GRILL");
 	assert.equal(machine.getStage(), "GRILL");
 });
+
+test("StateMachine_WhenUserConfirmsFromWait_ShouldAllowReturnToLightDiscovery", async () => {
+	const { createStateMachine } = await import("../../src/workflow/state-machine.ts");
+	const machine = createStateMachine({ initialStage: "WAIT_USER" });
+
+	machine.transitionTo("USER_CONFIRMED");
+	assert.equal(machine.canTransitionTo("LIGHT_DISCOVERY"), true);
+	machine.transitionTo("LIGHT_DISCOVERY");
+	assert.equal(machine.getStage(), "LIGHT_DISCOVERY");
+});

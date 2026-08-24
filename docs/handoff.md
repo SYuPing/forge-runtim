@@ -1,10 +1,10 @@
 ---
 title: Intent route-only LLM ticket handoff
 type: handoff
-scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822
-updated: 2026-08-22
+scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823
+updated: 2026-08-24
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、scoped validation logs
-status: complete
+status: completed
 ---
 
 # Intent route-only LLM 交接
@@ -79,3 +79,27 @@ npm test
 - Production：`forge-runtime/src/discovery/light-discovery.ts`、`forge-runtime/extensions/forge-runtime.ts` 的 module 外相容 adapter。
 - Tests：`forge-runtime/tests/discovery/light-discovery.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。
 - 文件與狀態：`CONTEXT.md`、`docs/adr/ADR-0014-light-discovery-file-metadata-module.md`、`docs/PLAN-A.md`、`Memory/record.md`、`Memory/lesson_learn.md`、`agent-state/light-discovery-file-metadata-20260822.md`。
+
+## Grill 到 Deep Knowledge 交接交班
+
+本 ticket 已完成實作、驗證與雙軸複審。詳見 [`ADR-0015`](adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md)、[`docs/PLAN-A.md`](PLAN-A.md) 與 [`agent-state/grill-deep-boundary-risk-20260823.md`](../agent-state/grill-deep-boundary-risk-20260823.md)。
+
+交付規則如下：Grill 負責查證與人類決策；Deep 沿用 Grill 的 immutable snapshot 與決策，不重讀相同 `wiki/`／`code_base/` 證據，只補 snapshot 沒有且後續明確需要的新來源。進 Deep 前關閉 Grill pending／round，Deep 不直接向使用者提問；只有新 Evidence ID 帶來新歧義時，Workflow 才可建立新 Grill round。relevance failure 回到 Discovery clarification，回答後重新進 Light Discovery；debug completion 走正式 gate。WAIT_USER identity 採使用者裁決的方案 A：`roundId + kind + decisionId`；unknown round reject、精確舊 round replay idempotent、新 round 可重用相同 ID。stale `message_end`、`/continue` 與 relevance `/confirm` 均受 guard 保護。
+
+實作涵蓋交接 seam、active-stage guard、relevance clarification 回流、snapshot identity、debug gate、UI lease 與 round identity。原計畫 7 個測試已完成，複審另補回歸案例：
+
+- `RelevanceFailure_UserClarifies_RerunsLightDiscoveryBeforeGrill`
+- `DeepStart_StaleGrillEvents_DoNotReopenGrill`
+- `Extension_WhenDeepHandoffAwaits_ShouldCloseGrillBoundaryBeforeAwaitAndIgnoreStaleMessageEnd`
+- `Extension_WhenRelevanceWaitUserReceivesConfirm_ShouldKeepClarificationPending`
+- `DebugCompletion_InvalidRoundOrEvidence_IsRejectedByFormalGate`
+- `UserConfirmed_DiscoveryClarification_AllowsLightDiscovery`
+- `Reset_NewGrillRound_UsesMonotonicRoundId`
+- `NewSnapshot_FetchedEvidence_DoesNotLeakFromPreviousSnapshot`
+- `ReadyForDeep_ExistingDiscoverySnapshot_IsReusedWithoutDuplicateReads`
+- `SessionState_WhenNormalConfirmationIdCollidesWithRoundId_ShouldStillEnterGrill`
+- `Extension_WhenNormalConfirmationIdCollidesWithRoundId_ShouldRejectReadyForDeepReplay`
+
+最終驗證：`npm run check` 兩個 tsconfig 通過；`npm test` 157/157、0 fail、0 skip；Standards／Spec final review 的 P0、P1、P2 均為 0。未來若要延伸，仍需另開 ticket 處理完整 semantic Deep、Pattern Card、持久化 session、第二個 verifier 或 Deep → Grill result type；本 ticket 不包含這些工作。
+
+本 session 已完成交付；後續只需由使用者決定是否另開 out-of-scope 延伸 ticket。

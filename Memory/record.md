@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-22
+updated: 2026-08-24
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: complete
+status: completed
 ---
 
 # Forge Runtime v4 開發記錄
@@ -95,3 +95,18 @@ status: complete
 - 驗證：互動 9/9、focused 79/79、`npm run check` exit 0、完整 `npm test` 140/140，0 fail/skip/todo；證據為 `forge-runtime/.tmp/review-fix-verify-*.log`。implementation、verification 與 two-axis review 均完成；僅有既有 Node `DEP0190` warning。
 - 依使用者於 2026-08-22 核准的 v4 分階段交付例外，本輪僅完成 phase one 的 metadata-only discovery；v4 end-state 不變，完整多來源／Summary／Evidence ID 另案處理。
 - 初次 Standards 與 Spec review 各有 3 個 findings；採納修正後 Spec re-review 為 0 findings，Standards re-review 的 stale counts 已完成文件修正。
+
+## 2026-08-23 Grill 到 Deep Knowledge 交接策略核准
+
+- 使用者核准保留 Grill → Deep Knowledge 階段分工：Grill 查證並取得人類決策，Deep 沿用同一 immutable snapshot 與決策，不重讀相同證據，只補後續明確需要的新來源。
+- 核准 relevance clarification 回流 Light Discovery、正式 gate 統一 debug completion、round 單調遞增與 snapshot evidence 隔離；本 ticket 尚未實作。
+- 詳細決策見 [`ADR-0015`](../docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md)，計畫見 [`docs/PLAN-A.md`](../docs/PLAN-A.md)，狀態見 [`agent-state/grill-deep-boundary-risk-20260823.md`](../agent-state/grill-deep-boundary-risk-20260823.md)。本輪沒有經測試證實的新 bug。
+
+## 2026-08-24 Grill 到 Deep Knowledge 交接實作完成
+
+- 依核准的 Plan A 完成 Grill → Deep Knowledge boundary：Grill 保留正式 completion gate 與人類決策邊界，Deep 只接收已核准的 immutable snapshot/evidence。
+- 完成 relevance 不足時回到 Light Discovery、round 單調遞增、snapshot evidence 隔離，以及 Deep handoff 前同步釋放 pending/tool lease 的 lifecycle 修正。
+- 使用者核准方案 A：decision 去重與 UI lease 使用 runtime-issued `roundId + kind + decisionId`；不以可碰撞的字串推測等待類型，也不替使用者完成 relevance clarification。
+- 未修改 `pi-main/`，未新增 dependency；本輪變更集中於 `forge-runtime/` 與對應測試及交付文件。
+- 驗證完成：`npm test` 157/157、兩份 tsconfig 的 `npm run check` 均通過；Standards 與 Spec 雙軸 review 均為 0 findings。完整證據與狀態見 [`agent-state/grill-deep-boundary-risk-20260823.md`](../agent-state/grill-deep-boundary-risk-20260823.md)；bug 根因與教訓見 [`lesson_learn.md`](./lesson_learn.md)。
+- 本 ticket 已完成；後續不擴充 Deep semantic、Pattern Card、persistence 或第二 verifier，除非另案核准。

@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-22
+updated: 2026-08-24
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
-status: active
+status: completed
 ---
 
 # Forge Runtime v4 開發教訓
@@ -41,6 +41,15 @@ status: active
 
 22. **Light Discovery adapter relevance regression**：adapter 固定只提供 path signal，但 `evaluateCandidateRelevance` 契約要求 path 與 content，造成符合條件的 `READY_FOR_DEEP` 誤回 `WAIT_USER`。修復為 adapter 已讀取內容後依 raw request seeds 真實計算 path、content、`matchedSeeds`、`score`，再篩入 `codeBaseCandidates`；Light Discovery 本體維持 metadata-only。證據：`forge-runtime/extensions/forge-runtime.ts`、`src/discovery/discovery-sources.ts`、`.tmp/verify-interactive.log`、`.tmp/reverify-interactive.log`。
 23. **Light Discovery 測試 API 遷移殘留**：兩個 stale old API callers 與 15 個 skip 使測試不能代表現行 public seam。清除 stale callers，刪除 10 個 ADR 淘汰測試、改寫／保留 5 個，並還原 2 個強相關 Deep expectations；該次歷史 final suite 為 139/139，目前 closeout 驗證為 140/140。證據：`forge-runtime/tests/discovery/light-discovery.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、三個測試遷移檔與 `forge-runtime/.tmp/review-fix-verify-*.log`。
+
+24. **tool-active guard 不等於 replayable state**：把「工具仍 active」當成 `/continue` 可重播條件，曾破壞 `WAIT_USER` 的合法 replay。修復為分開判斷 active lifecycle 與可重播的 pending Grill state，並以 WAIT_USER replay regression 固定契約。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`agent-state/grill-deep-boundary-risk-20260823.md`。
+25. **debug completion 必須通過正式 round/evidence/schema gate**：debug payload 若遺失 `roundId` 或 evidence，會繞過正式 completion 邊界或拒絕合法 fixture。修復為共用正式 parser，要求目前 round、合法 completion status 與 evidence；錯誤 round 維持原 active round。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 的 debug wrong-round 與 completion gate 測試。
+26. **Deep handoff 的 pending/tools 必須在第一個 await 前釋放**：若等 Deep continuation 完成後才清 pending 或還原工具，stale `message_end` 可能把已進入 Deep 的回合誤判為 Grill。修復為 handoff 開始時同步釋放，並加入 barrier regression。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 的 `Extension_WhenDeepHandoffAwaits_ShouldCloseGrillBoundaryBeforeAwaitAndIgnoreStaleMessageEnd`。
+27. **relevance WAIT_USER 不可使用通用 `/confirm`**：通用 confirm 曾自動採用 recommendation，或在沒有 user callback 時造成非法 transition，越過人類澄清決策。修復為 relevance wait 只提示使用者補充來源或縮小需求，保持 WAIT_USER。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 的 relevance confirm guard 測試。
+28. **不可用可碰撞字串推測 wait kind**：question id 或 round id 字串可能在不同語意中重用，僅靠字串前綴會把等待類型判錯。修復為使用可信的 runtime-issued `kind`，並以 `roundId + kind + decisionId` 識別 decision；未知或未發行的 decision fail-closed。證據：`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/runtime/session-state.test.ts` 與 extension decision identity 測試。
+29. **Deep evidence 必須來自 immutable snapshot/fetched IDs**：Deep 若重新讀 live source，來源在 Grill 後變動時會混入未經 Grill 驗證的內容。修復為只從 Grill snapshot 與已抓取 evidence IDs 選取 Deep evidence；snapshot identity 改變時清除舊 fetched evidence。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 的 snapshot evidence isolation 與 live source mutation regression。
+
+30. **測試 fixture 的 literal 型別也屬 contract 維護**：新增 round/evidence fixture 時，寬化的 `kind` 或 `candidateId` literal 會先造成 TypeScript check 失敗，掩蓋 runtime 驗證結果。修復為以 literal-preserving fixture 建立測試資料；不放寬 production 型別。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、兩份 tsconfig `npm run check` 通過紀錄。
 
 ## 可重用教訓
 

@@ -1,4 +1,7 @@
 export interface WaitUserState {
+	kind: "grill_confirmation" | "relevance_clarification";
+	roundId: string;
+	decisionId: string;
 	evidenceIds: string[];
 	options: string[];
 	question: string;

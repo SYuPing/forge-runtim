@@ -1,8 +1,10 @@
-# Plan A：Intent Route-Only LLM（現行 ticket）
+# Plan A：Intent Route-Only LLM（本段歷史 ticket）
 
 日期：2026-08-21
 
-狀態：Approved，供 `intent-route-only-llm-20260821` 獨立實作與驗證。
+本段狀態：Approved，供 `intent-route-only-llm-20260821` 獨立實作與驗證。
+
+各 ticket 狀態以各自章節為準；最新 Grill→Deep 章節已 completed。
 
 本文件下方的 Grill Completion Recovery 內容是已完成的歷史 Plan A 基線，不屬本 ticket 的執行範圍。
 
@@ -1142,3 +1144,101 @@ TDD 垂直切片已完成：core streaming RED → minimal route；persistence/c
 - 初次 Standards 與 Spec review 各有 3 個發現事項，已採納並完成修正。
 - 修正後 Spec re-review 為 0 發現事項；Standards re-review 僅發現過時數字，已修正本節與交付文件中的目前數字。
 - 實作、驗證與雙軸審查均完成；未解風險僅為既有 Node `DEP0190` warning，v4 後續階段另案處理。
+
+---
+
+## Plan A：Grill 到 Deep Knowledge 的穩定交接
+
+日期：2026-08-23
+
+狀態：completed（2026-08-24；實作、驗證、雙軸複審與文件收尾均完成）
+
+前置條件：`ADR-0015` 已 Accepted；使用者已裁決採用方案 A，並完成本計畫實作。
+
+本 ticket 只有單一 Plan A。沒有新 UI，因此不建立 Plan B。
+
+### Building
+
+1. 以既有 `continueDeepKnowledge` 為唯一交接 seam。正式與 debug completion 都走同一 gate；通過 relevance 後，在任何 `await` 前同步關閉 pending Grill、還原 tools、使舊 round 失效，再 begin Deep。`message_end` 與 `/continue` 也必須有 active-stage guard。
+2. relevance fail 不建立 Grill round。以既有 `WAIT_USER` 顯示 Discovery clarification；回答後依 `WAIT_USER → USER_CONFIRMED → LIGHT_DISCOVERY`，用原需求加補充重新探索，建立新 snapshot 後再進 Grill。
+3. reset 不重設 `nextRoundId`；同一 extension lifetime 內保持單調遞增。同一 snapshot 多輪可保留 fetched evidence；candidate IDs 改變就清除。Deep 直接使用 Grill snapshot 與 decisions，`wiki/`／`code_base/` 不重讀，只補 target source 等新來源。
+4. WAIT_USER identity 固定使用方案 A 的 `roundId + kind + decisionId`：unknown round 拒絕、精確重播保持 idempotent、新 round 可重用相同 ID；formal、debug、relevance 與 UI lease 共用此 identity。relevance `/confirm` 不代答。
+
+### Not Building
+
+- 不改 `pi-main`。
+- 不加 dependency、服務或設定。
+- 不做完整 semantic Deep、Pattern Card 或持久化 session。
+- 不加第二個 LLM verifier。
+- 本 ticket 不新增 Deep → Grill result type，僅由 ADR 約束未來行為。
+- 不修正 PLAN-A 既有第 172、229 行標點。
+
+### Approach
+
+在既有 runtime 交接 seam 加入完成 gate 與 active-stage guard，讓 Grill 的 completion、snapshot、decision 與 round identity 在進 Deep 前完成一次同步封口。Discovery clarification 使用既有 WAIT_USER 回流 Light Discovery，不把 relevance failure 誤建成 Grill 問題；snapshot 改變時清理不再有效的 fetched evidence。
+
+### Files
+
+production：
+
+- `forge-runtime/extensions/forge-runtime.ts`
+- `forge-runtime/src/grill/grill-result.ts`
+- `forge-runtime/src/runtime/session-state.ts`
+- `forge-runtime/src/ui/ui-state.ts`
+- `forge-runtime/src/workflow/state-machine.ts`
+
+tests：
+
+- `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`
+- `forge-runtime/tests/grill/grill-result.test.ts`
+- `forge-runtime/tests/runtime/session-state.test.ts`
+- `forge-runtime/tests/ui/wait-user-panel.test.ts`
+- `forge-runtime/tests/workflow/state-machine.test.ts`
+
+### Tests
+
+- `RelevanceFailure_UserClarifies_RerunsLightDiscoveryBeforeGrill`：relevance 失敗進 clarification，回答後重跑 Light Discovery，再建立 Grill。
+- `DeepStart_StaleGrillEvents_DoNotReopenGrill`：Deep 開始後的舊 Grill event 不得重開 Grill。
+- `Extension_WhenDeepHandoffAwaits_ShouldCloseGrillBoundaryBeforeAwaitAndIgnoreStaleMessageEnd`：Deep handoff 在第一次 await 前關閉 Grill boundary，並忽略 stale `message_end`。
+- `Extension_WhenRelevanceWaitUserReceivesConfirm_ShouldKeepClarificationPending`：relevance clarification 的 `/confirm` 不代替使用者回答，維持 `WAIT_USER`。
+- `DebugCompletion_InvalidRoundOrEvidence_IsRejectedByFormalGate`：debug completion 的無效 round 或 evidence 由正式 gate 拒絕。
+- `UserConfirmed_DiscoveryClarification_AllowsLightDiscovery`：Discovery clarification 回答後允許進入 Light Discovery。
+- `Reset_NewGrillRound_UsesMonotonicRoundId`：reset 後新 Grill round 使用單調遞增 round ID。
+- `NewSnapshot_FetchedEvidence_DoesNotLeakFromPreviousSnapshot`：新 snapshot 不會沿用上一 snapshot 的 fetched evidence。
+- `ReadyForDeep_ExistingDiscoverySnapshot_IsReusedWithoutDuplicateReads`：READY_FOR_DEEP 沿用既有 discovery snapshot，不重複讀取相同證據。
+- `SessionState_WhenNormalConfirmationIdCollidesWithRoundId_ShouldStillEnterGrill`：方案 A 的 round identity 允許新 round 重用相同 decision ID。
+- `Extension_WhenNormalConfirmationIdCollidesWithRoundId_ShouldRejectReadyForDeepReplay`：方案 A 的 round identity 拒絕跨 round 的 READY_FOR_DEEP replay。
+
+原計畫列出的測試已完成；複審另補回歸案例，涵蓋 Deep boundary cleanup、stale `message_end`、relevance `/confirm` 與方案 A round identity。
+
+### Execution Order
+
+1. 由測試子代理逐 slice 先建立紅燈。
+2. 主代理依紅燈做最小 production 實作，不擴大 scope。
+3. 由獨立驗證代理執行 focused、check 與完整 suite。
+4. 由不同代理完成 Standards／Spec review，必要時只修正受影響範圍並重驗證。
+
+### Verification
+
+不得在 repo root 跑 npm workflow；命令由獨立驗證代理執行：
+
+```text
+cd forge-runtime
+npm test -- tests/extensions/forge-runtime-extension.test.ts tests/runtime/session-state.test.ts tests/workflow/state-machine.test.ts
+npm run check
+npm test
+```
+
+結果：`npm run check` 兩個 tsconfig 通過；`npm test` 157/157、0 fail、0 skip。證據：`forge-runtime/.tmp/grill-deep-final-check-20260824.log`、`forge-runtime/.tmp/grill-deep-final-test-20260824.log`。Standards／Spec final review 的 P0、P1、P2 均為 0。
+
+### Rollback
+
+回退此 ticket 的 5 個 production 與 5 個 test 修改，不涉及資料 migration；保留 ADR-0015 的決策歷史，若要重新設計須另開 ticket。
+
+### Fragile assumption
+
+runtime gate 與 active-stage guard 能阻止舊 Grill event 在 Deep 啟動後重新開啟 Grill；模型可能漏掉語意問題仍是 verifier 邊界，runtime 契約本身無法證明模型完整理解。若此假設失效，另開 verifier ticket，不在本計畫加入第二個 LLM evaluator。
+
+### 交付狀態
+
+已完成交付。未修改 `pi-main/`，未新增 dependency；完整 semantic Deep、Pattern Card、持久化 session 與第二個 verifier 仍屬 out-of-scope。

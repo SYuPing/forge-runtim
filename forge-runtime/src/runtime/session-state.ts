@@ -2,8 +2,11 @@ import { createOrchestrator, type Orchestrator } from "../workflow/orchestrator.
 import { createForgeUiState, type ForgeUiState, type WaitUserState } from "../ui/ui-state.ts";
 
 export interface WaitUserPayload extends WaitUserState {
-	decisionId?: string;
 	decisionSummary?: string;
+}
+
+export function waitUserDecisionKey(waitUser: WaitUserState): string {
+	return JSON.stringify([waitUser.roundId, waitUser.kind, waitUser.decisionId]);
 }
 
 export type GrillEvidenceKind = "wiki" | "code_base" | "target";
@@ -61,11 +64,10 @@ export interface ForgeSessionState {
 }
 
 export function createForgeSessionState(): ForgeSessionState {
-	const answeredDecisionIds = new Set<string>();
-	const fetchedEvidenceIds = new Set<string>();
-	let currentGrillRound: GrillRound | undefined;
-	let orchestrator: Orchestrator | undefined;
-		let pendingDecisionId: string | undefined;
+		const answeredDecisionKeys = new Set<string>();
+		const fetchedEvidenceIds = new Set<string>();
+		let currentGrillRound: GrillRound | undefined;
+		let orchestrator: Orchestrator | undefined;
 		let nextRoundId = 1;
 		let completionOmissionRecorded = false;
 		let uiState = createForgeUiState("RECEIVE");
@@ -212,30 +214,32 @@ export function createForgeSessionState(): ForgeSessionState {
 				return uiState;
 			}
 
-			const decisionId = pendingDecisionId ?? "unknown";
-			if (answeredDecisionIds.has(decisionId)) {
+			if (!uiState.waitUser) {
+				throw new Error("WAIT_USER requires a pending decision");
+			}
+			const decisionId = uiState.waitUser.decisionId;
+			const decisionKey = waitUserDecisionKey(uiState.waitUser);
+			const isRelevanceClarification = uiState.waitUser.kind === "relevance_clarification";
+			if (answeredDecisionKeys.has(decisionKey)) {
 				return uiState;
 			}
 
 			orchestrator.handleUserConfirmation();
-			answeredDecisionIds.add(decisionId);
-			pendingDecisionId = undefined;
+			answeredDecisionKeys.add(decisionKey);
 			uiState = {
 				...uiState,
 				decisionSummary: `User answered decision ${JSON.stringify(decisionId)} with ${JSON.stringify(answer)}.`,
-				stage: orchestrator.transitionTo("GRILL"),
+				stage: isRelevanceClarification ? orchestrator.getStage() : orchestrator.transitionTo("GRILL"),
 				waitUser: undefined,
 			};
 			return uiState;
 		},
 		reset() {
-			answeredDecisionIds.clear();
+			answeredDecisionKeys.clear();
 			fetchedEvidenceIds.clear();
 			currentGrillRound = undefined;
 			orchestrator = undefined;
-				pendingDecisionId = undefined;
-				nextRoundId = 1;
-				completionOmissionRecorded = false;
+			completionOmissionRecorded = false;
 				uiState = createForgeUiState("RECEIVE");
 			return uiState;
 		},
@@ -258,15 +262,27 @@ export function createForgeSessionState(): ForgeSessionState {
 			return uiState;
 		},
 		requireWaitUser(payload) {
+			if (typeof payload.decisionId !== "string" || payload.decisionId.trim().length === 0) {
+				throw new Error("wait user payload requires decisionId");
+			}
+			if (typeof payload.roundId !== "string" || payload.roundId.trim().length === 0) {
+				throw new Error("wait user payload requires roundId");
+			}
+			const decisionKey = waitUserDecisionKey(payload);
+			if (payload.roundId !== currentGrillRound?.roundId && !answeredDecisionKeys.has(decisionKey)) {
+				throw new Error("wait user payload roundId was not issued by runtime");
+			}
 			if (!orchestrator || orchestrator.getStage() === "RECEIVE") {
 				orchestrator = createOrchestrator({ initialStage: "GRILL" });
 			}
-			pendingDecisionId = payload.decisionId;
 			uiState = {
 				decisionSummary: payload.decisionSummary,
 				lastEvidenceIds: payload.evidenceIds,
 				stage: orchestrator.handleGrillResult({ requiresUserConfirmation: true }),
 				waitUser: {
+					kind: payload.kind,
+					roundId: payload.roundId,
+					decisionId: payload.decisionId,
 					evidenceIds: payload.evidenceIds,
 					options: payload.options,
 					question: payload.question,
@@ -275,10 +291,14 @@ export function createForgeSessionState(): ForgeSessionState {
 			};
 			return uiState;
 		},
-			startGrillRound(request, snapshot) {
-				completionOmissionRecorded = false;
-				currentGrillRound = {
-				isFirstRoundOfSnapshot: currentGrillRound?.snapshot !== snapshot,
+		startGrillRound(request, snapshot) {
+			completionOmissionRecorded = false;
+			const isFirstRoundOfSnapshot = currentGrillRound?.snapshot !== snapshot;
+			if (isFirstRoundOfSnapshot) {
+				fetchedEvidenceIds.clear();
+			}
+			currentGrillRound = {
+				isFirstRoundOfSnapshot,
 				roundId: `grill-${nextRoundId++}`,
 				request,
 				snapshot,

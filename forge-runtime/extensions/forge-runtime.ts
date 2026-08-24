@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import Type from "typebox";
 import { buildGrillingSkillInvocation } from "../src/grill/grill-skill.ts";
@@ -8,15 +8,12 @@ import {
 	GrillCompletionSchema,
 	type StructuredGrillResult,
 	parseGrillCompletion,
-	parseStructuredGrillResult,
 	toWaitUserPayload,
 } from "../src/grill/grill-result.ts";
-import { discoverEvidence } from "../src/knowledge/discovery-engine.ts";
 import {
 	type CodeBaseCandidate,
 	evaluateCandidateRelevance,
 	getKnowledgeAssetStatus,
-	loadWikiDiscoverySources,
 } from "../src/discovery/discovery-sources.ts";
 import { runLightDiscovery, type LightDiscoveryMatch, type LightDiscoveryResult } from "../src/discovery/light-discovery.ts";
 import { understandIntent } from "../src/intent/intent-understanding.ts";
@@ -27,6 +24,7 @@ import {
 	type GrillEvidenceCandidate,
 	type GrillEvidenceSnapshot,
 	type WaitUserPayload,
+	waitUserDecisionKey,
 } from "../src/runtime/session-state.ts";
 import type { ForgeUiState } from "../src/ui/ui-state.ts";
 import { buildValidationRepairText } from "../src/ui/validation-repair-widget.ts";
@@ -167,8 +165,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let activeWorkflow: ActiveWorkflowContext | undefined;
 	let savedActiveTools: string[] | undefined;
 	let pendingReplayInvocation: string | undefined;
-	let pendingWaitUserDecisionId: string | undefined;
-	let activeWaitUserUiLeaseDecisionId: string | undefined;
+	let activeWaitUserUiLeaseKey: string | undefined;
 	const canEnforceGrillToolBoundary = Boolean(pi.registerTool && pi.getActiveTools && pi.setActiveTools && pi.on);
 	const requireGrillToolBoundary = (ctx: CommandContext) => {
 		if (canEnforceGrillToolBoundary) {
@@ -189,61 +186,91 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		pi.setActiveTools?.(savedActiveTools);
 		savedActiveTools = undefined;
 	};
+	const releaseGrillBoundary = () => {
+		pendingGrillRun = false;
+		restoreActiveTools();
+	};
 		const clearPendingState = () => {
-			pendingGrillRun = false;
+		pendingGrillRun = false;
 		pendingKnowledgeRequest = undefined;
 		pendingReplayInvocation = undefined;
-			pendingWaitUserDecisionId = undefined;
-		activeWaitUserUiLeaseDecisionId = undefined;
-		};
+		activeWaitUserUiLeaseKey = undefined;
+	};
 		const publishWaitUser = async (
 			payload: WaitUserPayload,
-			ctx: CommandContext,
-			options?: { deliverAs?: "displayOnly" },
-		): Promise<void> => {
-			const decisionId = payload.decisionId;
-			const hasDecisionId = typeof decisionId === "string" && decisionId.length > 0;
-			const currentState = sessionState.current();
-			if (
-				currentState.stage === "WAIT_USER" &&
-				hasDecisionId &&
-				typeof pendingWaitUserDecisionId === "string" &&
-				decisionId !== pendingWaitUserDecisionId
-			) {
+		ctx: CommandContext,
+		options?: { deliverAs?: "displayOnly" },
+	): Promise<void> => {
+		const decisionKey = waitUserDecisionKey(payload);
+		const currentState = sessionState.current();
+		if (currentState.stage === "WAIT_USER" && currentState.waitUser) {
+			if (decisionKey !== waitUserDecisionKey(currentState.waitUser)) {
 				return;
 			}
-			if (currentState.stage === "WAIT_USER" && hasDecisionId && decisionId === pendingWaitUserDecisionId) {
-				if (activeWaitUserUiLeaseDecisionId === decisionId) {
-					return;
-				}
-				activeWaitUserUiLeaseDecisionId = decisionId;
-				try {
-					await handleWaitUserState(pi, ctx, currentState, options, resumeWaitUserAnswer);
-				} finally {
-					if (activeWaitUserUiLeaseDecisionId === decisionId) {
-						activeWaitUserUiLeaseDecisionId = undefined;
-					}
-				}
+			if (activeWaitUserUiLeaseKey === decisionKey) {
 				return;
 			}
-			if (hasDecisionId) {
-				pendingWaitUserDecisionId = decisionId;
-				activeWaitUserUiLeaseDecisionId = decisionId;
-			}
+			activeWaitUserUiLeaseKey = decisionKey;
 			try {
-				await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(payload), options, resumeWaitUserAnswer);
+				await handleWaitUserState(pi, ctx, currentState, options, resumeWaitUserAnswer);
 			} finally {
-				if (hasDecisionId && activeWaitUserUiLeaseDecisionId === decisionId) {
-					activeWaitUserUiLeaseDecisionId = undefined;
+				if (activeWaitUserUiLeaseKey === decisionKey) {
+					activeWaitUserUiLeaseKey = undefined;
 				}
 			}
+			return;
+		}
+		activeWaitUserUiLeaseKey = decisionKey;
+		try {
+			await handleWaitUserState(pi, ctx, sessionState.requireWaitUser(payload), options, resumeWaitUserAnswer);
+		} finally {
+			if (activeWaitUserUiLeaseKey === decisionKey) {
+				activeWaitUserUiLeaseKey = undefined;
+			}
+		}
 		};
-		const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
+	const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
+	const parseActiveGrillCompletion = (payload: unknown) => {
+		const round = sessionState.continueGrillRound();
+		return parseGrillCompletion(payload, {
+			expectedRoundId: round.roundId,
+			fetchedEvidenceIds: sessionState.getFetchedEvidenceIds(),
+			isFirstRoundOfSnapshot: sessionState.isFirstGrillRoundOfSnapshot(),
+			snapshotManifest: round.snapshot.manifest,
+		});
+	};
 	const resumeGrillWithAnswer = async (answer: string, ctx: CommandContext): Promise<string | undefined> => {
 		const currentRound = sessionState.continueGrillRound();
 		const state = sessionState.recordAnswer(answer);
-		if (state.stage !== "WAIT_USER") {
-			pendingWaitUserDecisionId = undefined;
+		if (state.stage === "USER_CONFIRMED") {
+			activeWaitUserUiLeaseKey = undefined;
+			const workflow = activeWorkflow;
+			if (!workflow) {
+				await publishState(pi, ctx, state);
+				return undefined;
+			}
+			pendingGrillRun = false;
+			restoreActiveTools();
+			const clarifiedRequest = [currentRound.request, answer].join("\n\n");
+			await publishState(pi, ctx, sessionState.beginLightDiscovery(clarifiedRequest));
+			const discovery = runLightDiscovery(workflow.rootDir, clarifiedRequest);
+			const lightDiscovery = buildGrillCompatibleDiscovery(workflow.rootDir, discovery, clarifiedRequest);
+			const nextRound = sessionState.startGrillRound(clarifiedRequest, lightDiscovery.snapshot);
+			activeWorkflow = {
+				...workflow,
+				goal: clarifiedRequest,
+				lightDiscovery,
+				seeds: extractDeepDiscoverySeeds(clarifiedRequest),
+				snapshot: nextRound.snapshot,
+			};
+			pendingGrillRun = true;
+			activateGrillTools();
+			await publishState(pi, ctx, sessionState.beginGrill(clarifiedRequest));
+			return buildGrillingSkillInvocation(
+				[clarifiedRequest, lightDiscovery.summary].join("\n\n"),
+				nextRound.roundId,
+				nextRound.snapshot.manifest,
+			);
 		}
 		if (state.stage !== "GRILL") {
 			await publishState(pi, ctx, state);
@@ -309,18 +336,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				if (!hasActiveGrillAttempt()) {
 					return { block: true };
 				}
-				const round = sessionState.continueGrillRound();
-				const completion = parseGrillCompletion(params, {
-						expectedRoundId: round.roundId,
-						fetchedEvidenceIds: sessionState.getFetchedEvidenceIds(),
-						isFirstRoundOfSnapshot: sessionState.isFirstGrillRoundOfSnapshot(),
-						snapshotManifest: round.snapshot.manifest,
-					});
+				const completion = parseActiveGrillCompletion(params);
 				if (completion.requiresUserConfirmation) {
-					const waitUser = {
-						...toWaitUserPayload(completion),
-						decisionId: completion.questions[0]?.id,
-					};
+					const waitUser = toWaitUserPayload(completion);
 					void publishWaitUser(waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
 						(ctx as CommandContext).ui?.notify?.(
 							`Forge WAIT_USER UI 失敗：${error instanceof Error ? error.message : String(error)}`,
@@ -330,23 +348,21 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				} else {
 					await continueDeepKnowledge(
 						pi,
-					ctx as CommandContext,
+						ctx as CommandContext,
 						sessionState,
 						activeWorkflow,
 						publishWaitUser,
 						completion.recommendation.reason,
 						completion,
+						releaseGrillBoundary,
 					);
-					if (sessionState.current().stage !== "GRILL") {
-						restoreActiveTools();
-					}
 				}
-				pendingGrillRun = sessionState.current().stage === "GRILL";
-			return {
-				content: [{ type: "text", text: "Forge Grill completion accepted." }],
-				details: { roundId: completion.roundId, status: completion.status },
-				terminate: true,
-			};
+				pendingGrillRun = ["GRILL", "WAIT_USER"].includes(sessionState.current().stage);
+				return {
+					content: [{ type: "text", text: "Forge Grill completion accepted." }],
+					details: { roundId: completion.roundId, status: completion.status },
+					terminate: true,
+				};
 		},
 	});
 
@@ -354,9 +370,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (event.message?.role !== "assistant") {
 			return;
 		}
-		if (!pendingGrillRun) {
-			return;
-		}
+			if (!hasActiveGrillAttempt()) {
+				return;
+			}
 
 			if (event.message.content?.some((block) => block.type === "toolCall")) {
 				return;
@@ -560,7 +576,26 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				}
 
 				if (command.startsWith("grill-result ")) {
-					const grillResult = parseStructuredGrillResult(command.slice("grill-result ".length));
+					const state = sessionState.current();
+					const stage = state.stage;
+					const isWaitUserReplay = pendingGrillRun && stage === "WAIT_USER";
+					if (!hasActiveGrillAttempt() && !isWaitUserReplay) {
+						return;
+					}
+					const grillResult = parseActiveGrillCompletion(command.slice("grill-result ".length));
+				const isSameConfirmationReplay =
+					state.waitUser?.kind === "grill_confirmation" &&
+					state.waitUser.roundId === grillResult.roundId &&
+					grillResult.requiresUserConfirmation &&
+					grillResult.questions[0]?.id === state.waitUser.decisionId;
+				const isSameRelevanceReplay =
+					state.waitUser?.kind === "relevance_clarification" &&
+					grillResult.status === "READY_FOR_DEEP" &&
+					grillResult.roundId === state.waitUser.roundId &&
+					grillResult.roundId === state.waitUser.decisionId;
+					if (isWaitUserReplay && !isSameConfirmationReplay && !isSameRelevanceReplay) {
+						return;
+					}
 					if (!grillResult.requiresUserConfirmation) {
 						await continueDeepKnowledge(
 							pi,
@@ -570,16 +605,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							publishWaitUser,
 							grillResult.recommendation.reason,
 							grillResult,
+							releaseGrillBoundary,
 						);
+						pendingGrillRun = ["GRILL", "WAIT_USER"].includes(sessionState.current().stage);
 						return;
 					}
-					await publishWaitUser(
-						{
-							...toWaitUserPayload(grillResult),
-							decisionId: grillResult.questions[0]?.id,
-						},
-						ctx,
-					);
+					await publishWaitUser(toWaitUserPayload(grillResult), ctx);
 					return;
 				}
 
@@ -589,10 +620,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						await publishState(pi, ctx, sessionState.current());
 						return;
 					}
+					const stage = sessionState.current().stage;
+					if (!pendingGrillRun || (stage !== "GRILL" && stage !== "WAIT_USER")) {
+						return;
+					}
 					if (!pi.sendUserMessage || !requireGrillToolBoundary(ctx)) {
-					await publishState(pi, ctx, sessionState.current());
-					return;
-				}
+						await publishState(pi, ctx, sessionState.current());
+						return;
+					}
 				const round = sessionState.continueGrillRound();
 				const invocation = buildGrillingSkillInvocation(
 					[round.request, sessionState.current().decisionSummary]
@@ -673,13 +708,25 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (command === "confirm") {
 				const state = sessionState.current();
 				if (state.stage === "WAIT_USER" && state.waitUser) {
+					if (state.waitUser.kind === "relevance_clarification") {
+						ctx.ui?.notify?.("目前等待相關性澄清，請補充可信來源或縮小需求範圍。", "warn");
+						await publishState(pi, ctx, state);
+						return;
+					}
 					if (await resumeWaitUserAnswer(state.waitUser.recommendation, ctx)) {
 						return;
 					}
 					await publishState(pi, ctx, state);
 					return;
 				}
-				await confirmAndContinueDeepKnowledge(pi, ctx, sessionState, activeWorkflow, publishWaitUser);
+				await confirmAndContinueDeepKnowledge(
+					pi,
+					ctx,
+					sessionState,
+					activeWorkflow,
+					publishWaitUser,
+					releaseGrillBoundary,
+				);
 				return;
 			}
 
@@ -879,6 +926,7 @@ async function confirmAndContinueDeepKnowledge(
 	sessionState: ReturnType<typeof createForgeSessionState>,
 	activeWorkflow: ActiveWorkflowContext | undefined,
 	publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
+	onProceedToDeepKnowledge: () => void,
 ): Promise<ForgeUiState> {
 	const beforeConfirm = sessionState.current();
 	const nextState = sessionState.confirm();
@@ -888,7 +936,16 @@ async function confirmAndContinueDeepKnowledge(
 		return nextState;
 	}
 
-	await continueDeepKnowledge(pi, ctx, sessionState, activeWorkflow, publishWaitUser, beforeConfirm.decisionSummary);
+	await continueDeepKnowledge(
+		pi,
+		ctx,
+		sessionState,
+		activeWorkflow,
+		publishWaitUser,
+		beforeConfirm.decisionSummary,
+		undefined,
+		onProceedToDeepKnowledge,
+	);
 	return nextState;
 }
 
@@ -900,6 +957,7 @@ async function continueDeepKnowledge(
 	publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
 	decisionSummary?: string,
 	grillResult?: StructuredGrillResult,
+	onProceedToDeepKnowledge?: () => void,
 ): Promise<void> {
 	const workflow = activeWorkflow;
 	const candidates = workflow?.lightDiscovery.codeBaseCandidates ?? [];
@@ -908,21 +966,38 @@ async function continueDeepKnowledge(
 		const round = sessionState.continueGrillRound();
 		const evidenceIds = [...sessionState.getFetchedEvidenceIds()];
 		const waitUserPayload = {
-				decisionId: round.roundId,
-				decisionSummary: relevance.reason,
-				evidenceIds,
-				options: ["補充可信來源", "縮小需求範圍"],
-				question: `${relevance.reason}\n請選擇補充可信來源或縮小需求範圍。`,
-				recommendation: "縮小需求範圍",
+			kind: "relevance_clarification" as const,
+			roundId: round.roundId,
+			decisionId: round.roundId,
+			decisionSummary: relevance.reason,
+			evidenceIds,
+			options: ["補充可信來源", "縮小需求範圍"],
+			question: `${relevance.reason}\n請選擇補充可信來源或縮小需求範圍。`,
+			recommendation: "縮小需求範圍",
 		};
 		await publishWaitUser(waitUserPayload, ctx);
 		return;
 	}
 
+	onProceedToDeepKnowledge?.();
 	await publishState(pi, ctx, sessionState.beginDeepKnowledge(decisionSummary));
+	const evidenceIds = grillResult?.evidence ?? [...sessionState.getFetchedEvidenceIds()];
 	const evidence = workflow
-		? await buildDeepKnowledgeEvidence(workflow.rootDir, workflow.seeds, relevance.candidates)
-		: (grillResult?.evidence ?? []).map((evidenceId) => ({ evidenceId, source: evidenceId, summary: evidenceId, title: evidenceId }));
+		? evidenceIds
+			.map((evidenceId) => workflow.snapshot.candidates[evidenceId])
+			.filter((candidate): candidate is GrillEvidenceCandidate => Boolean(candidate))
+			.map((candidate) => ({
+				evidenceId: candidate.candidateId,
+				source: candidate.source,
+				summary: candidate.title,
+				title: candidate.title,
+			}))
+		: evidenceIds.map((evidenceId) => ({
+				evidenceId,
+				source: evidenceId,
+				summary: evidenceId,
+				title: evidenceId,
+			}));
 	const deepSummary =
 		evidence.length > 0
 			? `Deep knowledge loaded from ${evidence.length} sources: ${evidence.map((item) => item.title).join(", ")}`
@@ -935,65 +1010,6 @@ async function continueDeepKnowledge(
 			deepSummary,
 		),
 	);
-}
-
-async function buildDeepKnowledgeEvidence(
-	rootDir: string,
-	seeds: string[],
-	candidates: CodeBaseCandidate[],
-): Promise<Array<{ evidenceId: string; source: string; summary: string; title: string }>> {
-	const wikiDocuments = loadWikiDiscoverySources(rootDir)
-		.filter((source) => seeds.some((seed) => source.content.toLowerCase().includes(seed.toLowerCase())))
-		.slice(0, 3)
-		.map((source) => ({
-			content: source.content,
-			source: source.path,
-			summary: summarize(source.content),
-			title: basename(source.path),
-		}));
-	const codeBaseDocuments = candidates.slice(0, 2).map((candidate) => ({
-		content: candidate.content,
-		source: `code_base/${candidate.relativePath}`,
-		summary: summarize(candidate.content),
-		title: candidate.relativePath,
-	}));
-	const targetDocuments = candidates.slice(0, 1).flatMap((candidate) => {
-		const targetPath = resolve(rootDir, candidate.relativePath);
-		if (!existsSync(targetPath)) {
-			return [];
-		}
-		const content = readFileSync(targetPath, "utf8");
-		return [
-			{
-				content,
-				source: targetPath,
-				summary: summarize(content),
-				title: basename(targetPath),
-			},
-		];
-	});
-	const documents = [...wikiDocuments, ...codeBaseDocuments, ...targetDocuments];
-	if (documents.length === 0) {
-		return [];
-	}
-
-	return (await discoverEvidence({ documents, mode: "deep" })) as Array<{
-		content: string;
-		evidenceId: string;
-		source: string;
-		summary: string;
-		title: string;
-	}>;
-}
-
-function summarize(content: string): string {
-	return content
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0 && !line.startsWith("#"))
-		.slice(0, 2)
-		.join(" ")
-		.slice(0, 220);
 }
 
 function parseWaitUserPayload(raw: string): WaitUserPayload {
@@ -1013,9 +1029,17 @@ function parseWaitUserPayload(raw: string): WaitUserPayload {
 	) {
 		throw new Error("wait user payload requires string evidenceIds");
 	}
+	if (typeof parsed.decisionId !== "string" || parsed.decisionId.trim().length === 0) {
+		throw new Error("wait user payload requires decisionId");
+	}
+	if (typeof parsed.roundId !== "string" || parsed.roundId.trim().length === 0) {
+		throw new Error("wait user payload requires roundId");
+	}
 
 	return {
-		decisionId: typeof parsed.decisionId === "string" ? parsed.decisionId : undefined,
+		kind: "grill_confirmation",
+		roundId: parsed.roundId,
+		decisionId: parsed.decisionId,
 		decisionSummary: typeof parsed.decisionSummary === "string" ? parsed.decisionSummary : undefined,
 		evidenceIds: parsed.evidenceIds,
 		options: parsed.options,

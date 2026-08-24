@@ -1,3 +1,12 @@
+---
+title: Forge Runtime v4 Context
+type: context
+scope: Forge Runtime v4 設計、實作與交接
+updated: 2026-08-24
+source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
+status: implemented
+---
+
 # Forge Runtime v4 Context
 
 日期：2026-08-21
@@ -39,6 +48,17 @@
 - `forge-runtime/extensions/forge-runtime.ts` 在模組外建立 Grill／Deep Knowledge 相容 adapter；兩個 caller 傳 raw message。adapter 已讀取內容後依 raw request seeds 真實計算 path/content、`matchedSeeds`、`score`，只讓符合契約者進入 `codeBaseCandidates`。
 - 測試遷移已清除 2 個 stale old API callers，刪除 10 個 ADR 淘汰測試、改寫／保留 5 個，還原 2 個強相關 Deep expectations。
 - 驗證完成：互動 9/9、focused 79/79、`npm run check` exit 0、完整 `npm test` 140/140，0 fail/skip/todo；僅有既有 Node `DEP0190` warning。implementation、verification 與 two-axis review 均完成。
+
+## 2026-08-23 至 2026-08-24 Grill 到 Deep Knowledge 交接完成
+
+- 狀態：implemented。Grill 負責查證證據與取得人類決策；Deep 沿用同一份 immutable snapshot 與已確認決策，不重讀相同 `wiki/`／`code_base/` 證據。
+- Deep 只補 snapshot 沒有、且後續明確需要的新來源。進 Deep 前同步關閉 Grill pending／round；Deep 不直接向使用者提問。
+- 只有新 Evidence ID 帶來新歧義時，Workflow 才可建立新 Grill round；重複 evidence／decisionId 不得循環。
+- relevance failure 定義為 Discovery clarification：回答後依 `WAIT_USER → USER_CONFIRMED → LIGHT_DISCOVERY` 重新探索，並建立新 snapshot。
+- debug completion 必須走正式 gate；round identity 採使用者裁決的方案 A：runtime-issued `roundId + kind + decisionId`。unknown round reject、同一已回答舊 round 的精確重播保持 idempotent，新 round 即使重用相同 ID 仍可接受。
+- formal、debug、relevance 與 UI lease 路徑共用相同 identity；fetched evidence 只屬於目前 snapshot。Deep 前同步釋放 Grill boundary，stale `message_end` 與 `/continue` 不得重開 Grill；relevance `/confirm` 不代替使用者回答。
+- 驗證：`npm run check` 兩個 tsconfig 通過；`npm test` 157/157、0 fail、0 skip；Standards／Spec final review 的 P0、P1、P2 均為 0。
+- 詳細決策見 [`ADR-0015`](docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md)；本 ticket 已完成。
 
 ## 已驗證的上游 PI 事實
 
