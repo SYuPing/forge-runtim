@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-24
+updated: 2026-08-25
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: completed
+status: implemented-and-verified
 ---
 
 # Forge Runtime v4 開發記錄
@@ -110,3 +110,19 @@ status: completed
 - 未修改 `pi-main/`，未新增 dependency；本輪變更集中於 `forge-runtime/` 與對應測試及交付文件。
 - 驗證完成：`npm test` 157/157、兩份 tsconfig 的 `npm run check` 均通過；Standards 與 Spec 雙軸 review 均為 0 findings。完整證據與狀態見 [`agent-state/grill-deep-boundary-risk-20260823.md`](../agent-state/grill-deep-boundary-risk-20260823.md)；bug 根因與教訓見 [`lesson_learn.md`](./lesson_learn.md)。
 - 本 ticket 已完成；後續不擴充 Deep semantic、Pattern Card、persistence 或第二 verifier，除非另案核准。
+
+## 2026-08-24 Deep Knowledge Retrieval／Understanding 設計核准
+
+## 2026-08-25 Deep Knowledge 實作與驗證完成
+
+- 目標：完成 Deep Retrieval／Understanding、Evidence Package 與五個工具，維持 Workflow 對 state、證據與人類決策的最終控制權。
+- 重大決策：identity=`attemptId+sourceRoundId+phase`；retry 新 attempt 並回原 Deep phase；cancel／continue 保留 input／evidence 並回原 Deep phase，不回 Grill；stale outcome quiet reject；active-tools capability fail-closed。
+- 重大實作：人類決策以 `問題：…；決定：…` 保存且首筆 decisionId 不可覆寫；package 先注入 human decisions，再拒絕模型 duplicate；Deep 重用 Grill fetched evidence。固定上限為 query 1500、每 source／Grill round 8 次、單筆 256 KiB、整輪 2 MiB、各類 50 筆、每段 4,000 code points，超限不改 state，讀檔前先 stat。
+- 驗證：`npm test` 208/208、`npm run check` exit 0、`git diff --check` exit 0（僅 LF／CRLF warning）。logs 位置與 final review 判定見 [`docs/handoff.md`](../docs/handoff.md)。
+- 狀態：已實作、已驗證；下一步只剩使用者檢閱與決定是否 commit，目前未 commit、未 staged。
+
+- 設計目標：在既有 Grill immutable snapshot 交接之上，建立 `Deep Retrieval → Knowledge Understanding → Evidence Package` 的最小完整流程，完成後轉入 `CONTEXT_BUILD`。
+- 重大決策：Grill 只收集決策所需的最小證據；Deep 沿用 Grill 實際引用的完整 evidence 與 decisions，不重讀相同 evidence。客觀缺口可補查，新增 evidence 必須使用新 ID；新需求／取捨／矛盾由 Workflow 建立 `WAIT_USER`，來源整體不足回 `LIGHT_DISCOVERY`。
+- 重大決策：Retrieval 可搜尋受限 `wiki/`／`code_base/` 並鎖定證據；Understanding 只能讀固定集合。三種 result 是 `completed`、`needs_decision`、`needs_discovery`；Evidence Package 僅含 evidence、decisions、findings、非阻擋 limitations，completed 由 deterministic validator 守門。
+- 重大決策：沿用主 session active model；使用者撤回模型派發、fallback、custom loop 設計。本 ticket 不做 Pattern Card、持久化、第二 verifier、UI、外部來源或 `pi-main/`。
+- 歷史快照（其後已完成）：當時狀態為 ready-for-implementation；實作範圍、測試與驗證命令記錄於 [`docs/PLAN-A.md`](../docs/PLAN-A.md)。目前完成狀態與 208/208 驗證見上方「2026-08-25 Deep Knowledge 實作與驗證完成」及 [`docs/handoff.md`](../docs/handoff.md)。

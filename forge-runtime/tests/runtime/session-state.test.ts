@@ -300,3 +300,84 @@ test("SessionState_WhenResetStartsNextWorkflow_ShouldKeepGrillRoundIdsMonotonic"
 
 	assert.equal(secondRound.roundId, "grill-2");
 });
+
+test("SessionState_WhenDeepAttemptIdentityChanges_ShouldRejectStaleCall", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({
+		candidates: Object.freeze({}),
+		manifest: Object.freeze([]),
+	});
+
+	session.startGrillRound("請評估深度知識", snapshot);
+	session.beginDeepKnowledge("第一次深度知識嘗試");
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+
+	session.beginDeepKnowledge("第二次深度知識嘗試");
+	const result = session.completeDeepKnowledge([], undefined, firstIdentity);
+
+	assert.equal(result.kind, "stale");
+	assert.equal(session.current().stage, "DEEP_KNOWLEDGE_RETRIEVAL");
+});
+
+test("SessionState_WhenContinueRetriesDeep_ShouldIssueNewAttemptId", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({
+		candidates: Object.freeze({}),
+		manifest: Object.freeze([]),
+	});
+	const round = session.startGrillRound("同一份輸入", snapshot);
+
+	session.beginDeepKnowledge("同一份輸入");
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+
+	session.beginDeepKnowledge();
+	const secondIdentity = session.currentDeepAttempt();
+	assert.ok(secondIdentity);
+
+	assert.notEqual(secondIdentity.attemptId, firstIdentity.attemptId);
+	assert.equal(secondIdentity.sourceRoundId, firstIdentity.sourceRoundId);
+	assert.equal(secondIdentity.sourceRoundId, round.roundId);
+	assert.equal(session.current().decisionSummary, "同一份輸入");
+});
+test("SessionState_WhenDeepCancelled_ShouldPreserveCurrentInput", () => {
+	const state = createForgeSessionState();
+	const snapshot = Object.freeze({
+		candidates: Object.freeze({}),
+		manifest: Object.freeze([]),
+	});
+
+	const startedRound = state.startGrillRound("取消後仍保留的輸入", snapshot);
+	state.beginDeepKnowledge("取消後仍保留的輸入");
+	const identity = state.currentDeepAttempt();
+	assert.ok(identity);
+	state.recordDeepSupplementalEvidence(identity, "ev-deep-cancelled");
+
+	state.cancelDeepKnowledge();
+
+	assert.equal(state.currentDeepAttempt(), undefined);
+	assert.equal(state.current().decisionSummary, "取消後仍保留的輸入");
+	assert.equal(state.current().stage, "DEEP_KNOWLEDGE_RETRIEVAL");
+	assert.strictEqual(state.continueGrillRound().snapshot, startedRound.snapshot);
+	assert.deepEqual(state.getDeepSupplementalEvidenceIds(), new Set(["ev-deep-cancelled"]));
+});
+test("SessionState_WhenSnapshotChanges_ShouldDiscardOldSupplementalEvidence", () => {
+	const snapshotA = Object.freeze({ candidates: Object.freeze({}), manifest: Object.freeze([]) });
+	const snapshotB = Object.freeze({ candidates: Object.freeze({}), manifest: Object.freeze([]) });
+	const state = createForgeSessionState();
+
+	state.startGrillRound("request", snapshotA);
+	state.beginDeepKnowledge();
+	const identity = state.currentDeepAttempt();
+	assert.ok(identity);
+	state.recordDeepSupplementalEvidence(identity, "ev-deep-a");
+	assert.deepEqual(state.getDeepSupplementalEvidenceIds(), new Set(["ev-deep-a"]));
+
+	state.startGrillRound("retry", snapshotA);
+	assert.deepEqual(state.getDeepSupplementalEvidenceIds(), new Set(["ev-deep-a"]));
+
+	state.startGrillRound("new snapshot", snapshotB);
+	assert.deepEqual(state.getDeepSupplementalEvidenceIds(), new Set());
+	assert.equal(state.currentDeepAttempt(), undefined);
+});

@@ -1,10 +1,10 @@
 ---
-title: Intent route-only LLM ticket handoff
+title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
-scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823
-updated: 2026-08-24
-source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、scoped validation logs
-status: completed
+scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824
+updated: 2026-08-25
+source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、scoped validation logs
+status: follow-up-fix-in-progress
 ---
 
 # Intent route-only LLM 交接
@@ -103,3 +103,62 @@ npm test
 最終驗證：`npm run check` 兩個 tsconfig 通過；`npm test` 157/157、0 fail、0 skip；Standards／Spec final review 的 P0、P1、P2 均為 0。未來若要延伸，仍需另開 ticket 處理完整 semantic Deep、Pattern Card、持久化 session、第二個 verifier 或 Deep → Grill result type；本 ticket 不包含這些工作。
 
 本 session 已完成交付；後續只需由使用者決定是否另開 out-of-scope 延伸 ticket。
+
+## Deep Knowledge Retrieval／Understanding 交接
+
+本段是 ticket `deep-knowledge-retrieval-understanding-20260824` 的設計階段交接快照，已由下方「最終實作與驗證」取代；當時程式碼、測試與 review 尚未完成。
+
+### 結論
+
+Grill 只準備決策所需的最小證據。Deep 直接接手 Grill 實際引用的完整 evidence 與 immutable decisions，不重讀相同 evidence；客觀缺口才可補查。Deep 先做 Retrieval 並鎖定證據，再做只能讀固定集合的 Knowledge Understanding，產出經 validator 驗證的 Evidence Package。結果為 `completed`、`needs_decision`、`needs_discovery`；completed 後進 `CONTEXT_BUILD`。
+
+### Scope
+
+- 三個工具：`forge_deep_search`、`forge_deep_retrieval_complete`、`forge_deep_complete`。
+- 主 session active model；attempt identity 為 `attemptId + sourceRoundId + phase`。
+- Evidence Package 的 inherited／supplemental evidence、decisions、findings、非阻擋 limitations 與 deterministic validator。
+- `needs_decision` 由 Workflow → `WAIT_USER`，`needs_discovery` 回 `LIGHT_DISCOVERY`；stale call 拒絕，技術失敗／取消保留輸入。
+
+### Non-scope
+
+不做模型派發／fallback／custom loop、Pattern Card、持久化、第二 verifier、UI、Web／外部 API、任意 local source、Context／ADR／SPEC／Ticket 內容生成或任何 `pi-main/` 修改。不要修改未追蹤的 `forge-runtime-flow.html`、`progress-timeline.html`。
+
+### 相關檔案
+
+- ADR：`docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md`、`docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md`
+- 計畫：`docs/PLAN-A.md` 的「Deep Knowledge Retrieval／Understanding／Evidence Package」段落
+- Production：`forge-runtime/extensions/forge-runtime.ts`、`src/evidence/evidence-engine.ts`、`src/runtime/session-state.ts`、`src/knowledge/discovery-engine.ts`、`src/workflow/state-machine.ts`
+- Tests：`tests/evidence/evidence-engine.test.ts`（NEW）、`tests/runtime/session-state.test.ts`、`tests/workflow/state-machine.test.ts`、`tests/extensions/pi-grill-interactive.test.ts`
+- State：`agent-state/deep-knowledge-retrieval-understanding-20260824.md`
+
+### 基線與驗證
+
+（歷史快照）當時 baseline 為 `npm test` 157，預期新增 21 個測試；目前實際收尾結果以「最終實作與驗證」為準。
+
+### 未解風險
+
+- 主 session active model 的既有工具輪次是否能在兩階段切換工具並安全恢復，需由實作與測試確認；不可因風險偷偷加入 custom loop。
+- target source 必須是 Grill snapshot 已明確存在的檔案；無法辨識時回 `needs_decision`。
+- 模型可能漏掉語意問題；第二 verifier 不在本 ticket。
+
+### 下一步（設計階段歷史；已由下方收尾取代）
+
+### 最終實作與驗證（2026-08-25）
+
+- 狀態：已實作、已驗證。共五個工具：`forge_grill_evidence`、`forge_grill_complete`、`forge_deep_search`、`forge_deep_retrieval_complete`、`forge_deep_complete`。
+- Deep identity 固定為 `attemptId + sourceRoundId + phase`。retry 產生新 attempt、保留 source round、回原 Deep phase；cancel 保留 input／evidence，`continue` 回原 Deep phase，不回 Grill。stale outcome 優先 quiet reject；active-tools capability 對 active identity fail-closed。
+- 人類決策持久格式是 `問題：…；決定：…`，同一 decisionId 首筆不可覆寫；Evidence Package 先注入 human decisions，模型 duplicate decisionId 拒絕。
+- 固定上限：query 1500 Unicode code points；同 source／Grill round 最多 8 次搜尋且 retry／cancel 不重設；單筆 256 KiB（讀檔前 stat，恰好上限可）；整輪 2 MiB，包含 Grill fetched 與 Deep supplemental；decisions／findings／limitations 各 50；每段 statement 4,000 Unicode code points。超限先拒絕、不改 state。
+- 「每次來源搜尋最多 3 個相關候選」仍保留，這是呈現／候選上限，不是 Evidence Package 每類 50 筆安全上限。Deep 不重讀 Grill fetched evidence；ID 唯一、finding 引用必須存在、blocking limitation 不可 complete。
+- 驗證：`npm test` 208/208；`npm run check` exit 0；`git diff --check` exit 0（僅 LF／CRLF warning）。Standards 唯一 hard finding 是 README tool 清單過時，已修正；Divergent Change／Repeated Switches 是固定三來源與 Ponytail/YAGNI 下的 judgement call；Spec 無 production 缺口；adversarial 最終無 P0/P1。
+- 下一步只剩使用者檢閱並決定是否 commit；目前未 commit、未 staged。
+
+### 首次 Grill→Deep identity handoff 修正交接（2026-08-25）
+
+已確認首次 READY→Deep 建立 active identity 後，必須沿用 decision-retry 的 `pi.sendUserMessage(..., { deliverAs: "followUp" })`，將 `attemptId`、`sourceRoundId`、`phase` 傳入下一模型回合；本 follow-up 尚未實作或測試。
+
+- identity 不放入 tool details；Deep tools 不自行取得 identity；不改 stale guard、不改 `pi-main/`、不加 sequential 設定。
+- public seam 是現有 `registeredTools`／harness。先由測試代理新增 failing integration test，再最小修改 `forge-runtime/extensions/forge-runtime.ts`，最後執行 focused 與相關 suite。
+- 最脆弱假設：followUp 在目前 tool round 結束後觸發下一模型回合；現有 PI API 已如此定義。沒有 UI 工作，不建立 Plan B。
+
+（歷史快照）先建立紅燈、完成最小 production diff，再執行完整驗證與雙軸 review；上述工作已在下方收尾完成。

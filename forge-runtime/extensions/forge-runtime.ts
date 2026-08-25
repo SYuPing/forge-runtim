@@ -13,23 +13,53 @@ import {
 import {
 	type CodeBaseCandidate,
 	evaluateCandidateRelevance,
+	findCodeBaseCandidates,
 	getKnowledgeAssetStatus,
+	loadWikiDiscoverySources,
+	readEvidenceSource,
 } from "../src/discovery/discovery-sources.ts";
 import { runLightDiscovery, type LightDiscoveryMatch, type LightDiscoveryResult } from "../src/discovery/light-discovery.ts";
 import { understandIntent } from "../src/intent/intent-understanding.ts";
 import type { IntentModelContext } from "../src/intent/intent-types.ts";
 import { buildEvidenceSummaryText } from "../src/ui/evidence-summary-widget.ts";
 import {
-	createForgeSessionState,
+			createForgeSessionState,
+			type DeepAttemptIdentity,
+			DEEP_EVIDENCE_MAX_BYTES,
+			DEEP_EVIDENCE_ROUND_MAX_BYTES,
+			DEEP_SEARCH_MAX_PER_SOURCE_ROUND,
+		DEEP_SEARCH_MAX_QUERY_CODE_POINTS,
+			getDeepEvidenceContentBytes,
 	type GrillEvidenceCandidate,
 	type GrillEvidenceSnapshot,
 	type WaitUserPayload,
 	waitUserDecisionKey,
 } from "../src/runtime/session-state.ts";
+import {
+	createEvidencePackage,
+	validateEvidencePackage,
+	type EvidenceDecision,
+	type EvidenceFinding,
+	type EvidenceLimitation,
+} from "../src/evidence/evidence-engine.ts";
 import type { ForgeUiState } from "../src/ui/ui-state.ts";
 import { buildValidationRepairText } from "../src/ui/validation-repair-widget.ts";
 import { buildWaitUserPanel } from "../src/ui/wait-user-panel.ts";
 import { buildWorkflowStatusText } from "../src/ui/workflow-status-widget.ts";
+
+function isEvidenceTooLargeRejection(
+	value: unknown,
+): value is { readonly reason: "evidence_too_large"; readonly byteSize: number; readonly limit: number } {
+	if (typeof value !== "object" || value === null) return false;
+	return (
+		"reason" in value &&
+		value.reason === "evidence_too_large" &&
+		"byteSize" in value &&
+		typeof value.byteSize === "number" &&
+		"limit" in value &&
+		typeof value.limit === "number"
+	);
+}
 
 interface CommandContext extends IntentModelContext {
 	cwd?: string;
@@ -160,24 +190,45 @@ interface GrillCompatibleDiscovery {
 export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	const sessionState = createForgeSessionState();
 	const grillToolNames = ["forge_grill_evidence", "forge_grill_complete"];
+	const deepRetrievalToolNames = ["forge_deep_search", "forge_deep_retrieval_complete"];
+	const deepUnderstandingToolNames = ["forge_deep_complete"];
 	let pendingGrillRun = false;
 	let pendingKnowledgeRequest: { missingAssets: string[]; request: string; rootDir: string } | undefined;
 	let activeWorkflow: ActiveWorkflowContext | undefined;
 	let savedActiveTools: string[] | undefined;
 	let pendingReplayInvocation: string | undefined;
 	let activeWaitUserUiLeaseKey: string | undefined;
-	const canEnforceGrillToolBoundary = Boolean(pi.registerTool && pi.getActiveTools && pi.setActiveTools && pi.on);
-	const requireGrillToolBoundary = (ctx: CommandContext) => {
-		if (canEnforceGrillToolBoundary) {
-			return true;
-		}
-		ctx.ui?.notify?.("Forge 無法安全限制 Grill 工具面，已拒絕啟動或重播 Grill。", "warn");
-		return false;
-	};
+		const canEnforceToolBoundary = () =>
+			typeof pi.registerTool === "function" &&
+			typeof pi.getActiveTools === "function" &&
+			typeof pi.setActiveTools === "function" &&
+			typeof pi.on === "function";
+		const requireGrillToolBoundary = (ctx: CommandContext) => {
+			if (canEnforceToolBoundary()) {
+				return true;
+			}
+			ctx.ui?.notify?.("Forge 無法安全限制 Grill 工具面，已拒絕啟動或重播 Grill。", "warn");
+			return false;
+		};
+		const requireDeepToolBoundary = (ctx: CommandContext) => {
+			if (canEnforceToolBoundary()) {
+				return true;
+			}
+			ctx.ui?.notify?.("Forge 無法安全限制 Deep 工具面，已拒絕進入 Deep。", "warn");
+			return false;
+		};
 
 	const activateGrillTools = () => {
 		savedActiveTools ??= pi.getActiveTools?.();
 		pi.setActiveTools?.(grillToolNames);
+	};
+	const activateDeepRetrievalTools = () => {
+		savedActiveTools ??= pi.getActiveTools?.();
+		pendingGrillRun = false;
+		pi.setActiveTools?.(deepRetrievalToolNames);
+	};
+	const activateDeepUnderstandingTools = () => {
+		pi.setActiveTools?.(deepUnderstandingToolNames);
 	};
 	const restoreActiveTools = () => {
 		if (!savedActiveTools) {
@@ -229,6 +280,17 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 		}
 		};
+	const hasUnknownEvidenceIds = (ids: readonly string[], known: ReadonlySet<string>) =>
+		ids.some((evidenceId) => !known.has(evidenceId));
+	const isCurrentDeepAttempt = (identity: DeepAttemptIdentity) => {
+		const attempt = sessionState.currentDeepAttempt();
+		return Boolean(
+			attempt &&
+			attempt.attemptId === identity.attemptId &&
+			attempt.sourceRoundId === identity.sourceRoundId &&
+			attempt.phase === identity.phase,
+		);
+	};
 	const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
 	const parseActiveGrillCompletion = (payload: unknown) => {
 		const round = sessionState.continueGrillRound();
@@ -286,7 +348,43 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			nextRound.snapshot.manifest,
 		);
 	};
+		const prepareDeepKnowledgeAnswer = (
+			answer: string,
+		):
+			| { kind: "not_deep" }
+			| { kind: "handled"; state: ForgeUiState; invocation?: string } => {
+			const current = sessionState.current();
+			if (current.stage !== "WAIT_USER" || current.waitUser?.kind !== "deep_decision") {
+				return { kind: "not_deep" };
+			}
+			if (!pi.sendUserMessage) {
+				return { kind: "handled", state: current };
+			}
+			const answeredState = sessionState.recordAnswer(answer);
+			const retryState = sessionState.retryDeepKnowledge(answeredState.decisionSummary);
+			const retryAttempt = sessionState.currentDeepAttempt();
+			if (!retryAttempt) {
+				return { kind: "handled", state: retryState };
+			}
+			if (retryAttempt.phase === "DEEP_KNOWLEDGE_RETRIEVAL") activateDeepRetrievalTools();
+			else activateDeepUnderstandingTools();
+			const invocation = `請依使用者決定 ${JSON.stringify(answer)} 繼續 Forge Deep ${retryAttempt.phase}。attemptId=${retryAttempt.attemptId} sourceRoundId=${retryAttempt.sourceRoundId} phase=${retryAttempt.phase}`;
+			return { kind: "handled", state: retryState, invocation };
+		};
 		const resumeWaitUserAnswer = async (answer: string, ctx: CommandContext): Promise<boolean> => {
+			const current = sessionState.current();
+			if (current.stage === "WAIT_USER" && current.waitUser?.kind === "deep_decision" && !requireDeepToolBoundary(ctx)) {
+				return true;
+			}
+			const deepAnswer = prepareDeepKnowledgeAnswer(answer);
+			if (deepAnswer.kind === "handled") {
+				await publishState(pi, ctx, deepAnswer.state);
+				if (deepAnswer.invocation) {
+					pendingReplayInvocation = deepAnswer.invocation;
+					await pi.sendUserMessage?.(deepAnswer.invocation, { deliverAs: "followUp" });
+				}
+				return true;
+			}
 			if (!pi.sendUserMessage) {
 				return false;
 			}
@@ -297,11 +395,26 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 			return true;
 		};
+		const restartLightDiscoveryAndGrill = async (workflow: ActiveWorkflowContext, ctx: CommandContext): Promise<string> => {
+			await publishState(pi, ctx, sessionState.beginLightDiscovery(workflow.goal));
+			const discovery = runLightDiscovery(workflow.rootDir, workflow.goal);
+			const lightDiscovery = buildGrillCompatibleDiscovery(workflow.rootDir, discovery, workflow.goal);
+			const round = sessionState.startGrillRound(workflow.goal, lightDiscovery.snapshot);
+			activeWorkflow = { ...workflow, lightDiscovery, seeds: extractDeepDiscoverySeeds(workflow.goal), snapshot: round.snapshot };
+			pendingGrillRun = true;
+			activateGrillTools();
+			await publishState(pi, ctx, sessionState.beginGrill(workflow.goal));
+			return buildGrillingSkillInvocation(
+				[workflow.goal, lightDiscovery.summary].filter((value) => value.length > 0).join("\n\n"),
+				round.roundId,
+				round.snapshot.manifest,
+			);
+		};
 
 	pi.registerTool?.({
 		name: "forge_grill_evidence",
-		label: "Forge Grill Evidence",
-		description: "Read evidence from the active Forge Grill round.",
+			label: "Forge Grill 證據",
+			description: "讀取目前 Forge Grill 回合的證據。",
 		parameters: Type.Object(
 			{ candidateId: Type.String({ pattern: "^ev-[0-9a-f]{64}$" }) },
 			{ additionalProperties: false },
@@ -314,7 +427,56 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (!candidate) {
 				throw new Error("GRILL_EVIDENCE_CANDIDATE_NOT_FOUND");
 			}
-			sessionState.recordEvidenceFetch(candidate.candidateId);
+			if (candidate.metadata.rejection?.reason === "evidence_too_large") {
+				return {
+					content: [{ type: "text", text: `Grill 證據過大，單筆上限為 ${DEEP_EVIDENCE_MAX_BYTES} bytes，已拒絕讀取。` }],
+					details: {
+						status: "rejected",
+						reason: "evidence_too_large",
+						byteSize: candidate.metadata.rejection.byteSize,
+						limit: candidate.metadata.rejection.limit,
+						evidence: [],
+					},
+				};
+			}
+				if (Buffer.byteLength(candidate.content, "utf8") > DEEP_EVIDENCE_MAX_BYTES) {
+					return {
+					content: [{ type: "text", text: `Grill 證據過大，單筆上限為 ${DEEP_EVIDENCE_MAX_BYTES} bytes，已拒絕讀取。` }],
+					details: {
+						status: "rejected",
+						reason: "evidence_too_large",
+						limit: DEEP_EVIDENCE_MAX_BYTES,
+						evidence: [],
+					},
+					};
+				}
+				const fetchedCandidates = [...sessionState.getFetchedEvidenceIds()]
+					.map((evidenceId) => activeWorkflow?.snapshot.candidates[evidenceId])
+					.filter((fetched): fetched is GrillEvidenceCandidate => Boolean(fetched));
+					const roundEvidenceBytes = getDeepEvidenceContentBytes(
+						[...fetchedCandidates, candidate].map((evidence) => ({
+							content: evidence.content,
+							evidenceId: evidence.candidateId,
+							source: evidence.source,
+						})),
+					);
+				if (roundEvidenceBytes > DEEP_EVIDENCE_ROUND_MAX_BYTES) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Deep Search 本輪證據總量超過 ${DEEP_EVIDENCE_ROUND_MAX_BYTES} bytes，已拒絕這次搜尋。`,
+							},
+						],
+						details: {
+							status: "rejected",
+							reason: "evidence_round_too_large",
+							limit: DEEP_EVIDENCE_ROUND_MAX_BYTES,
+							evidence: [],
+						},
+					};
+				}
+				sessionState.recordEvidenceFetch(candidate.candidateId);
 			return {
 				content: [{ type: "text", text: candidate.content }],
 				details: {
@@ -329,8 +491,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	});
 	pi.registerTool?.({
 		name: "forge_grill_complete",
-		label: "Forge Grill Complete",
-		description: "Submit the structured result for the active Forge Grill round.",
+			label: "Forge Grill 完成",
+			description: "提交目前 Forge Grill 回合的結構化結果。",
 			parameters: GrillCompletionSchema,
 			async execute(_toolCallId: string, params: unknown, _signal: unknown, _onUpdate: unknown, ctx: unknown) {
 				if (!hasActiveGrillAttempt()) {
@@ -346,23 +508,665 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						);
 					});
 				} else {
-					await continueDeepKnowledge(
+					const enteredDeep = await continueDeepKnowledge(
 						pi,
 						ctx as CommandContext,
 						sessionState,
 						activeWorkflow,
 						publishWaitUser,
+						requireDeepToolBoundary,
 						completion.recommendation.reason,
 						completion,
-						releaseGrillBoundary,
+						activateDeepRetrievalTools,
 					);
+					if (!enteredDeep) {
+						return {
+							content: [{ type: "text", text: "Forge 無法安全限制 Deep 工具面，已拒絕進入 Deep。" }],
+							details: { status: "rejected", reason: "deep_tool_boundary_unavailable" },
+						};
+					}
 				}
 				pendingGrillRun = ["GRILL", "WAIT_USER"].includes(sessionState.current().stage);
 				return {
-					content: [{ type: "text", text: "Forge Grill completion accepted." }],
+						content: [{ type: "text", text: "Forge Grill 完成結果已接受。" }],
 					details: { roundId: completion.roundId, status: completion.status },
 					terminate: true,
 				};
+		},
+	});
+
+	pi.registerTool?.({
+		name: "forge_deep_search",
+			label: "Forge Deep 搜尋",
+			description: "在目前的 Deep Retrieval 嘗試中搜尋允許的知識來源。",
+		parameters: Type.Object(
+			{
+				attemptId: Type.String(),
+				sourceRoundId: Type.String(),
+				phase: Type.Literal("DEEP_KNOWLEDGE_RETRIEVAL"),
+				query: Type.String({ minLength: 1 }),
+				source: Type.Union([Type.Literal("wiki"), Type.Literal("code_base"), Type.Literal("target")]),
+				targetSource: Type.Optional(Type.String()),
+			},
+			{ additionalProperties: false },
+		),
+		async execute(
+			_toolCallId: string,
+			params: {
+				attemptId: string;
+				sourceRoundId: string;
+				phase: "DEEP_KNOWLEDGE_RETRIEVAL";
+				query: string;
+				source: "wiki" | "code_base" | "target";
+				targetSource?: string;
+			},
+			_signal: unknown,
+			_onUpdate: unknown,
+			ctx: unknown,
+		) {
+			const identity = {
+				attemptId: params.attemptId,
+				sourceRoundId: params.sourceRoundId,
+				phase: params.phase,
+			} as const;
+			const attempt = sessionState.currentDeepAttempt();
+			if (
+				!attempt ||
+				attempt.attemptId !== identity.attemptId ||
+				attempt.sourceRoundId !== identity.sourceRoundId ||
+				attempt.phase !== identity.phase
+			) {
+				return {
+						content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
+					details: { status: "stale", evidence: [] },
+				};
+			}
+			if (!activeWorkflow) {
+				return { block: true };
+			}
+				const workflow = activeWorkflow;
+
+				const trimmedQuery = params.query.trim();
+				if (trimmedQuery.length === 0) {
+					return {
+							content: [{ type: "text", text: "Deep Search 查詢不得為空白。" }],
+							details: { status: "invalid", errors: ["Deep Search 查詢不得為空白。"] },
+					};
+				}
+				if (Array.from(trimmedQuery).length > DEEP_SEARCH_MAX_QUERY_CODE_POINTS) {
+					return {
+							content: [{ type: "text", text: `Deep Search 查詢最多 ${DEEP_SEARCH_MAX_QUERY_CODE_POINTS} 個字元。` }],
+						details: { status: "rejected", reason: "query_too_long", limit: DEEP_SEARCH_MAX_QUERY_CODE_POINTS },
+					};
+				}
+				const query = trimmedQuery.toLowerCase();
+				let selectedTarget: GrillEvidenceCandidate | undefined;
+			if (params.source === "target") {
+				const targetCandidates = Object.values(workflow.snapshot.candidates).filter(
+					(candidate) =>
+						candidate.kind === "target" &&
+						`${candidate.source}\n${candidate.content}`.toLowerCase().includes(query),
+				);
+				const options = [
+					...new Set(
+						targetCandidates.map(
+							(candidate) => candidate.metadata.relativePath ?? candidate.source.replace(/^target\//, ""),
+						),
+					),
+				].sort();
+				const matchingTargets = params.targetSource
+					? targetCandidates.filter(
+							(candidate) =>
+								candidate.source === params.targetSource ||
+								candidate.metadata.relativePath === params.targetSource ||
+								candidate.source === `target/${params.targetSource}`,
+						)
+					: [];
+				if (matchingTargets.length !== 1) {
+					const question = "Target source 不明確，請選擇一個明確的 target 檔案。";
+					const evidenceIds = [...sessionState.getFetchedEvidenceIds()];
+					const decision = sessionState.handleDeepResult(identity, {
+						kind: "needs_decision",
+						decisionId: `${identity.attemptId}-target-source`,
+						question,
+						options,
+						recommendation: options[0] ?? "補充明確的 targetSource",
+						evidenceIds,
+					});
+					if (decision.kind === "stale") {
+						return {
+						content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
+							details: { status: "stale", evidence: [] },
+						};
+					}
+					restoreActiveTools();
+					await publishState(pi, ctx as CommandContext, decision.state);
+					return {
+						content: [{ type: "text", text: question }],
+						details: { status: "needs_decision", question, options, evidenceIds },
+						terminate: true,
+					};
+				}
+				selectedTarget = matchingTargets[0];
+			}
+			const fetchedCandidates = [...sessionState.getFetchedEvidenceIds()]
+				.map((evidenceId) => workflow.snapshot.candidates[evidenceId])
+				.filter((candidate): candidate is GrillEvidenceCandidate => Boolean(candidate));
+			const reusedEvidenceIds = new Set(
+				fetchedCandidates
+					.filter(
+						(candidate) =>
+							candidate.kind === params.source &&
+							`${candidate.source}\n${candidate.content}`.toLowerCase().includes(query),
+					)
+					.map((candidate) => candidate.candidateId),
+			);
+				if (reusedEvidenceIds.size > 0) {
+				return {
+						content: [{ type: "text", text: "已重用 Grill 快照中的證據。" }],
+					details: {
+						status: "accepted",
+						...identity,
+						evidence: [],
+						reusedEvidenceIds: [...reusedEvidenceIds],
+					},
+				};
+			}
+			const reusedSupplementalEvidence = sessionState.getDeepSupplementalEvidence().filter(
+				(evidence) => evidence.kind === params.source && `${evidence.source}\n${evidence.content}`.toLowerCase().includes(query),
+			);
+			if (reusedSupplementalEvidence.length > 0) {
+				return {
+						content: [{ type: "text", text: "已重用目前 Deep 嘗試中的證據。" }],
+					details: {
+						status: "accepted",
+						...identity,
+						evidence: [],
+						reusedEvidenceIds: reusedSupplementalEvidence.map((evidence) => evidence.evidenceId),
+					},
+				};
+			}
+			const searchBudget = sessionState.reserveDeepSearchBudget(identity);
+			if (searchBudget === "stale") {
+				return {
+					content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
+					details: { status: "stale", evidence: [] },
+				};
+			}
+			if (searchBudget === "limit") {
+				return {
+					content: [{ type: "text", text: `本輪 Deep Search 最多搜尋 ${DEEP_SEARCH_MAX_PER_SOURCE_ROUND} 次，已拒絕這次搜尋。` }],
+					details: { status: "rejected", reason: "search_budget_exhausted", limit: DEEP_SEARCH_MAX_PER_SOURCE_ROUND },
+				};
+			}
+			let evidence: Array<{
+				content: string;
+				evidenceId: string;
+				kind: string;
+				metadata: Record<string, unknown>;
+				source: string;
+				title: string;
+			}>;
+			try {
+				evidence =
+					params.source === "wiki"
+						? loadWikiDiscoverySources(workflow.rootDir)
+								.filter((document) => `${document.path}\n${document.content}`.toLowerCase().includes(query))
+								.slice(0, 3)
+								.map((document) => ({
+									content: document.content,
+									evidenceId: createEvidenceId("wiki", document.path, document.content),
+									kind: "wiki",
+									metadata: { rejection: document.rejection },
+									source: document.path,
+									title: document.path,
+								}))
+						: params.source === "code_base"
+							? findCodeBaseCandidates(workflow.rootDir, [params.query], 3).map((candidate) => ({
+										content: candidate.content,
+										evidenceId: createEvidenceId("code_base", candidate.relativePath, candidate.content),
+										kind: "code_base",
+										metadata: {
+											matches: candidate.matches,
+											relativePath: candidate.relativePath,
+											score: candidate.score,
+											whyRelevant: candidate.whyRelevant,
+											rejection: candidate.rejection,
+										},
+										source: candidate.relativePath,
+										title: candidate.relativePath,
+									}))
+							: selectedTarget
+								? [
+											{
+												content: selectedTarget.content,
+												evidenceId: selectedTarget.candidateId,
+												kind: "target",
+												metadata: { ...selectedTarget.metadata },
+												source: selectedTarget.source,
+												title: selectedTarget.title,
+											},
+										]
+								: [];
+			} catch (error) {
+				sessionState.releaseDeepSearchBudget(identity);
+				throw error;
+			}
+			const supplementalEvidence = evidence.filter((item) => {
+				const itemSource = item.source.replace(/\\/g, "/");
+				const reused = fetchedCandidates.find((candidate) => {
+					if (candidate.kind !== item.kind) {
+						return false;
+					}
+					return [candidate.source, candidate.metadata.relativePath]
+						.filter((source): source is string => Boolean(source))
+						.map((source) => source.replace(/\\/g, "/"))
+						.some(
+							(source) =>
+								itemSource === source || itemSource.endsWith(`/${source}`) || source.endsWith(`/${itemSource}`),
+						);
+				});
+				if (reused) {
+					reusedEvidenceIds.add(reused.candidateId);
+					return false;
+				}
+				return true;
+			});
+			const oversizedEvidence = supplementalEvidence.find(
+				(item) => {
+					return isEvidenceTooLargeRejection(item.metadata["rejection"])
+						|| Buffer.byteLength(item.content, "utf8") > DEEP_EVIDENCE_MAX_BYTES;
+				},
+			);
+			if (oversizedEvidence) {
+				sessionState.releaseDeepSearchBudget(identity);
+				const rejection = oversizedEvidence.metadata["rejection"];
+				const validatedRejection = isEvidenceTooLargeRejection(rejection) ? rejection : undefined;
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Deep Search 證據過大，單筆上限為 ${DEEP_EVIDENCE_MAX_BYTES} bytes，已拒絕這次搜尋。`,
+						},
+					],
+					details: {
+						status: "rejected",
+						reason: validatedRejection?.reason ?? "evidence_too_large",
+						byteSize: validatedRejection?.byteSize,
+						limit: validatedRejection?.limit ?? DEEP_EVIDENCE_MAX_BYTES,
+						evidence: [],
+					},
+				};
+			}
+			const roundEvidenceBytes = getDeepEvidenceContentBytes([
+				...fetchedCandidates.map((candidate) => ({
+					evidenceId: candidate.candidateId,
+					source: candidate.source,
+					content: candidate.content,
+				})),
+				...sessionState.getDeepSupplementalEvidence(),
+				...supplementalEvidence,
+			]);
+			if (roundEvidenceBytes > DEEP_EVIDENCE_ROUND_MAX_BYTES) {
+				sessionState.releaseDeepSearchBudget(identity);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Deep Search 本輪證據總量超過 ${DEEP_EVIDENCE_ROUND_MAX_BYTES} bytes，已拒絕這次搜尋。`,
+						},
+					],
+					details: {
+						status: "rejected",
+						reason: "evidence_round_too_large",
+						limit: DEEP_EVIDENCE_ROUND_MAX_BYTES,
+						evidence: [],
+					},
+				};
+			}
+			const committed = sessionState.commitDeepSearchBudget(identity);
+			if (committed === "stale") {
+				return {
+					content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
+					details: { status: "stale", evidence: [] },
+				};
+			}
+
+			for (const item of supplementalEvidence) {
+				sessionState.recordDeepSupplementalEvidence(identity, item.evidenceId, item);
+			}
+			return {
+				content: [{ type: "text", text: supplementalEvidence.map((item) => item.content).join("\n\n") }],
+				details: {
+					status: "accepted",
+					...identity,
+					evidence: supplementalEvidence,
+					reusedEvidenceIds: [...reusedEvidenceIds],
+				},
+			};
+		},
+	});
+
+	pi.registerTool?.({
+		name: "forge_deep_retrieval_complete",
+		label: "Forge Deep Retrieval 完成",
+		description: "鎖定執行期間收集的所有證據，並繼續進入 Knowledge Understanding。",
+		parameters: Type.Object(
+			{
+				attemptId: Type.String(),
+				sourceRoundId: Type.String(),
+				phase: Type.Literal("DEEP_KNOWLEDGE_RETRIEVAL"),
+				outcome: Type.Union([
+					Type.Object({ kind: Type.Literal("completed") }, { additionalProperties: false }),
+					Type.Object(
+						{
+							kind: Type.Literal("needs_decision"),
+							decisionId: Type.String(),
+							question: Type.String(),
+							options: Type.Array(Type.String()),
+							recommendation: Type.String(),
+							evidenceIds: Type.Array(Type.String()),
+							decisionSummary: Type.Optional(Type.String()),
+						},
+						{ additionalProperties: false },
+					),
+					Type.Object(
+						{
+							kind: Type.Literal("needs_discovery"),
+							decisionSummary: Type.Optional(Type.String()),
+						},
+						{ additionalProperties: false },
+					),
+				]),
+			},
+			{ additionalProperties: false },
+		),
+		async execute(
+			_toolCallId: string,
+			params: {
+				attemptId: string;
+				sourceRoundId: string;
+				phase: "DEEP_KNOWLEDGE_RETRIEVAL";
+				outcome:
+					| { kind: "completed" }
+					| {
+							kind: "needs_decision";
+							decisionId: string;
+							question: string;
+							options: string[];
+							recommendation: string;
+							evidenceIds: string[];
+							decisionSummary?: string;
+					  }
+					| { kind: "needs_discovery"; decisionSummary?: string };
+			},
+			_signal: unknown,
+			_onUpdate: unknown,
+				ctx: unknown,
+			) {
+				const identity = {
+					attemptId: params.attemptId,
+					sourceRoundId: params.sourceRoundId,
+					phase: params.phase,
+				} as const;
+					if (!isCurrentDeepAttempt(identity)) {
+					return {
+						content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
+						details: { status: "stale", lockedEvidenceIds: [] },
+					};
+				}
+				if (!activeWorkflow) {
+					return { block: true };
+				}
+				if (!requireDeepToolBoundary(ctx as CommandContext)) {
+					return {
+						content: [{ type: "text", text: "Forge 無法安全限制 Deep 工具面，已拒絕處理。" }],
+						details: { status: "rejected", reason: "deep_tool_boundary_unavailable" },
+					};
+				}
+			if (params.outcome.kind !== "completed") {
+				if (params.outcome.kind === "needs_decision") {
+					const knownEvidenceIds = new Set([
+						...sessionState.getFetchedEvidenceIds(),
+						...sessionState.getDeepSupplementalEvidenceIds(),
+					]);
+					if (hasUnknownEvidenceIds(params.outcome.evidenceIds, knownEvidenceIds)) {
+						return {
+							content: [{ type: "text", text: "Deep Retrieval 的 needs_decision 引用了未知的 Evidence ID。" }],
+							details: { status: "invalid", errors: ["Deep Retrieval 的 needs_decision 引用了未知的 Evidence ID。"] },
+						};
+					}
+				}
+				const completion = sessionState.handleDeepResult(identity, params.outcome);
+				if (completion.kind === "stale") {
+					return {
+						content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
+						details: { status: "stale", lockedEvidenceIds: [] },
+					};
+				}
+				restoreActiveTools();
+				await publishState(pi, ctx as CommandContext, completion.state);
+				return {
+					content: [{ type: "text", text: `Forge Deep Retrieval 的 ${params.outcome.kind} 結果已接受。` }],
+					details: { status: params.outcome.kind, payload: params.outcome },
+					terminate: true,
+				};
+			}
+			const inheritedEvidence = [...sessionState.getFetchedEvidenceIds()]
+				.map((evidenceId) => activeWorkflow?.snapshot.candidates[evidenceId])
+				.filter((candidate): candidate is GrillEvidenceCandidate => Boolean(candidate))
+				.map((candidate) => ({
+					content: candidate.content,
+					evidenceId: candidate.candidateId,
+					kind: candidate.kind,
+					metadata: { ...candidate.metadata },
+					source: candidate.source,
+					title: candidate.title,
+				}));
+			const completion = sessionState.completeDeepRetrieval(inheritedEvidence, undefined, identity);
+			if (completion.kind === "stale") {
+				return {
+					content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
+					details: { status: "stale", lockedEvidenceIds: [] },
+				};
+			}
+
+			activateDeepUnderstandingTools();
+			await publishState(pi, ctx as CommandContext, completion.state);
+			const locked = sessionState.getLockedDeepEvidence();
+			const lockedEvidenceIds = locked
+				? [...locked.inherited, ...locked.supplemental].map((evidence) => evidence.evidenceId)
+				: [];
+			return {
+				content: [{ type: "text", text: "Forge Deep Retrieval 完成結果已接受。" }],
+				details: { status: "accepted", ...completion.identity, lockedEvidenceIds },
+				terminate: true,
+			};
+		},
+	});
+
+	pi.registerTool?.({
+		name: "forge_deep_complete",
+		label: "Forge Deep 完成",
+		description: "根據已鎖定的 Deep 證據建立並驗證 Evidence Package。",
+		parameters: Type.Object(
+			{
+				attemptId: Type.String(),
+				sourceRoundId: Type.String(),
+				phase: Type.Literal("KNOWLEDGE_UNDERSTANDING"),
+				outcome: Type.Union([
+					Type.Object(
+						{
+							kind: Type.Literal("completed"),
+							decisions: Type.Array(
+								Type.Object(
+									{
+										decisionId: Type.String(),
+										statement: Type.String(),
+										evidenceIds: Type.Array(Type.String()),
+									},
+									{ additionalProperties: false },
+								),
+							),
+							findings: Type.Array(
+								Type.Object(
+									{
+										statement: Type.String(),
+										evidenceIds: Type.Array(Type.String()),
+									},
+									{ additionalProperties: false },
+								),
+							),
+							limitations: Type.Array(
+								Type.Object(
+									{
+										statement: Type.String(),
+										blocking: Type.Boolean(),
+									},
+									{ additionalProperties: false },
+								),
+							),
+						},
+						{ additionalProperties: false },
+					),
+					Type.Object(
+						{
+							kind: Type.Literal("needs_decision"),
+							decisionId: Type.String(),
+							question: Type.String(),
+							options: Type.Array(Type.String()),
+							recommendation: Type.String(),
+							evidenceIds: Type.Array(Type.String()),
+							decisionSummary: Type.Optional(Type.String()),
+						},
+						{ additionalProperties: false },
+					),
+					Type.Object(
+						{
+							kind: Type.Literal("needs_discovery"),
+							decisionSummary: Type.Optional(Type.String()),
+						},
+						{ additionalProperties: false },
+					),
+				]),
+			},
+			{ additionalProperties: false },
+		),
+		async execute(
+			_toolCallId: string,
+			params: {
+				attemptId: string;
+				sourceRoundId: string;
+				phase: "KNOWLEDGE_UNDERSTANDING";
+				outcome:
+					| {
+							kind: "completed";
+							decisions: EvidenceDecision[];
+							findings: EvidenceFinding[];
+							limitations: EvidenceLimitation[];
+					  }
+					| {
+							kind: "needs_decision";
+							decisionId: string;
+							question: string;
+							options: string[];
+							recommendation: string;
+							evidenceIds: string[];
+							decisionSummary?: string;
+					  }
+					| { kind: "needs_discovery"; decisionSummary?: string };
+			},
+			_signal: unknown,
+			_onUpdate: unknown,
+				ctx: unknown,
+			) {
+			const identity = {
+				attemptId: params.attemptId,
+				sourceRoundId: params.sourceRoundId,
+				phase: params.phase,
+			} as const;
+			if (!isCurrentDeepAttempt(identity)) {
+				return {
+					content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
+					details: { status: "stale" },
+				};
+			}
+			if (!requireDeepToolBoundary(ctx as CommandContext)) {
+				return {
+					content: [{ type: "text", text: "Forge 無法安全限制 Deep 工具面，已拒絕處理。" }],
+					details: { status: "rejected", reason: "deep_tool_boundary_unavailable" },
+				};
+			}
+			if (params.outcome.kind !== "completed") {
+				if (params.outcome.kind === "needs_decision") {
+					const locked = sessionState.getLockedDeepEvidence();
+					const knownEvidenceIds = new Set(
+						locked ? [...locked.inherited, ...locked.supplemental].map((evidence) => evidence.evidenceId) : [],
+					);
+					if (hasUnknownEvidenceIds(params.outcome.evidenceIds, knownEvidenceIds)) {
+						return {
+							content: [{ type: "text", text: "Knowledge Understanding 的 needs_decision 引用了未知的 Evidence ID。" }],
+							details: { status: "invalid", errors: ["Knowledge Understanding 的 needs_decision 引用了未知的 Evidence ID。"] },
+						};
+					}
+				}
+				const completion = sessionState.handleDeepResult(identity, params.outcome);
+				if (completion.kind === "stale") {
+					return {
+						content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
+						details: { status: "stale" },
+					};
+				}
+				restoreActiveTools();
+				await publishState(pi, ctx as CommandContext, completion.state);
+				return {
+					content: [{ type: "text", text: `Forge Deep 的 ${params.outcome.kind} 結果已接受。` }],
+					details: { status: params.outcome.kind, payload: params.outcome },
+					terminate: true,
+				};
+			}
+
+			const locked = sessionState.getLockedDeepEvidence();
+			if (!locked) {
+				return {
+					content: [{ type: "text", text: "Deep 證據尚未鎖定。" }],
+					details: { status: "invalid", errors: ["Deep evidence 尚未鎖定"] },
+				};
+			}
+
+			const evidencePackage = createEvidencePackage({
+				inherited: [...locked.inherited],
+				supplemental: [...locked.supplemental],
+				decisions: [...sessionState.getHumanDecisions(), ...params.outcome.decisions],
+				findings: params.outcome.findings,
+				limitations: params.outcome.limitations,
+			});
+			const validation = validateEvidencePackage(evidencePackage);
+			if (!validation.ok) {
+				return {
+					content: [{ type: "text", text: validation.errors.join("\n") }],
+					details: { status: "invalid", errors: validation.errors, evidencePackage },
+				};
+			}
+
+			const completion = sessionState.handleDeepResult(identity, {
+				kind: "completed",
+				evidenceIds: evidencePackage.evidence.map((evidence) => evidence.evidenceId),
+			});
+			if (completion.kind === "stale") {
+				return {
+					content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
+					details: { status: "stale", evidencePackage },
+				};
+			}
+
+			restoreActiveTools();
+			await publishState(pi, ctx as CommandContext, completion.state);
+			return {
+				content: [{ type: "text", text: "Forge Deep 完成結果已接受。" }],
+				details: { status: "accepted", evidencePackage },
+				terminate: true,
+			};
 		},
 	});
 
@@ -496,7 +1300,19 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							(waitUser?.recommendation &&
 								(isApproval(routingText) || waitUser.recommendation.trim().toLowerCase() === normalized)
 								? waitUser.recommendation
-								: routingText);
+							: routingText);
+						if (waitUser?.kind === "deep_decision") {
+							if (!requireDeepToolBoundary(ctx ?? {})) {
+								return { action: "handled" as const };
+							}
+							const deepAnswer = prepareDeepKnowledgeAnswer(answer);
+							if (deepAnswer.kind === "handled") {
+								await publishState(pi, ctx ?? {}, deepAnswer.state);
+								return deepAnswer.invocation
+									? { action: "transform" as const, text: deepAnswer.invocation }
+									: { action: "handled" as const };
+							}
+						}
 						const invocation = await resumeGrillWithAnswer(answer, ctx ?? {});
 					if (!invocation) {
 						return { action: "handled" as const };
@@ -567,7 +1383,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	});
 
 	pi.registerCommand("forge-runtime", {
-		description: "Drive the Forge workflow spike: grill ambiguous <json> | grill-result <json> | confirm | reject",
+		description: "操作 Forge workflow：grill ambiguous <json>｜grill-result <json>｜confirm｜reject",
 			handler: async (args, ctx) => {
 				const command = args.trim();
 				if (command.startsWith("grill ambiguous ")) {
@@ -597,16 +1413,20 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						return;
 					}
 					if (!grillResult.requiresUserConfirmation) {
-						await continueDeepKnowledge(
+						const enteredDeep = await continueDeepKnowledge(
 							pi,
 							ctx,
 							sessionState,
 							activeWorkflow,
 							publishWaitUser,
-							grillResult.recommendation.reason,
-							grillResult,
-							releaseGrillBoundary,
-						);
+							requireDeepToolBoundary,
+			grillResult.recommendation.reason,
+			grillResult,
+			activateDeepRetrievalTools,
+		);
+						if (!enteredDeep) {
+							return;
+						}
 						pendingGrillRun = ["GRILL", "WAIT_USER"].includes(sessionState.current().stage);
 						return;
 					}
@@ -621,7 +1441,37 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						return;
 					}
 					const stage = sessionState.current().stage;
-					if (!pendingGrillRun || (stage !== "GRILL" && stage !== "WAIT_USER")) {
+					if (stage === "LIGHT_DISCOVERY" && activeWorkflow) {
+						if (!pi.sendUserMessage || !requireGrillToolBoundary(ctx)) {
+							await publishState(pi, ctx, sessionState.current());
+							return;
+						}
+						const invocation = await restartLightDiscoveryAndGrill(activeWorkflow, ctx);
+						pendingReplayInvocation = invocation;
+						await pi.sendUserMessage(invocation, { deliverAs: "followUp" });
+						return;
+					}
+					if (stage === "DEEP_KNOWLEDGE_RETRIEVAL" || stage === "KNOWLEDGE_UNDERSTANDING" || (stage === "WAIT_USER" && sessionState.current().waitUser?.kind === "deep_decision")) {
+						if (!pi.sendUserMessage || !requireDeepToolBoundary(ctx)) {
+							await publishState(pi, ctx, sessionState.current());
+							return;
+						}
+						const currentAttempt = sessionState.currentDeepAttempt();
+						const retryState = currentAttempt
+							? sessionState.beginDeepKnowledge(undefined, currentAttempt.phase)
+							: sessionState.retryDeepKnowledge();
+						const retryAttempt = sessionState.currentDeepAttempt();
+						if (!retryAttempt) return;
+						if (retryAttempt.phase === "DEEP_KNOWLEDGE_RETRIEVAL") activateDeepRetrievalTools();
+						else activateDeepUnderstandingTools();
+						const invocation = `請繼續 Forge Deep ${retryAttempt.phase}。attemptId=${retryAttempt.attemptId} sourceRoundId=${retryAttempt.sourceRoundId} phase=${retryAttempt.phase}`;
+						pendingReplayInvocation = invocation;
+						await pi.sendUserMessage(invocation, { deliverAs: "followUp" });
+						await publishState(pi, ctx, retryState);
+						return;
+					}
+					const canResumeCancelledDeep = stage === "GRILL" && activeWorkflow && !pendingGrillRun;
+					if ((!pendingGrillRun && !canResumeCancelledDeep) || (stage !== "GRILL" && stage !== "WAIT_USER")) {
 						return;
 					}
 					if (!pi.sendUserMessage || !requireGrillToolBoundary(ctx)) {
@@ -671,12 +1521,22 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				}
 
 				if (command === "cancel") {
-				activeWorkflow = undefined;
-				clearPendingState();
-				restoreActiveTools();
-				await publishState(pi, ctx, sessionState.reset());
-				return;
-			}
+					const current = sessionState.current();
+					const deepCancel =
+						current.stage === "DEEP_KNOWLEDGE_RETRIEVAL" ||
+						current.stage === "KNOWLEDGE_UNDERSTANDING" ||
+						(current.stage === "WAIT_USER" && current.waitUser?.kind === "deep_decision");
+					clearPendingState();
+					restoreActiveTools();
+					if (deepCancel) {
+						pendingGrillRun = false;
+						await publishState(pi, ctx, sessionState.cancelDeepKnowledge());
+						return;
+					}
+					activeWorkflow = undefined;
+					await publishState(pi, ctx, sessionState.reset());
+					return;
+				}
 
 			if (command.startsWith("switch ")) {
 				const request = command.slice("switch ".length).trim();
@@ -725,6 +1585,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					sessionState,
 					activeWorkflow,
 					publishWaitUser,
+					requireDeepToolBoundary,
 					releaseGrillBoundary,
 				);
 				return;
@@ -782,16 +1643,35 @@ function buildGrillCompatibleDiscovery(rootDir: string, discovery: LightDiscover
 	for (const match of discovery.matches) {
 		const contentPath = resolve(rootDir, match.source, match.relativePath);
 		let content: string;
+		let rejection: { reason: "evidence_too_large"; byteSize: number; limit: number } | undefined;
 		try {
-			content = readFileSync(contentPath, "utf8");
+			const readResult = readEvidenceSource(contentPath);
+			content = readResult.content;
+			rejection = readResult.rejection;
 		} catch {
 			continue;
 		}
 		const source = `${match.source}/${match.relativePath}`;
 		const candidateId = createEvidenceId(match.source, source, content);
-		const metadata = { relativePath: match.relativePath, matches: ["path"] };
+		const metadata = { relativePath: match.relativePath, matches: ["path"], rejection };
 			evidence.push({ candidateId, content, kind: match.source, metadata, source, title: match.fileName });
 			if (match.source === "code_base") {
+				const targetPath = resolve(rootDir, match.relativePath);
+				try {
+					const targetReadResult = readEvidenceSource(targetPath);
+					const targetContent = targetReadResult.content;
+					const targetSource = `target/${match.relativePath}`;
+					evidence.push({
+						candidateId: createEvidenceId("target", targetSource, targetContent),
+						content: targetContent,
+						kind: "target",
+						metadata: { relativePath: match.relativePath, matches: ["path"], rejection: targetReadResult.rejection },
+						source: targetSource,
+						title: match.fileName,
+					});
+				} catch {
+					// 沒有對應且可讀的 target 時，不把它加入 snapshot。
+				}
 				const lowerPath = match.relativePath.toLowerCase();
 				const lowerContent = content.toLowerCase();
 				const pathScore = scoreDiscoverySeeds(match.relativePath, seeds);
@@ -818,10 +1698,16 @@ function buildGrillCompatibleDiscovery(rootDir: string, discovery: LightDiscover
 				});
 			}
 	}
-	const snapshot = deepFreeze({
-		candidates: Object.fromEntries(evidence.map((item) => [item.candidateId, item])),
-		manifest: evidence.map(({ candidateId, kind, source, title }) => ({ candidateId, kind, source, title })),
-	}) as GrillEvidenceSnapshot;
+		const snapshot = deepFreeze({
+			candidates: Object.fromEntries(evidence.map((item) => [item.candidateId, item])),
+			manifest: evidence.map((item) => ({
+				candidateId: item.candidateId,
+				kind: item.kind,
+				...(item.metadata.rejection?.reason ? { rejection: item.metadata.rejection.reason } : {}),
+				source: item.source,
+				title: item.title,
+			})),
+		}) as GrillEvidenceSnapshot;
 	const summary = [
 		...discovery.matches.map((match) => `- ${match.source}/${match.relativePath}`),
 		...discovery.warnings.map((warning) => `警告：${warning}`),
@@ -839,7 +1725,7 @@ function scoreDiscoverySeeds(haystack: string, seeds: string[]): number {
 	}, 0);
 }
 
-function createEvidenceId(kind: "wiki" | "code_base", source: string, content: string): `ev-${string}` {
+function createEvidenceId(kind: "wiki" | "code_base" | "target", source: string, content: string): `ev-${string}` {
 	const normalized = content.replace(/\r\n?/g, "\n");
 	return `ev-${createHash("sha256").update(JSON.stringify(["forge-grill-evidence-v1", kind, source, normalized])).digest("hex")}` as `ev-${string}`;
 }
@@ -924,15 +1810,20 @@ async function confirmAndContinueDeepKnowledge(
 	pi: ForgeExtensionApi,
 	ctx: CommandContext,
 	sessionState: ReturnType<typeof createForgeSessionState>,
-	activeWorkflow: ActiveWorkflowContext | undefined,
-	publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
-	onProceedToDeepKnowledge: () => void,
-): Promise<ForgeUiState> {
-	const beforeConfirm = sessionState.current();
+		activeWorkflow: ActiveWorkflowContext | undefined,
+		publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
+		requireDeepToolBoundary: (ctx: CommandContext) => boolean,
+		onProceedToDeepKnowledge: () => void,
+	): Promise<ForgeUiState> {
+		const beforeConfirm = sessionState.current();
 	const nextState = sessionState.confirm();
 	await publishState(pi, ctx, nextState);
 
 	if (beforeConfirm.stage !== "WAIT_USER" || !beforeConfirm.waitUser || nextState.stage !== "USER_CONFIRMED") {
+		return nextState;
+	}
+
+	if (!requireDeepToolBoundary(ctx)) {
 		return nextState;
 	}
 
@@ -942,6 +1833,7 @@ async function confirmAndContinueDeepKnowledge(
 		sessionState,
 		activeWorkflow,
 		publishWaitUser,
+		requireDeepToolBoundary,
 		beforeConfirm.decisionSummary,
 		undefined,
 		onProceedToDeepKnowledge,
@@ -953,12 +1845,13 @@ async function continueDeepKnowledge(
 	pi: ForgeExtensionApi,
 	ctx: CommandContext,
 	sessionState: ReturnType<typeof createForgeSessionState>,
-	activeWorkflow: ActiveWorkflowContext | undefined,
-	publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
-	decisionSummary?: string,
-	grillResult?: StructuredGrillResult,
-	onProceedToDeepKnowledge?: () => void,
-): Promise<void> {
+		activeWorkflow: ActiveWorkflowContext | undefined,
+		publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
+		requireDeepToolBoundary: (ctx: CommandContext) => boolean,
+		decisionSummary?: string,
+		_grillResult?: StructuredGrillResult,
+		onProceedToDeepKnowledge?: () => void,
+	): Promise<boolean> {
 	const workflow = activeWorkflow;
 	const candidates = workflow?.lightDiscovery.codeBaseCandidates ?? [];
 	const relevance = evaluateCandidateRelevance(candidates);
@@ -975,65 +1868,48 @@ async function continueDeepKnowledge(
 			question: `${relevance.reason}\n請選擇補充可信來源或縮小需求範圍。`,
 			recommendation: "縮小需求範圍",
 		};
-		await publishWaitUser(waitUserPayload, ctx);
-		return;
-	}
+			await publishWaitUser(waitUserPayload, ctx);
+			return false;
+		}
 
-	onProceedToDeepKnowledge?.();
-	await publishState(pi, ctx, sessionState.beginDeepKnowledge(decisionSummary));
-	const evidenceIds = grillResult?.evidence ?? [...sessionState.getFetchedEvidenceIds()];
-	const evidence = workflow
-		? evidenceIds
-			.map((evidenceId) => workflow.snapshot.candidates[evidenceId])
-			.filter((candidate): candidate is GrillEvidenceCandidate => Boolean(candidate))
-			.map((candidate) => ({
-				evidenceId: candidate.candidateId,
-				source: candidate.source,
-				summary: candidate.title,
-				title: candidate.title,
-			}))
-		: evidenceIds.map((evidenceId) => ({
-				evidenceId,
-				source: evidenceId,
-				summary: evidenceId,
-				title: evidenceId,
-			}));
-	const deepSummary =
-		evidence.length > 0
-			? `Deep knowledge loaded from ${evidence.length} sources: ${evidence.map((item) => item.title).join(", ")}`
-			: "Deep knowledge found no additional sources.";
-	await publishState(
-		pi,
-		ctx,
-		sessionState.completeDeepKnowledge(
-			evidence.map((item) => item.evidenceId),
-			deepSummary,
-		),
-	);
-}
+		if (!requireDeepToolBoundary(ctx)) {
+			return false;
+		}
+		onProceedToDeepKnowledge?.();
+		const nextState = sessionState.beginDeepKnowledge(decisionSummary);
+		const deepAttempt = sessionState.currentDeepAttempt();
+		if (!deepAttempt) {
+			throw new Error("Deep Knowledge attempt 未建立");
+		}
+		await publishState(pi, ctx, nextState);
+		const invocation = `Deep Knowledge 已開始。請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
+		pendingReplayInvocation = invocation;
+		await pi.sendUserMessage?.(invocation, { deliverAs: "followUp" });
+		return true;
+	}
 
 function parseWaitUserPayload(raw: string): WaitUserPayload {
 	const parsed = JSON.parse(raw) as Partial<WaitUserPayload>;
 	if (typeof parsed.question !== "string" || parsed.question.length === 0) {
-		throw new Error("wait user payload requires question");
+		throw new Error("WAIT_USER payload 必須包含 question。");
 	}
 	if (typeof parsed.recommendation !== "string" || parsed.recommendation.length === 0) {
-		throw new Error("wait user payload requires recommendation");
+		throw new Error("WAIT_USER payload 必須包含 recommendation。");
 	}
 	if (!Array.isArray(parsed.options) || parsed.options.some((option) => typeof option !== "string" || option.length === 0)) {
-		throw new Error("wait user payload requires string options");
+		throw new Error("WAIT_USER payload 的 options 必須是非空字串陣列。");
 	}
 	if (
 		!Array.isArray(parsed.evidenceIds) ||
 		parsed.evidenceIds.some((evidenceId) => typeof evidenceId !== "string" || evidenceId.length === 0)
 	) {
-		throw new Error("wait user payload requires string evidenceIds");
+		throw new Error("WAIT_USER payload 的 evidenceIds 必須是非空字串陣列。");
 	}
 	if (typeof parsed.decisionId !== "string" || parsed.decisionId.trim().length === 0) {
-		throw new Error("wait user payload requires decisionId");
+		throw new Error("WAIT_USER payload 必須包含 decisionId。");
 	}
 	if (typeof parsed.roundId !== "string" || parsed.roundId.trim().length === 0) {
-		throw new Error("wait user payload requires roundId");
+		throw new Error("WAIT_USER payload 必須包含 roundId。");
 	}
 
 	return {

@@ -134,6 +134,93 @@ test("Extension_WhenRequiredGrillSafetyCapabilityIsMissing_ShouldRejectGrillStar
 	}
 });
 
+test("Integration_WhenActiveToolsCapabilityDisappearsBeforeReadyForDeep_ShouldFailClosed", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute("call-capability-loss-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
+	harness.disableSetActiveTools();
+	const completionResult = await completionTool.execute(
+		"call-capability-loss-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(completionResult.details.status, "rejected");
+	assert.match(harness.observedStatuses.at(-1) ?? "", /GRILL/);
+	assert.doesNotMatch(harness.observedMessages.join("\n"), /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.deepEqual(harness.getActiveTools().sort(), ["forge_grill_complete", "forge_grill_evidence"]);
+	assert.ok(harness.observedNotifications.some((message) => /安全|拒絕|限制/.test(message)));
+});
+
+test("Integration_WhenActiveToolsCapabilityDisappearsBeforeStaleDeepRetrieval_ShouldRejectStaleOutcome", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const evidenceExecute = evidenceTool?.execute;
+	assert.ok(evidenceExecute, "Expected forge_grill_evidence to expose execute");
+	await evidenceExecute("call-stale-capability-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	const completionExecute = completionTool?.execute;
+	assert.ok(completionExecute, "Expected forge_grill_complete to expose execute");
+	await completionExecute(
+		"call-stale-capability-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	const retrievalExecute = retrievalTool?.execute;
+	assert.ok(retrievalExecute, "Expected forge_deep_retrieval_complete to expose execute");
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	harness.disableSetActiveTools();
+	for (const outcome of [{ kind: "completed" as const }, { kind: "needs_discovery" as const }]) {
+		const result = await retrievalExecute(
+			"call-stale-capability-outcome",
+			{
+				attemptId: "deep-stale",
+				sourceRoundId: "grill-1",
+				phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+				outcome,
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(result.details.status, "stale");
+		assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+		assert.deepEqual(harness.getActiveTools(), beforeTools);
+	}
+});
+
 test("Extension_WhenRelevanceGateFails_ShouldDisplayScopeQuestionAndEnterWaitUser", async (t) => {
 	const rootDir = createTempRoot();
 	writeWorkspaceFile(
@@ -269,7 +356,7 @@ test("Extension_WhenGrillAmbiguousDecisionIdIsMissing_ShouldRejectAtTrustBoundar
 			evidenceIds: [],
 			decisionSummary: "等待一般確認。",
 		};
-		await assert.rejects(() => harness.runCommand(`grill ambiguous ${JSON.stringify(payload)}`), /wait user payload requires decisionId/);
+		await assert.rejects(() => harness.runCommand(`grill ambiguous ${JSON.stringify(payload)}`), /WAIT_USER payload 必須包含 decisionId。/);
 	}
 });
 
@@ -694,7 +781,7 @@ test("Extension_WhenUserAnswersQuestion_ShouldAutomaticallyStartNextGrillRound",
 	assert.match(nextInvocation, /roundId\s*[:：]\s*grill-2/);
 	assert.match(nextInvocation, new RegExp(escapeRegExp(goal)));
 	assert.match(nextInvocation, new RegExp(`\\b${candidateId}\\b`));
-	assert.match(nextInvocation, /User answered decision "q-answer-next-round" with "confirm"\./);
+	assert.match(nextInvocation, /使用者已回答決策 "q-answer-next-round"："confirm"。/);
 	assert.equal(harness.observedUserMessageCalls.length, 0, "回答不應依賴 continue 或額外 followUp");
 });
 
@@ -837,7 +924,7 @@ test("Extension_WhenContinueDuringActiveGrill_ShouldReplaySameRoundWithoutDecisi
 	assert.match(replay?.content ?? "", /forge_grill_evidence/);
 	assert.match(replay?.content ?? "", /forge_grill_complete/);
 	assert.match(replay?.content ?? "", /completion payload/i);
-	assert.doesNotMatch(replay?.content ?? "", /User answered decision/i);
+	assert.doesNotMatch(replay?.content ?? "", /使用者已回答決策/);
 	assert.doesNotMatch(replay?.content ?? "", /roundId\s*[:：]\s*grill-[2-9]/);
 	assert.deepEqual((replay?.content ?? "").match(/\bev-[0-9a-f]{64}\b/g), [candidateId]);
 });
@@ -921,9 +1008,9 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldTerminateToolTurnAndEnterDee
 	);
 	assert.equal(completionResult.terminate, true);
 
-	assert.match(harness.observedStatuses.at(-1) ?? "", /KNOWLEDGE_UNDERSTANDING/);
-	assert.match(harness.observedMessages.join("\n"), /候選相關性不足|KNOWLEDGE_UNDERSTANDING/);
-	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.doesNotMatch(harness.observedMessages.join("\n"), /KNOWLEDGE_UNDERSTANDING/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
 
 	assert.ok(harness.messageUpdateHandler, "Expected message_update handler to be registered for Grill suppression");
 	const updateEvent = {
@@ -938,6 +1025,1048 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldTerminateToolTurnAndEnterDee
 	await harness.messageUpdateHandler(updateEvent);
 	assert.equal(updateEvent.message.content[0]?.text, "ready completion prose must not leak");
 	assert.equal(updateEvent.message.content[1]?.thinking, "ready completion thinking must not leak");
+});
+
+test("Integration_WhenDeepSearchUsesAllowedSources_ShouldReturnAtMostThreeEvidence", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"wiki/deep-search-allowed.md",
+		"DeepSearchAllowedNeedle is allowed wiki evidence for Deep Retrieval.",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/deep-search-seed.ts",
+		"// DeepSearchAllowedNeedle supplies the Grill snapshot seed.",
+	);
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepSearchAllowedNeedle deep-search-seed.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute("call-deep-search-grill-evidence", { candidateId }, undefined, undefined, {});
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
+	await completionTool.execute(
+		"call-deep-search-grill-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		{},
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const phaseSchema = (
+		(deepSearchTool.parameters as { properties?: Record<string, unknown> } | undefined)?.properties?.phase as
+			| { const?: unknown; enum?: unknown[]; anyOf?: Array<{ const?: unknown }> }
+			| undefined
+	);
+	const phaseLiterals = [
+		phaseSchema?.const,
+		...(phaseSchema?.enum ?? []),
+		...(phaseSchema?.anyOf?.map((variant) => variant.const) ?? []),
+	];
+	assert.ok(
+		phaseLiterals.includes("DEEP_KNOWLEDGE_RETRIEVAL"),
+		"forge_deep_search phase schema must accept DEEP_KNOWLEDGE_RETRIEVAL",
+	);
+	const searchResult = await deepSearchTool.execute(
+		"call-deep-search",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "DeepSearchAllowedNeedle",
+			source: "wiki",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(searchResult.details.status, "accepted");
+	const evidence = searchResult.details.evidence;
+	assert.ok(Array.isArray(evidence), "Deep search should return evidence in details");
+	assert.ok(evidence.length > 0, "Deep search should return at least one evidence item");
+	assert.ok(evidence.length <= 3, "Deep search should return at most three evidence items");
+});
+
+test("Integration_WhenDeepSearchRoundExceedsTwoMiB_ShouldRejectWithoutMutation", async (t) => {
+	const rootDir = createTempRoot();
+	const inheritedContent = "// DeepBudgetGroupOne is the immutable Grill snapshot seed for the byte budget test.\n";
+	const maxEvidenceBytes = 256 * 1024;
+	const roundByteLimit = 2 * 1024 * 1024;
+	const inheritedBytes = Buffer.byteLength(inheritedContent, "utf8");
+	const supplementalSizes = [
+		maxEvidenceBytes,
+		maxEvidenceBytes,
+		maxEvidenceBytes,
+		maxEvidenceBytes,
+		maxEvidenceBytes,
+		maxEvidenceBytes,
+		maxEvidenceBytes,
+		roundByteLimit - inheritedBytes - maxEvidenceBytes * 7,
+	];
+	assert.equal(inheritedBytes + supplementalSizes.reduce((total, size) => total + size, 0), roundByteLimit);
+	assert.ok(supplementalSizes.every((size) => size > 0 && size <= maxEvidenceBytes));
+	const exactEvidenceContent = (marker: string, bytes: number): string => {
+		const markerBytes = Buffer.byteLength(marker, "utf8");
+		return `${marker}\n${"X".repeat(bytes - markerBytes - 1)}`;
+	};
+	for (const evidenceFile of [
+		["DeepBudgetGroupOne", "budget-1.md", supplementalSizes[0]],
+		["DeepBudgetGroupOne", "budget-2.md", supplementalSizes[1]],
+		["DeepBudgetGroupOne", "budget-3.md", supplementalSizes[2]],
+		["DeepBudgetGroupTwo", "budget-4.md", supplementalSizes[3]],
+		["DeepBudgetGroupTwo", "budget-5.md", supplementalSizes[4]],
+		["DeepBudgetGroupTwo", "budget-6.md", supplementalSizes[5]],
+		["DeepBudgetGroupThree", "budget-7.md", supplementalSizes[6]],
+		["DeepBudgetGroupThree", "budget-8.md", supplementalSizes[7]],
+		["DeepBudgetGroupFour", "budget-9.md", 128],
+	] as const) {
+		const [group, file, bytes] = evidenceFile;
+		const content = exactEvidenceContent(`${group} ${file}`, bytes);
+		assert.equal(Buffer.byteLength(content, "utf8"), bytes);
+		writeWorkspaceFile(rootDir, `wiki/${file}`, content);
+	}
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/deep-budget-seed.ts",
+		inheritedContent,
+	);
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepBudgetGroupOne deep-budget-seed.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to be registered");
+	await evidenceTool.execute("call-deep-budget-grill-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to be registered");
+	await completionTool.execute(
+		"call-deep-budget-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const deepSearchExecute = deepSearchTool.execute;
+	assert.ok(deepSearchExecute);
+	const search = async (callId: string, query: string) => {
+		const result = await deepSearchExecute(
+			callId,
+			{
+				attemptId: "deep-1",
+				sourceRoundId: "grill-1",
+				phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+				query,
+				source: "wiki",
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(result.details.status, "accepted");
+		const evidence = result.details.evidence;
+		assert.ok(Array.isArray(evidence));
+		for (const item of evidence as Array<{ content: string }>) {
+			assert.ok(Buffer.byteLength(item.content, "utf8") > 0);
+			assert.ok(Buffer.byteLength(item.content, "utf8") <= maxEvidenceBytes);
+		}
+		return evidence as Array<{ evidenceId: string; content: string }>;
+	};
+
+	const lockedEvidence = [
+		...(await search("call-deep-budget-search-1", "DeepBudgetGroupOne")),
+		...(await search("call-deep-budget-search-2", "DeepBudgetGroupTwo")),
+		...(await search("call-deep-budget-search-3", "DeepBudgetGroupThree")),
+	];
+	assert.equal(lockedEvidence.length, 8);
+	assert.equal(
+		inheritedBytes + lockedEvidence.reduce((total, item) => total + Buffer.byteLength(item.content, "utf8"), 0),
+		roundByteLimit,
+	);
+	assert.equal(harness.observedStatuses.at(-1)?.includes("DEEP_KNOWLEDGE_RETRIEVAL"), true);
+	const statusCount = harness.observedStatuses.length;
+	const messageCount = harness.observedMessages.length;
+	const activeTools = harness.getActiveTools();
+
+	const rejectedResult = await deepSearchTool.execute(
+		"call-deep-budget-search-4",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "DeepBudgetGroupFour",
+			source: "wiki",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(rejectedResult.details.status, "rejected");
+	assert.equal(rejectedResult.details.reason, "evidence_round_too_large");
+	assert.deepEqual(rejectedResult.details.evidence, []);
+	assert.equal(harness.observedStatuses.length, statusCount);
+	assert.equal(harness.observedMessages.length, messageCount);
+	assert.deepEqual(harness.getActiveTools(), activeTools);
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to be registered");
+	const retrievalResult = await retrievalCompleteTool.execute(
+		"call-deep-budget-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(retrievalResult.details.status, "accepted");
+	assert.deepEqual(retrievalResult.details.lockedEvidenceIds, [candidateId, ...lockedEvidence.map((item) => item.evidenceId)]);
+	assert.equal((retrievalResult.details.lockedEvidenceIds as string[]).length, 9);
+});
+
+test("Integration_WhenGrillEvidenceExceeds256KiB_ShouldRejectWithoutMutation", async (t) => {
+	const rootDir = createTempRoot({ withWiki: false });
+	const maxEvidenceBytes = 256 * 1024;
+	const exactEvidenceContent = (marker: string, bytes: number): string => {
+		const content = `${marker}${"X".repeat(bytes - marker.length)}`;
+		assert.equal(Buffer.byteLength(content, "utf8"), bytes);
+		return content;
+	};
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/grill-limit-ok.ts",
+		exactEvidenceContent("GrillEvidenceLimitNeedle grill-limit-ok.ts ", maxEvidenceBytes),
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"wiki/grill-limit-over.md",
+		exactEvidenceContent("GrillEvidenceLimitNeedle grill-limit-over.ts ", maxEvidenceBytes + 1),
+	);
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput(
+		"請幫我測試 GrillEvidenceLimitNeedle grill-limit-ok.ts grill-limit-over.md",
+	);
+	const invocation = (startResult as { text?: string }).text ?? "";
+	const candidateIds = [...new Set([...invocation.matchAll(/\bev-[0-9a-f]{64}\b/g)].map((match) => match[0]))];
+	assert.ok(candidateIds.length >= 2, "Expected both Grill evidence candidates in the immutable snapshot");
+	const candidateIdFor = (relativePath: string): string => {
+		const manifestLine = invocation.split(/\r?\n/).find((line) => line.includes(relativePath));
+		const candidateId = manifestLine?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+		assert.ok(candidateId, `Expected manifest candidate for ${relativePath}`);
+		return candidateId;
+	};
+	const acceptedCandidateId = candidateIdFor("grill-limit-ok.ts");
+	const oversizedCandidateId = candidateIdFor("grill-limit-over.md");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to be registered");
+	const accepted = await evidenceTool.execute(
+		"call-grill-limit-accepted",
+		{ candidateId: acceptedCandidateId },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(accepted.details.candidateId, acceptedCandidateId);
+	assert.equal(Buffer.byteLength(accepted.content[0]?.text ?? "", "utf8"), maxEvidenceBytes);
+
+	const statusCountBeforeOversized = harness.observedStatuses.length;
+	const messageCountBeforeOversized = harness.observedMessages.length;
+	const activeToolsBeforeOversized = harness.getActiveTools();
+	const oversized = await evidenceTool.execute(
+		"call-grill-limit-oversized",
+		{ candidateId: oversizedCandidateId },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(oversized.details.status, "rejected");
+	assert.equal(oversized.details.reason, "evidence_too_large");
+	assert.deepEqual(oversized.details.evidence, []);
+	assert.equal(harness.observedStatuses.length, statusCountBeforeOversized);
+	assert.equal(harness.observedMessages.length, messageCountBeforeOversized);
+	assert.deepEqual(harness.getActiveTools(), activeToolsBeforeOversized);
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to be registered");
+	await completionTool.execute(
+		"call-grill-limit-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "合法證據已通過 byte limit", confidence: 0.9 },
+			evidence: [acceptedCandidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to be registered");
+	const retrievalResult = await retrievalCompleteTool.execute(
+		"call-grill-limit-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(retrievalResult.details.status, "accepted");
+	assert.deepEqual(retrievalResult.details.lockedEvidenceIds, [acceptedCandidateId]);
+	assert.equal((retrievalResult.details.lockedEvidenceIds as string[]).includes(oversizedCandidateId), false);
+});
+
+test("Integration_WhenTargetSourceIsAmbiguous_ShouldNeedDecision", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/target-a.ts",
+		"// TargetAmbiguousNeedle code-base candidate A.\nexport const targetA = \"code-base\";\n",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/target-b.ts",
+		"// TargetAmbiguousNeedle code-base candidate B.\nexport const targetB = \"code-base\";\n",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"src/target-a.ts",
+		"// TargetAmbiguousNeedle target source A.\nexport const targetA = \"target\";\n",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"src/target-b.ts",
+		"// TargetAmbiguousNeedle target source B.\nexport const targetB = \"target\";\n",
+	);
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput(
+		"請幫我測試 TargetAmbiguousNeedle src/target-a.ts src/target-b.ts",
+	);
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute("call-target-ambiguity-grill-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
+	await completionTool.execute(
+		"call-target-ambiguity-grill-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const searchResult = await deepSearchTool.execute(
+		"call-target-ambiguity-search",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "TargetAmbiguousNeedle",
+			source: "target",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(searchResult.details.status, "needs_decision");
+	assert.deepEqual(searchResult.details.options, ["src/target-a.ts", "src/target-b.ts"]);
+	assert.deepEqual(searchResult.details.evidenceIds, [candidateId]);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
+	assert.match(harness.observedMessages.join("\n"), /WAIT_USER/);
+	assert.deepEqual(harness.getActiveTools(), ["read"]);
+	assert.equal(harness.getActiveTools().some((toolName) => toolName.startsWith("forge_deep_")), false);
+});
+
+test("Integration_WhenDeepSearchReusesGrillEvidence_ShouldAvoidDuplicateRead", async (t) => {
+	const rootDir = createTempRoot();
+	const candidateContent = "// DeepReuseNeedle is the same immutable evidence in Grill and Deep Retrieval.\n";
+	writeWorkspaceFile(rootDir, "code_base/src/deep-reuse.ts", candidateContent);
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepReuseNeedle deep-reuse.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	const grillEvidence = await evidenceTool.execute(
+		"call-deep-reuse-grill-evidence",
+		{ candidateId },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(grillEvidence.content[0]?.text, candidateContent);
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	await grillCompleteTool.execute(
+		"call-deep-reuse-grill-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const searchResult = await deepSearchTool.execute(
+		"call-deep-reuse-search",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "DeepReuseNeedle",
+			source: "code_base",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(searchResult.details.status, "accepted");
+	assert.deepEqual(searchResult.details.reusedEvidenceIds, [candidateId]);
+	assert.deepEqual(searchResult.details.evidence, []);
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to be registered");
+	const retrievalResult = await retrievalCompleteTool.execute(
+		"call-deep-reuse-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(retrievalResult.details.status, "accepted");
+	assert.deepEqual(retrievalResult.details.lockedEvidenceIds, [candidateId]);
+});
+
+test("Integration_WhenRetrievalCompleteLocksEvidence_ShouldDisableSearch", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"wiki/deep-retrieval-lock.md",
+		"DeepRetrievalLockNeedle is supplemental evidence for Retrieval lock.",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/deep-retrieval-lock.ts",
+		"// DeepRetrievalLockNeedle is the fetched Grill candidate.",
+	);
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepRetrievalLockNeedle deep-retrieval-lock.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute("call-retrieval-lock-grill-evidence", { candidateId }, undefined, undefined, {});
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
+	await completionTool.execute(
+		"call-retrieval-lock-grill-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		{},
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const searchResult = await deepSearchTool.execute(
+		"call-retrieval-lock-search",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "DeepRetrievalLockNeedle",
+			source: "wiki",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(searchResult.details.status, "accepted");
+	const supplementalEvidenceId = (searchResult.details.evidence as Array<{ evidenceId: string }> | undefined)?.[0]?.evidenceId;
+	assert.ok(supplementalEvidenceId, "Expected Deep Search to return supplemental evidence");
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to be registered");
+	const retrievalResult = await retrievalCompleteTool.execute(
+		"call-retrieval-lock-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(retrievalResult.details.status, "accepted");
+	assert.deepEqual(retrievalResult.details.lockedEvidenceIds, [candidateId, supplementalEvidenceId]);
+	assert.equal(retrievalResult.details.phase, "KNOWLEDGE_UNDERSTANDING");
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_complete"]);
+	assert.ok(!harness.getActiveTools().includes("forge_deep_search"));
+});
+
+test("Integration_WhenDeepAttemptIsStale_ShouldRejectCompletion", async (t) => {
+	const rootDir = createTempRoot();
+	const candidateContent = "// DeepStaleCompletionNeedle is the fetched Grill candidate.\n";
+	writeWorkspaceFile(rootDir, "code_base/src/deep-stale-completion.ts", candidateContent);
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepStaleCompletionNeedle deep-stale-completion.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to be registered");
+	await evidenceTool.execute("call-stale-completion-grill-evidence", { candidateId }, undefined, undefined, {});
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to be registered");
+	await grillCompleteTool.execute(
+		"call-stale-completion-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		{},
+	);
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to be registered");
+	const retrievalInput = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+		outcome: { kind: "completed" as const },
+	};
+	const firstResult = await retrievalCompleteTool.execute(
+		"call-stale-completion-first",
+		retrievalInput,
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(firstResult.details.status, "accepted");
+	const lockedEvidenceIds = firstResult.details.lockedEvidenceIds;
+	assert.deepEqual(lockedEvidenceIds, [candidateId]);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_complete"]);
+	const statusCount = harness.observedStatuses.length;
+	const messageCount = harness.observedMessages.length;
+
+	const staleResult = await retrievalCompleteTool.execute(
+		"call-stale-completion-second",
+		retrievalInput,
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(staleResult.details.status, "stale");
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_complete"]);
+	assert.equal(harness.observedStatuses.length, statusCount);
+	assert.equal(harness.observedMessages.length, messageCount);
+
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(deepCompleteTool?.execute, "Expected forge_deep_complete to be registered");
+	const completeResult = await deepCompleteTool.execute(
+		"call-stale-completion-understanding",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: {
+				kind: "completed",
+				decisions: [],
+				findings: [{ statement: "候選支持目前判斷。", evidenceIds: [candidateId] }],
+				limitations: [{ statement: "目前沒有阻擋限制。", blocking: false }],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(completeResult.details.status, "accepted");
+	const evidencePackage = completeResult.details.evidencePackage as { evidence: Array<{ evidenceId: string }> };
+	assert.deepEqual(
+		evidencePackage.evidence.map((evidence) => evidence.evidenceId),
+		lockedEvidenceIds,
+	);
+});
+
+test("Integration_WhenStaleRetrievalNeedsDecisionReferencesUnknownEvidence_ShouldRejectWithoutMutation", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/stale-retrieval-decision.ts", "// StaleRetrievalDecisionNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 StaleRetrievalDecisionNeedle stale-retrieval-decision.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-stale-retrieval-evidence", { candidateId }, undefined, undefined, {});
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-stale-retrieval-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		{},
+	);
+
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await retrievalTool.execute(
+		"call-stale-retrieval-lock",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const statusCount = harness.observedStatuses.length;
+	const messageCount = harness.observedMessages.length;
+	const activeTools = harness.getActiveTools();
+	const staleResult = await retrievalTool.execute(
+		"call-stale-retrieval-decision",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: {
+				kind: "needs_decision",
+				decisionId: "stale-retrieval-decision",
+				question: "是否繼續？",
+				options: ["繼續"],
+				recommendation: "繼續",
+				evidenceIds: ["ev-unknown-retrieval"],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(staleResult.details.status, "stale");
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.equal(harness.observedStatuses.length, statusCount);
+	assert.equal(harness.observedMessages.length, messageCount);
+	assert.deepEqual(harness.getActiveTools(), activeTools);
+});
+
+test("Integration_WhenStaleUnderstandingNeedsDecisionReferencesUnknownEvidence_ShouldRejectWithoutMutation", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/stale-understanding-decision.ts", "// StaleUnderstandingDecisionNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 StaleUnderstandingDecisionNeedle stale-understanding-decision.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-stale-understanding-evidence", { candidateId }, undefined, undefined, {});
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-stale-understanding-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		{},
+	);
+
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await retrievalTool.execute(
+		"call-stale-understanding-retrieval",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(deepCompleteTool?.execute);
+	await deepCompleteTool.execute(
+		"call-stale-understanding-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: {
+				kind: "completed",
+				decisions: [],
+				findings: [{ statement: "ok", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const statusCount = harness.observedStatuses.length;
+	const messageCount = harness.observedMessages.length;
+	const activeTools = harness.getActiveTools();
+	const staleResult = await deepCompleteTool.execute(
+		"call-stale-understanding-decision",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: {
+				kind: "needs_decision",
+				decisionId: "stale-understanding-decision",
+				question: "是否接受？",
+				options: ["接受"],
+				recommendation: "接受",
+				evidenceIds: ["ev-unknown-understanding"],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(staleResult.details.status, "stale");
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.equal(harness.observedStatuses.length, statusCount);
+	assert.equal(harness.observedMessages.length, messageCount);
+	assert.deepEqual(harness.getActiveTools(), activeTools);
+});
+
+test("Integration_WhenUnderstandingUsesLockedEvidence_ShouldProducePackage", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"wiki/deep-understanding-package.md",
+		"DeepUnderstandingPackageNeedle is supplemental evidence for Understanding.",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/deep-understanding-package.ts",
+		"// DeepUnderstandingPackageNeedle is the fetched Grill candidate.",
+	);
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepUnderstandingPackageNeedle deep-understanding-package.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute("call-understanding-package-grill-evidence", { candidateId }, undefined, undefined, {});
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	await grillCompleteTool.execute(
+		"call-understanding-package-grill-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		{},
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const searchResult = await deepSearchTool.execute(
+		"call-understanding-package-search",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "DeepUnderstandingPackageNeedle",
+			source: "wiki",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(searchResult.details.status, "accepted");
+	const supplementalEvidenceId = (searchResult.details.evidence as Array<{ evidenceId: string }> | undefined)?.[0]?.evidenceId;
+	assert.ok(supplementalEvidenceId, "Expected Deep Search to return supplemental evidence");
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to be registered");
+	await retrievalCompleteTool.execute(
+		"call-understanding-package-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(deepCompleteTool?.execute, "Expected forge_deep_complete to be registered after Retrieval completion");
+	const outcomeSchema = (
+		(deepCompleteTool.parameters as { properties?: Record<string, unknown> } | undefined)?.properties?.outcome as
+			| { anyOf?: Array<{ properties?: Record<string, unknown> }> }
+			| undefined
+	);
+	const completedOutcomeSchema = outcomeSchema?.anyOf?.find(
+		(variant) => (variant.properties?.kind as { const?: unknown } | undefined)?.const === "completed",
+	);
+	assert.ok(completedOutcomeSchema?.properties, "Expected forge_deep_complete to expose a completed outcome schema");
+	assert.equal(completedOutcomeSchema.properties.evidence, undefined, "Understanding outcome must not accept evidence");
+
+	const decisions = [{ decisionId: "decision-1", statement: "候選支持目前判斷。", evidenceIds: [candidateId] }];
+	const findings = [{ statement: "補充資料與候選一致。", evidenceIds: [supplementalEvidenceId] }];
+	const limitations = [{ statement: "目前沒有阻擋限制。", blocking: false }];
+	const completeResult = await deepCompleteTool.execute(
+		"call-understanding-package-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: { kind: "completed", decisions, findings, limitations },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(completeResult.details.status, "accepted");
+	const evidencePackage = completeResult.details.evidencePackage as {
+		evidence: Array<{ evidenceId: string; origin: string }>;
+		decisions: unknown[];
+		findings: unknown[];
+		limitations: unknown[];
+	};
+	assert.deepEqual(
+		evidencePackage.evidence.map((evidence) => ({ evidenceId: evidence.evidenceId, origin: evidence.origin })),
+		[
+			{ evidenceId: candidateId, origin: "grill" },
+			{ evidenceId: supplementalEvidenceId, origin: "deep_retrieval" },
+		],
+	);
+	assert.deepEqual(evidencePackage.decisions, decisions);
+	assert.deepEqual(evidencePackage.findings, findings);
+	assert.deepEqual(evidencePackage.limitations, limitations);
+});
+
+test("Integration_WhenPackageIsValid_ShouldTransferToContextBuild", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/context-build-transfer.ts",
+		"// ContextBuildTransferNeedle is the fetched Grill candidate for context build.",
+	);
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read", "write"] });
+	const startResult = await harness.sendInput("請幫我測試 ContextBuildTransferNeedle context-build-transfer.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute("call-context-build-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	await grillCompleteTool.execute(
+		"call-context-build-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to expose execute");
+	await retrievalCompleteTool.execute(
+		"call-context-build-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(deepCompleteTool?.execute, "Expected forge_deep_complete to expose execute");
+	const completeResult = await deepCompleteTool.execute(
+		"call-context-build-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: {
+				kind: "completed",
+				decisions: [],
+				findings: [{ statement: "候選支持目前判斷。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(completeResult.details.status, "accepted");
+	assert.match(
+		[...harness.observedStatuses, ...harness.observedMessages].join("\n"),
+		/CONTEXT_BUILD/,
+	);
+	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
 });
 
 test("Extension_WhenCompletionOmissionOccurs_ShouldShowRetryCancelSwitchAndSettle", async (t) => {
@@ -1217,6 +2346,9 @@ async function createExtensionHarness(options: {
 		getActiveTools() {
 			return [...activeTools];
 		},
+		disableSetActiveTools() {
+			delete (fakePi as { setActiveTools?: unknown }).setActiveTools;
+		},
 			observedMessages,
 			observedMessagePayloads,
 		observedNotifications,
@@ -1418,11 +2550,242 @@ test("Extension_WhenCompletionReadyForDeep_ShouldAutomaticallyEnterDeepKnowledge
 		harness.buildContext(),
 	);
 
-	assert.deepEqual(completion.content, [{ type: "text", text: "Forge Grill completion accepted." }]);
+	assert.deepEqual(completion.content, [{ type: "text", text: "Forge Grill 完成結果已接受。" }]);
 	assert.equal(completion.details.status, "READY_FOR_DEEP");
-	assert.ok(harness.observedStatuses.at(-1)?.includes("KNOWLEDGE_UNDERSTANDING"));
-	assert.match(harness.observedMessages.join("\n"), /候選相關性不足|KNOWLEDGE_UNDERSTANDING/);
-	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
+	assert.ok(harness.observedStatuses.at(-1)?.includes("DEEP_KNOWLEDGE_RETRIEVAL"));
+	assert.doesNotMatch(harness.observedMessages.join("\n"), /KNOWLEDGE_UNDERSTANDING/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+});
+
+test("整合測試_Grill完成READY_FOR_DEEP_Should透過FollowUp傳遞DeepAttemptIdentity", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => {
+		rmSync(rootDir, { force: true, recursive: true });
+	});
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
+	await evidenceTool.execute("call-ready-for-deep-follow-up-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	await completionTool.execute(
+		"call-ready-for-deep-follow-up-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "證據足以進入 deep knowledge。", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const handoff = harness.observedUserMessageCalls.at(-1);
+	assert.ok(handoff, "READY_FOR_DEEP 應排入下一個模型回合");
+	assert.equal(handoff.options?.deliverAs, "followUp");
+	const identityStart = handoff.content.indexOf("{");
+	assert.notEqual(identityStart, -1, "followUp 應包含結構化 Deep identity");
+	assert.deepEqual(JSON.parse(handoff.content.slice(identityStart)), {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+	});
+});
+
+test("Integration_WhenNewRequirementAppears_ShouldRouteWorkflowToWaitUser", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to expose execute");
+	assert.ok(deepCompleteTool?.execute, "Expected forge_deep_complete to expose execute");
+
+	await evidenceTool.execute("call-new-requirement-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+	await grillCompleteTool.execute(
+		"call-new-requirement-grill-complete",
+		{
+			evidence: [candidateId],
+			questions: [],
+			recommendation: { reason: "證據足以進入 deep knowledge。", value: "proceed" },
+			requiresUserConfirmation: false,
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const retrievalComplete = await retrievalCompleteTool.execute(
+		"call-new-requirement-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(retrievalComplete.details.status, "accepted");
+
+	const decisionOutcome = {
+		kind: "needs_decision",
+		decisionId: "new-requirement-1",
+		question: "要不要擴大需求範圍？",
+		options: ["擴大", "維持目前範圍"],
+		recommendation: "維持目前範圍",
+		evidenceIds: [candidateId],
+		decisionSummary: "新需求會改變目前分析範圍。",
+	} as const;
+	const outcomeSchema = (deepCompleteTool.parameters as { properties?: { outcome?: unknown } } | undefined)?.properties?.outcome as
+		| { anyOf?: Array<{ properties?: Record<string, unknown>; required?: string[] }> }
+		| undefined;
+	const decisionSchema = outcomeSchema?.anyOf?.find((schema) => schema.properties?.kind && JSON.stringify(schema.properties.kind).includes("needs_decision"));
+	assert.ok(decisionSchema, "forge_deep_complete schema must expose needs_decision");
+	assert.deepEqual(
+		Object.keys(decisionSchema.properties ?? {}).sort(),
+		["decisionId", "decisionSummary", "evidenceIds", "kind", "options", "question", "recommendation"].sort(),
+	);
+
+	const result = await deepCompleteTool.execute(
+		"call-new-requirement-deep-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: decisionOutcome,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(result.details.status, "needs_decision");
+	assert.deepEqual(result.details.payload, decisionOutcome);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
+	assert.match(harness.observedMessages.join("\n"), /WAIT_USER/);
+	assert.deepEqual(harness.getActiveTools(), ["read"]);
+	assert.equal(harness.getActiveTools().some((toolName) => toolName.startsWith("forge_deep")), false);
+
+	const staleResult = await deepCompleteTool.execute(
+		"call-new-requirement-deep-complete-stale",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: decisionOutcome,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(staleResult.details.status, "stale");
+});
+
+test("Integration_WhenGrillHumanDecisionIsAnswered_ShouldInjectImmutableDecisionIntoEvidencePackage", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	await evidenceTool.execute("call-human-decision-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const decisionId = "grill-human-decision-1";
+	const question = "要採用方案 A 嗎？";
+	const answer = "採用方案 A";
+	await grillCompleteTool.execute(
+		"call-human-decision-grill-complete",
+		{
+			evidence: [candidateId],
+			questions: [{ id: decisionId, question, options: [answer, "維持方案 B"] }],
+			recommendation: { reason: "需要使用者決定方案。", value: answer },
+			requiresUserConfirmation: true,
+			roundId: "grill-1",
+			status: "NEEDS_CONFIRMATION",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
+
+	const resumeResult = await harness.sendInput(answer);
+	assert.equal((resumeResult as { action?: string }).action, "transform");
+	assert.match((resumeResult as { text?: string }).text ?? "", /roundId\s*[:：]\s*grill-2/);
+
+	await grillCompleteTool.execute(
+		"call-human-decision-grill-complete-2",
+		{
+			evidence: [candidateId],
+			questions: [],
+			recommendation: { reason: "使用者已完成決策。", value: "proceed" },
+			requiresUserConfirmation: false,
+			roundId: "grill-2",
+			status: "READY_FOR_DEEP",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to expose execute");
+	assert.ok(deepCompleteTool?.execute, "Expected forge_deep_complete to expose execute");
+	await retrievalCompleteTool.execute(
+		"call-human-decision-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-2",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const completion = await deepCompleteTool.execute(
+		"call-human-decision-deep-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-2",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(completion.details.status, "accepted");
+	assert.match(harness.observedStatuses.at(-1) ?? "", /CONTEXT_BUILD/);
+	const evidencePackage = completion.details.evidencePackage as {
+		decisions: Array<{ decisionId: string; statement: string; evidenceIds: string[] }>;
+	};
+	assert.deepEqual(evidencePackage.decisions, [
+		{
+			decisionId,
+			statement: `問題：${question}；決定：${answer}`,
+			evidenceIds: [candidateId],
+		},
+	]);
 });
 
 test("Extension_WhenDeepHandoffAwaits_ShouldCloseGrillBoundaryBeforeAwaitAndIgnoreStaleMessageEnd", async (t) => {
@@ -1456,13 +2819,17 @@ test("Extension_WhenDeepHandoffAwaits_ShouldCloseGrillBoundaryBeforeAwaitAndIgno
 	);
 	await harness.deepHandoffEntered;
 
-	assert.deepEqual(harness.getActiveTools(), ["read", "write"], "第一個 await 前必須還原 Grill tools");
+	assert.deepEqual(
+		harness.getActiveTools(),
+		["forge_deep_search", "forge_deep_retrieval_complete"],
+		"第一個 await 前必須維持 Retrieval tools",
+	);
 	await harness.messageEndHandler?.(
 		{ message: { role: "assistant", content: [{ type: "text", text: "遲到的舊回合訊息" }] } },
 		harness.buildContext(),
 	);
 	assert.doesNotMatch(harness.observedMessages.join("\n"), /GRILL_COMPLETION_REQUIRED|RECOVERY_REQUIRED/);
-	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
 
 	harness.releaseDeepHandoff();
 	const completion = await completionPromise;
@@ -1495,7 +2862,43 @@ test("Extension_WhenSourceChangesAfterEvidenceFetch_ShouldCompleteDeepFromSnapsh
 		roundId: "grill-1",
 	})}`);
 
-	assert.match(harness.observedMessages.join("\n"), /Deep knowledge loaded from 1 sources: boundary-token\.ts/);
+	const retrievalCompleteTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalCompleteTool?.execute, "Expected forge_deep_retrieval_complete to expose execute");
+	const retrievalCompletion = await retrievalCompleteTool.execute(
+		"call-snapshot-retrieval-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(retrievalCompletion.details.status, "accepted");
+
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(deepCompleteTool?.execute, "Expected forge_deep_complete to expose execute");
+	const deepCompletion = await deepCompleteTool.execute(
+		"call-snapshot-deep-complete",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepCompletion.details.status, "accepted");
+	const evidencePackage = deepCompletion.details.evidencePackage as {
+		evidence: Array<{ content: string }>;
+	};
+	assert.equal(evidencePackage.evidence.length, 1);
+	assert.match(evidencePackage.evidence[0]?.content ?? "", /BoundaryToken 固定這個 Grill round/);
+	assert.doesNotMatch(evidencePackage.evidence[0]?.content ?? "", /changed after Grill evidence fetch/);
 });
 
 test("Extension_WhenDebugCompletionUsesWrongRoundId_ShouldRejectAndKeepActiveGrillAttempt", async (t) => {
@@ -1585,7 +2988,7 @@ function assertFollowUpInvocation(content: string, manifestCandidate: string, de
 	assert.match(content, new RegExp(`\\b${manifestCandidate}\\b`));
 	assert.match(
 		content,
-		new RegExp(escapeRegExp(`User answered decision "${decisionId}" with ${JSON.stringify(answer)}.`)),
+			new RegExp(escapeRegExp(`使用者已回答決策 "${decisionId}"：${JSON.stringify(answer)}。`)),
 	);
 }
 
@@ -1729,7 +3132,7 @@ test("Extension_WhenContinueCommandReplaysGrillRound_ShouldSendExistingDecisionI
 
 	const replay = harness.observedUserMessageCalls.at(-1);
 	assert.equal(replay?.options?.deliverAs, "followUp");
-	assert.match(replay?.content ?? "", /User answered decision "confirm" with "採用方案 A"\./);
+	assert.match(replay?.content ?? "", /使用者已回答決策 "confirm"："採用方案 A"。/);
 	assert.equal(harness.reenteredFollowUpEvents.length, 1, "預期 continue 會重新進入共用 input 路徑");
 	assert.equal((harness.reenteredFollowUpEvents[0]?.result as { action?: string }).action, "continue");
 });
@@ -1769,7 +3172,7 @@ test("Extension_WhenUserConfirmed_ShouldResumeDeepKnowledge", async (t) => {
 	const nextInvocation = harness.observedUserMessageCalls[0]?.content ?? "";
 	assert.match(nextInvocation, /grill-2/);
 	assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
-	assert.match(nextInvocation, /User answered decision "confirm" with "confirm"\./);
+	assert.match(nextInvocation, /使用者已回答決策 "confirm"："confirm"。/);
 	assert.doesNotMatch(nextInvocation, /DEEP_KNOWLEDGE_RETRIEVAL|KNOWLEDGE_UNDERSTANDING/);
 });
 
@@ -1966,42 +3369,9 @@ test("Extension_WhenStructuredGrillResultIsReadyForDeep_ShouldContinueWithoutWai
 
 	const renderedMessage = harness.observedMessages.join("\n");
 	assert.match(renderedMessage, /DEEP_KNOWLEDGE_RETRIEVAL/);
-	assert.match(renderedMessage, /KNOWLEDGE_UNDERSTANDING/);
+	assert.doesNotMatch(renderedMessage, /KNOWLEDGE_UNDERSTANDING/);
 	assert.doesNotMatch(renderedMessage, /WAIT_USER/);
-});
-
-test("Extension_WhenDeepKnowledgeHasStarted_ShouldIgnoreContinueCommand", async (t) => {
-	const rootDir = createTempRoot();
-	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read", "write"] });
-	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
-	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
-	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
-	await evidenceTool.execute(
-		"call-evidence",
-		{ candidateId },
-		undefined,
-		undefined,
-		harness.buildContext(),
-	);
-	await harness.runCommand(`grill-result ${JSON.stringify({
-		...JSON.parse(readyForDeepGrillResult),
-		roundId: "grill-1",
-		evidence: [candidateId],
-	})}`);
-
-	assert.ok(harness.observedStatuses.some((status) => status.includes("DEEP_KNOWLEDGE_RETRIEVAL")));
-	const userMessageCount = harness.observedUserMessageCalls.length;
-	const statusCountBeforeContinue = harness.observedStatuses.length;
-
-	await harness.runCommand("forge-runtime", "continue");
-
-	assert.equal(harness.observedUserMessageCalls.length, userMessageCount);
-	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
-	assert.equal(
-		harness.observedStatuses.slice(statusCountBeforeContinue).some((status) => status.includes("GRILL")),
-		false,
-	);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
 });
 
 test("Extension_WhenRelevanceGateHasNoCandidates_ShouldStopBeforeDeepKnowledge", async (t) => {
@@ -2464,7 +3834,7 @@ test("Extension_WhenWaitUserAndShortConfirmation_ShouldResumeExistingWorkflow", 
 	const nextInvocation = (result as { text?: string }).text ?? "";
 	assert.match(nextInvocation, /grill-2/);
 	assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
-	assert.match(nextInvocation, /User answered decision "confirm" with "confirm"\./);
+	assert.match(nextInvocation, /使用者已回答決策 "confirm"："confirm"。/);
 	assert.notEqual(nextInvocation, "/forge-runtime confirm");
 });
 
@@ -2795,7 +4165,7 @@ test("Extension_WhenWaitUserAnswerComesFromSelectorOrCommand_ShouldFollowUpThrou
 		assert.match(nextInvocation, /完成時必須呼叫 forge_grill_complete；completion payload 必須原樣包含此 roundId/);
 		assert.match(
 			nextInvocation,
-			new RegExp(escapeRegExp(`User answered decision "next-grill-question" with ${JSON.stringify(row.answer)}.`)),
+			new RegExp(escapeRegExp(`使用者已回答決策 "next-grill-question"：${JSON.stringify(row.answer)}。`)),
 		);
 		assert.equal(harness.observedStatuses.filter((status) => status.includes("LIGHT_DISCOVERY")).length, 1);
 		assert.match(harness.observedStatuses.at(-1) ?? "", /GRILL/);
@@ -2877,6 +4247,912 @@ test("Extension_WhenStructuredGrillResultStreams_ShouldSuppressAssistantTextDuri
 
 	assert.doesNotMatch(JSON.stringify(event.message), /NEEDS_CONFIRMATION|Should we switch to Plan B\?|EV-SWITCH/);
 	assert.equal(event.message.content[0]?.text, "");
+});
+
+test("Extension_WhenDeepSearchQueryIsWhitespace_ShouldRejectWithoutChangingRetrieval", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/deep-blank-query.ts", "// DeepBlankQueryNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepBlankQueryNeedle deep-blank-query.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-blank-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute);
+	await completionTool.execute("call-blank-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const result = await searchTool.execute("call-blank-search", {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+		query: "   ", source: "wiki",
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(result.details.status, "invalid");
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+});
+
+test("Extension_WhenDeepSearchRepeatsSupplementalQuery_ShouldReuseWithoutReread", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "wiki/deep-repeat-supplemental.md", "DeepRepeatSupplementalNeedle wiki evidence.\n");
+	writeWorkspaceFile(rootDir, "code_base/src/deep-repeat.ts", "// DeepRepeatSupplementalNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepRepeatSupplementalNeedle deep-repeat.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-repeat-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute);
+	await completionTool.execute("call-repeat-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const input = {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+		query: "DeepRepeatSupplementalNeedle", source: "wiki" as const,
+	};
+	const first = await searchTool.execute("call-repeat-search-1", input, undefined, undefined, harness.buildContext());
+	const supplementalId = (first.details.evidence as Array<{ evidenceId: string }>)[0]?.evidenceId;
+	assert.equal(first.details.status, "accepted");
+	assert.ok(supplementalId);
+	const second = await searchTool.execute("call-repeat-search-2", input, undefined, undefined, harness.buildContext());
+	assert.equal(second.details.status, "accepted");
+	assert.deepEqual(second.details.evidence, []);
+	assert.deepEqual(second.details.reusedEvidenceIds, [supplementalId]);
+});
+
+test("Extension_WhenDeepCompletionNeedsDecisionReferencesUnknownEvidence_ShouldRejectWithoutTransition", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/deep-unknown-evidence.ts", "// DeepUnknownEvidenceNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepUnknownEvidenceNeedle deep-unknown-evidence.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-unknown-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute("call-unknown-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	const beforeRetrievalStatus = harness.observedStatuses.at(-1);
+	const retrievalResult = await retrievalTool.execute("call-unknown-retrieval", {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+		outcome: { kind: "needs_decision", decisionId: "unknown-retrieval", question: "?", options: ["ok"], recommendation: "ok", evidenceIds: ["ev-unknown"] },
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(retrievalResult.details.status, "invalid");
+	assert.equal(harness.observedStatuses.at(-1), beforeRetrievalStatus);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+
+	const validRetrieval = await retrievalTool.execute("call-valid-retrieval", {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL", outcome: { kind: "completed" },
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(validRetrieval.details.status, "accepted");
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingTool?.execute);
+	const beforeUnderstandingStatus = harness.observedStatuses.at(-1);
+	const understandingResult = await understandingTool.execute("call-unknown-understanding", {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING",
+		outcome: { kind: "needs_decision", decisionId: "unknown-understanding", question: "?", options: ["ok"], recommendation: "ok", evidenceIds: ["ev-unknown"] },
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(understandingResult.details.status, "invalid");
+	assert.equal(harness.observedStatuses.at(-1), beforeUnderstandingStatus);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_complete"]);
+});
+
+test("Extension_WhenRetrievalNeedsDiscovery_ShouldContinueDiscoveryAndReturnToGrill", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/deep-discovery-retry.ts", "// DeepDiscoveryRetryNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
+	const startResult = await harness.sendInput("請幫我測試 DeepDiscoveryRetryNeedle deep-discovery-retry.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-discovery-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute("call-discovery-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await retrievalTool.execute("call-needs-discovery", {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+		outcome: { kind: "needs_discovery", decisionSummary: "需要補充線索" },
+	}, undefined, undefined, harness.buildContext());
+	const beforeContinue = harness.observedUserMessageCalls.length;
+	await harness.runCommand("continue");
+	assert.ok(harness.observedUserMessageCalls.length > beforeContinue);
+	assert.match(harness.observedUserMessageCalls.at(-1)?.content ?? "", /grill-2/);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /GRILL/);
+});
+
+test("Extension_WhenRetrievalNeedsDecisionReceivesUserInput_ShouldRetryRetrievalWithoutReturningToGrill", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/deep-retrieval-decision.ts", "// DeepRetrievalDecisionNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepRetrievalDecisionNeedle deep-retrieval-decision.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-retrieval-decision-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-retrieval-decision-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	const decisionResult = await retrievalTool.execute(
+		"call-retrieval-decision",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: {
+				kind: "needs_decision",
+				decisionId: "retrieval-decision",
+				question: "是否以目前證據繼續？",
+				options: ["繼續", "停止"],
+				recommendation: "繼續",
+				evidenceIds: [candidateId],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(decisionResult.details.status, "needs_decision");
+	const statusCountBeforeAnswer = harness.observedStatuses.length;
+
+	const answerResult = await harness.sendInput("補充答案：繼續");
+	const nextInvocation = (answerResult as { text?: string }).text ?? "";
+	assert.equal((answerResult as { action?: string }).action, "transform");
+	assert.match(nextInvocation, /attemptId=deep-2/);
+	assert.match(nextInvocation, /sourceRoundId=grill-1/);
+	assert.match(nextInvocation, /phase=DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+	assert.equal(
+		harness.observedStatuses.slice(statusCountBeforeAnswer).some((status) => status.includes("GRILL [active]")),
+		false,
+		"Deep Retrieval decision answer 不得回到 Grill",
+	);
+});
+
+test("Extension_WhenUnderstandingNeedsDecisionAndConfirmRuns_ShouldRetryUnderstandingWithoutReturningToRetrieval", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/deep-understanding-decision.ts", "// DeepUnderstandingDecisionNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepUnderstandingDecisionNeedle deep-understanding-decision.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-understanding-decision-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-understanding-decision-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await retrievalTool.execute(
+		"call-understanding-decision-retrieval",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingTool?.execute);
+	const decisionResult = await understandingTool.execute(
+		"call-understanding-decision",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: {
+				kind: "needs_decision",
+				decisionId: "understanding-decision",
+				question: "是否接受這項理解？",
+				options: ["接受", "停止"],
+				recommendation: "接受",
+				evidenceIds: [candidateId],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(decisionResult.details.status, "needs_decision");
+	const statusCountBeforeConfirm = harness.observedStatuses.length;
+
+	await harness.runCommand("confirm");
+
+	const nextInvocation = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	assert.match(nextInvocation, /attemptId=deep-2/);
+	assert.match(nextInvocation, /sourceRoundId=grill-1/);
+	assert.match(nextInvocation, /phase=KNOWLEDGE_UNDERSTANDING/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_complete"]);
+	assert.equal(
+		harness.observedStatuses.slice(statusCountBeforeConfirm).some((status) => status.includes("DEEP_KNOWLEDGE_RETRIEVAL")),
+		false,
+		"Knowledge Understanding decision confirm 不得回到 Retrieval",
+	);
+	assert.equal(
+		harness.observedStatuses.slice(statusCountBeforeConfirm).some((status) => status.includes("GRILL [active]")),
+		false,
+		"Knowledge Understanding decision confirm 不得回到 Grill",
+	);
+});
+
+test("Extension_WhenDeepContinueRuns_ShouldCreateNewAttemptAndPreservePhaseAndSourceRound", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/deep-continue-attempt.ts", "// DeepContinueAttemptNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepContinueAttemptNeedle deep-continue-attempt.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-continue-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute("call-continue-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await harness.runCommand("continue");
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const retrievalRetry = await searchTool.execute("call-retrieval-retry", {
+		attemptId: "deep-2", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+		query: "DeepContinueAttemptNeedle", source: "code_base",
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(retrievalRetry.details.status, "accepted");
+	await retrievalTool.execute("call-retrieval-lock", {
+		attemptId: "deep-2", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL", outcome: { kind: "completed" },
+	}, undefined, undefined, harness.buildContext());
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(deepCompleteTool?.execute);
+	await harness.runCommand("continue");
+	const understandingRetry = await deepCompleteTool.execute("call-understanding-retry", {
+		attemptId: "deep-3", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING",
+		outcome: { kind: "completed", decisions: [], findings: [{ statement: "ok", evidenceIds: [candidateId] }], limitations: [] },
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(understandingRetry.details.status, "accepted");
+});
+
+test("Extension_WhenDeepCancelRuns_ShouldKeepInputSnapshotEvidenceAndRestoreOriginalTools", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "wiki/deep-cancel-extra.md", "DeepCancelNeedle supplemental evidence.\n");
+	writeWorkspaceFile(rootDir, "code_base/src/deep-cancel.ts", "// DeepCancelNeedle candidate.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
+	const request = "請幫我測試 DeepCancelNeedle deep-cancel.ts";
+	const startResult = await harness.sendInput(request);
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-cancel-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute("call-cancel-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const searchResult = await searchTool.execute("call-cancel-search", {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+		query: "DeepCancelNeedle", source: "wiki",
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(searchResult.details.status, "accepted");
+	const supplementalEvidenceId = (searchResult.details.evidence as Array<{ evidenceId: string }>)[0]?.evidenceId;
+	assert.ok(supplementalEvidenceId);
+	await harness.runCommand("cancel");
+	assert.deepEqual(harness.getActiveTools(), ["read"]);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+	await harness.runCommand("continue");
+	const restartedDeepInvocation = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	assert.match(restartedDeepInvocation, /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.match(restartedDeepInvocation, /deep-2/);
+	assert.match(restartedDeepInvocation, /grill-1/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+});
+
+test("Integration_WhenDeepSearchQueryExceedsCharacterLimit_ShouldRejectWithoutChangingAttemptState", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-query-limit-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-query-limit-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const identity = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+	};
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	const accepted = await searchTool.execute(
+		"call-query-limit-1500",
+		{ ...identity, query: "😀".repeat(1500), source: "wiki" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(accepted.details.status, "accepted");
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.deepEqual(harness.getActiveTools(), beforeTools);
+
+	const rejected = await searchTool.execute(
+		"call-query-limit-1501",
+		{ ...identity, query: "😀".repeat(1501), source: "wiki" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.ok(["rejected", "invalid"].includes(String(rejected.details.status)));
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.deepEqual(harness.getActiveTools(), beforeTools);
+});
+
+test("Integration_WhenDeepSearchRoundExceedsSearchLimit_ShouldRejectNinthSearchAcrossRetry", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-search-count-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-search-count-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const searchExecute = searchTool.execute;
+	assert.ok(searchExecute);
+	const baseIdentity = {
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+	};
+	for (let index = 1; index <= 8; index += 1) {
+		const result = await searchExecute(
+			`call-search-count-${index}`,
+			{ ...baseIdentity, attemptId: "deep-1", query: `quota-probe-${index}`, source: "wiki" },
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(result.details.status, "accepted", `第 ${index} 次搜尋應成功`);
+	}
+
+	await harness.runCommand("cancel");
+	await harness.runCommand("continue");
+	const retryInvocation = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	assert.match(retryInvocation, /attemptId=deep-2/);
+	assert.match(retryInvocation, /sourceRoundId=grill-1/);
+	const beforeNinthStatus = harness.observedStatuses.at(-1);
+	const beforeNinthTools = harness.getActiveTools();
+	const ninth = await searchTool.execute(
+		"call-search-count-9",
+		{ ...baseIdentity, attemptId: "deep-2", query: "quota-probe-9", source: "wiki" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.ok(["rejected", "invalid"].includes(String(ninth.details.status)));
+	assert.equal(harness.observedStatuses.at(-1), beforeNinthStatus);
+	assert.deepEqual(harness.getActiveTools(), beforeNinthTools);
+});
+
+test("Integration_WhenEvidenceExceedsByteLimit_ShouldRejectWithoutRecordingIt", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const acceptedMarker = "AcceptedByteNeedle";
+	const oversizedMarker = "OversizedByteNeedle";
+	writeWorkspaceFile(rootDir, "code_base/src/byte-limit-grill.ts", "ByteLimitGrillNeedle");
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/accepted-AcceptedByteNeedle-256-kib.ts",
+		acceptedMarker + "A".repeat(262144 - Buffer.byteLength(acceptedMarker, "utf8")),
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/oversized-OversizedByteNeedle-256-kib.ts",
+		oversizedMarker + "B".repeat(262145 - Buffer.byteLength(oversizedMarker, "utf8")),
+	);
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-byte-limit-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-byte-limit-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const identity = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+	};
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	const accepted = await searchTool.execute(
+		"call-byte-limit-accepted",
+		{ ...identity, query: acceptedMarker, source: "code_base" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(accepted.details.status, "accepted");
+	assert.equal((accepted.details.evidence as Array<{ content: string }>).length, 1);
+	assert.equal(Buffer.byteLength((accepted.details.evidence as Array<{ content: string }>)[0].content, "utf8"), 262144);
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.deepEqual(harness.getActiveTools(), beforeTools);
+
+	const oversized = await searchTool.execute(
+		"call-byte-limit-oversized",
+		{ ...identity, query: oversizedMarker, source: "code_base" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.ok(["rejected", "invalid"].includes(String(oversized.details.status)));
+	assert.deepEqual(oversized.details.evidence ?? [], []);
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.deepEqual(harness.getActiveTools(), beforeTools);
+
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	const locked = await retrievalTool.execute(
+		"call-byte-limit-lock",
+		{ ...identity, outcome: { kind: "completed" } },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(locked.details.status, "accepted");
+	assert.equal((locked.details.lockedEvidenceIds as string[]).length, 2);
+	assert.doesNotMatch(JSON.stringify(locked.details), new RegExp(oversizedMarker));
+});
+
+test("Integration_WhenWikiOrCodeBaseEvidenceExceedsByteLimit_ShouldRejectWithoutConsumingSearchQuota", async (t) => {
+	for (const source of ["wiki", "code_base"] as const) {
+		const rootDir = createTempRoot();
+		t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+		const oversizedMarker = `${source}-OversizedPreReadNeedle`;
+		writeWorkspaceFile(
+			rootDir,
+			`${source}/oversized-${oversizedMarker}.md`,
+			oversizedMarker + "X".repeat(262145 - Buffer.byteLength(oversizedMarker, "utf8")),
+		);
+		for (let index = 1; index <= 8; index += 1) {
+			writeWorkspaceFile(
+				rootDir,
+				`${source}/quota-${source}-QuotaNeedle-${index}.md`,
+				`${source}-QuotaNeedle-${index}`,
+			);
+		}
+
+		const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+		const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+		const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+		assert.ok(evidenceTool?.execute);
+		await evidenceTool.execute(`call-${source}-grill`, { candidateId }, undefined, undefined, harness.buildContext());
+		const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+		assert.ok(grillCompleteTool?.execute);
+		await grillCompleteTool.execute(
+			`call-${source}-grill-complete`,
+			{
+				roundId: "grill-1",
+				status: "READY_FOR_DEEP",
+				questions: [],
+				recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+				evidence: [candidateId],
+				requiresUserConfirmation: false,
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		const searchTool = harness.registeredTools.get("forge_deep_search");
+		assert.ok(searchTool?.execute);
+		const searchExecute = searchTool.execute;
+		assert.ok(searchExecute);
+		const identity = {
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+		};
+
+		const oversized = await searchExecute(
+			`call-${source}-oversized`,
+			{ ...identity, query: oversizedMarker, source },
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(oversized.details.status, "rejected");
+		assert.equal(oversized.details.reason, "evidence_too_large");
+		assert.deepEqual(oversized.details.evidence ?? [], []);
+
+		for (let index = 1; index <= 8; index += 1) {
+			const accepted = await searchExecute(
+				`call-${source}-quota-${index}`,
+				{ ...identity, query: `${source}-QuotaNeedle-${index}`, source },
+				undefined,
+				undefined,
+				harness.buildContext(),
+			);
+			assert.equal(accepted.details.status, "accepted", `${source} 第 ${index} 次合法搜尋應成功`);
+		}
+	}
+});
+
+test("Integration_WhenGrillSnapshotSourceExceedsByteLimit_ShouldKeepManifestButRejectEvidenceFetch", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const marker = "GrillSnapshotOversizedNeedle";
+	writeWorkspaceFile(
+		rootDir,
+		"wiki/grill-snapshot-oversized.md",
+		marker + "Y".repeat(262145 - Buffer.byteLength(marker, "utf8")),
+	);
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const initialResult = await harness.sendInput(`請幫我測試 ${marker} grill-snapshot-oversized.md`);
+	const initialInvocation = (initialResult as { text?: string }).text ?? "";
+	assert.match(initialInvocation, /evidence_too_large/);
+	const candidateId = extractManifestCandidate(initialResult);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	const rejected = await evidenceTool.execute(
+		"call-grill-snapshot-oversized",
+		{ candidateId },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(rejected.details.status, "rejected");
+	assert.equal(rejected.details.reason, "evidence_too_large");
+	assert.deepEqual(rejected.details.evidence ?? [], []);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /GRILL/);
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute);
+	const completionExecute = completionTool.execute;
+	assert.ok(completionExecute);
+	await assert.rejects(
+		() =>
+			completionExecute(
+				"call-grill-snapshot-oversized-complete",
+				{
+					roundId: "grill-1",
+					status: "READY_FOR_DEEP",
+					questions: [],
+					recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+					evidence: [candidateId],
+					requiresUserConfirmation: false,
+				},
+				undefined,
+				undefined,
+				harness.buildContext(),
+			),
+		/evidence that was not fetched/,
+	);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /GRILL/);
+});
+
+test("Integration_WhenDeepCompleteExceedsPackageCountLimit_ShouldRejectWithoutChangingUnderstandingState", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-package-limit-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-package-limit-grill-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	const identity = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+	};
+	await retrievalTool.execute("call-package-limit-retrieval", { ...identity, outcome: { kind: "completed" } }, undefined, undefined, harness.buildContext());
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingTool?.execute);
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	const tooManyFindings = Array.from({ length: 51 }, (_, index) => ({
+		statement: `超過上限的發現 ${index}`,
+		evidenceIds: [candidateId],
+	}));
+	const rejected = await understandingTool.execute(
+		"call-package-limit-understanding",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: { kind: "completed", decisions: [], findings: tooManyFindings, limitations: [] },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(rejected.details.status, "invalid");
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus, "拒絕時 stage 不得改變");
+	assert.deepEqual(harness.getActiveTools(), beforeTools, "拒絕時 Understanding 工具面不得改變");
+
+	const accepted = await understandingTool.execute(
+		"call-package-limit-understanding-retry",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: { kind: "completed", decisions: [], findings: [{ statement: "合法發現", evidenceIds: [candidateId] }], limitations: [] },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(accepted.details.status, "accepted", "同一 attempt 應可在拒絕後重試");
+});
+
+test("Integration_WhenGrillRoundEvidenceExceedsTwoMiB_ShouldRejectNinthFetchWithoutRecordingIt", async (t) => {
+	const rootDir = createTempRoot({ withWiki: false, withCodeBase: false });
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	mkdirSync(join(rootDir, "code_base"), { recursive: true });
+	const marker = "GrillRoundTotalNeedle";
+	const wikiPaths = Array.from({ length: 3 }, (_, index) => `wiki/GrillRoundTotalNeedle-${index + 1}.md`);
+	const codeBasePaths = Array.from({ length: 3 }, (_, index) => `code_base/src/GrillRoundTotalNeedle-${index + 4}.ts`);
+	const targetPaths = Array.from({ length: 3 }, (_, index) => `src/GrillRoundTotalNeedle-${index + 4}.ts`);
+	for (const [index, relativePath] of [...wikiPaths, ...codeBasePaths, ...targetPaths].entries()) {
+		const contentMarker = `${marker}-${index + 1}`;
+		writeWorkspaceFile(rootDir, relativePath, contentMarker + "X".repeat(262144 - Buffer.byteLength(contentMarker, "utf8")));
+	}
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const initialResult = await harness.sendInput(`/grill-run 請幫我測試 ${marker}`);
+	const candidateIds = [...new Set(((initialResult as { text?: string }).text ?? "").match(/\bev-[0-9a-f]{64}\b/g) ?? [])];
+	assert.equal(candidateIds.length, 9, "應公開九筆可定位的 snapshot candidate");
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const evidenceExecute = evidenceTool?.execute;
+	assert.ok(evidenceExecute);
+	for (const [index, candidateId] of candidateIds.entries()) {
+		const result = await evidenceExecute(
+			`call-grill-round-total-${index + 1}`,
+			{ candidateId },
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		if (index < 8) {
+			assert.equal(result.details.status, undefined, `第 ${index + 1} 筆證據應成功讀取`);
+			continue;
+		}
+		assert.equal(result.details.status, "rejected");
+		assert.equal(result.details.reason, "evidence_round_too_large");
+		assert.deepEqual(result.details.evidence, []);
+		const retry = await evidenceExecute(
+			"call-grill-round-total-9-retry",
+			{ candidateId },
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(retry.details.status, "rejected");
+		assert.equal(retry.details.reason, "evidence_round_too_large");
+		assert.deepEqual(retry.details.evidence, []);
+	}
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute);
+	const completion = await completionTool.execute(
+		"call-grill-round-total-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "前八筆證據足夠", confidence: 0.9 },
+			evidence: candidateIds.slice(0, 8),
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+		assert.equal(completion.details.status, "READY_FOR_DEEP");
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+});
+
+test("Integration_WhenStaleRetrievalOutcomeIsCompletedOrNeedsDiscovery_ShouldRejectBeforeOutcomeValidation", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-stale-retrieval-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute("call-stale-retrieval-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	const retrievalExecute = retrievalTool?.execute;
+	assert.ok(retrievalExecute);
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	for (const outcome of [{ kind: "completed" as const }, { kind: "needs_discovery" as const }]) {
+		const result = await retrievalExecute("call-stale-retrieval-outcome", {
+			attemptId: "deep-stale", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL", outcome,
+		}, undefined, undefined, harness.buildContext());
+		assert.equal(result.details.status, "stale");
+		assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+		assert.deepEqual(harness.getActiveTools(), beforeTools);
+	}
+});
+
+test("Integration_WhenStaleUnderstandingOutcomeIsCompletedOrNeedsDiscovery_ShouldRejectBeforePackageValidation", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-stale-understanding-grill", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute("call-stale-understanding-grill-complete", {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await retrievalTool.execute("call-stale-understanding-retrieval", {
+		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL", outcome: { kind: "completed" },
+	}, undefined, undefined, harness.buildContext());
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	const understandingExecute = understandingTool?.execute;
+	assert.ok(understandingExecute);
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	for (const outcome of [
+		{ kind: "completed" as const, decisions: [{ decisionId: "unknown", statement: "x", evidenceIds: ["ev-unknown"] }], findings: [], limitations: [] },
+		{ kind: "needs_discovery" as const },
+	]) {
+		const result = await understandingExecute("call-stale-understanding-outcome", {
+			attemptId: "deep-stale", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING", outcome,
+		}, undefined, undefined, harness.buildContext());
+		assert.equal(result.details.status, "stale");
+		assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+		assert.deepEqual(harness.getActiveTools(), beforeTools);
+	}
 });
 
 function escapeRegExp(value: string): string {

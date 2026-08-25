@@ -27,10 +27,16 @@ Forge Runtime 是一個供 [PI](../pi-main/packages/coding-agent/README.md) 載�
 - `message_update`
 - `tool_call`
 
-它也會提供兩個 Grill tools：
+它也會提供兩個 Grill tools 與三個 Deep tools：
 
 - `forge_grill_evidence`
 - `forge_grill_complete`
+- `forge_deep_search`
+- `forge_deep_retrieval_complete`
+- `forge_deep_complete`
+
+Deep 分成 Retrieval 與 Understanding 兩階段。每個 Deep attempt 以
+`attemptId + sourceRoundId + phase` 識別；retry 只換新的 attempt、保留來源輪次並回到原 Deep phase，cancel 保留目前輸入與證據，`continue` 也回到原 Deep phase，不會繞回 Grill。所有 stale outcome 都會安靜拒絕；若 active-tools 能力無法安全確認，Runtime 會拒絕啟動 Deep。
 
 ## 使用者入口
 
@@ -92,3 +98,6 @@ npm test
 - 這是私有 package，README 不提供發布或全域安裝流程。
 - `src/grill/grill-skill.ts` 目前會讀取 repo 根目錄的 `.pi/skills/grilling/SKILL.md`，因此該檔案是執行 Grill 時的必要 workspace 相依。
 - README 只描述已實作的 Plan A 範圍，不代表後續 View 或 UI 工作已完成。
+- 固定安全上限：query 最多 1500 個 Unicode code points；同一 source／Grill round 最多 8 次搜尋，retry／cancel 不重設；單筆證據最多 256 KiB，整輪最多 2 MiB（包含 Grill fetched 與 Deep supplemental）；decisions、findings、limitations 各最多 50 筆，每段 statement 最多 4,000 個 Unicode code points。超限會拒絕且不改目前 state；檔案會先 `stat`，恰好等於上限可以讀取。
+- 每次來源搜尋最多 3 個相關候選，是呈現／候選上限；它不同於 Evidence Package 每類最多 50 筆的安全上限。
+- 人類決策會以 `問題：…；決定：…` 持久保存，同一 `decisionId` 的首筆決策不可覆寫；Evidence Package 先注入人類決策，模型重複相同 ID 會被拒絕。Evidence Package 也要求 ID 唯一、finding 引用存在的 evidence，且 blocking limitation 不得完成。

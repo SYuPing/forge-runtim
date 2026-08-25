@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forge Runtime 流程與開發進度</title>
+  <style>
+    :root {
+      --ink: #18251f;
+      --muted: #66766e;
+      --paper: #f4f1e9;
+      --surface: #fffdf8;
+      --line: #cbd4cd;
+      --done: #176d55;
+      --done-bg: #e9f6ef;
+      --partial: #b45b14;
+      --partial-bg: #fff2df;
+      --future: #6d7580;
+      --future-bg: #edf0f2;
+      --accent: #235caa;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    h1, h2, h3, p { text-wrap: pretty; overflow-wrap: anywhere; }
+
+    header {
+      padding: clamp(2.5rem, 6vw, 5rem) max(1.25rem, calc((100vw - 1240px) / 2));
+      color: #f8faf6;
+      background: var(--ink);
+    }
+
+    .eyebrow {
+      margin: 0 0 .75rem;
+      color: #8fd1be;
+      font-size: .8rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+    }
+
+    h1 {
+      max-width: 900px;
+      margin: 0;
+      font-family: Georgia, "Songti TC", "Noto Serif TC", serif;
+      font-size: clamp(2.2rem, 6vw, 4.7rem);
+      line-height: 1.08;
+      letter-spacing: -.025em;
+    }
+
+    header p:last-child {
+      max-width: 780px;
+      margin: 1rem 0 0;
+      color: #b8c8bf;
+    }
+
+    main {
+      width: min(100% - 2.5rem, 1240px);
+      margin: 0 auto;
+      padding: clamp(2rem, 5vw, 4.5rem) 0;
+    }
+
+    .section-heading {
+      display: flex;
+      gap: 1rem;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: clamp(1.5rem, 3vw, 2.3rem);
+      line-height: 1.2;
+    }
+
+    .section-heading p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .95rem;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .65rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .legend span, .status {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      padding: .35rem .65rem;
+      border-radius: 999px;
+      font-size: .82rem;
+      font-weight: 800;
+    }
+
+    .legend span::before {
+      content: "";
+      width: .6rem;
+      height: .6rem;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .legend .done { color: var(--done); background: var(--done-bg); }
+    .legend .partial { color: var(--partial); background: var(--partial-bg); }
+    .legend .future { color: var(--future); background: var(--future-bg); }
+
+    .diagram {
+      padding: clamp(1.2rem, 3vw, 2rem);
+      background: var(--surface);
+      border: 1px solid #d9e1da;
+      border-radius: 20px;
+      box-shadow: 0 1px 3px rgb(24 37 31 / 10%);
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 2rem;
+      align-items: stretch;
+    }
+
+    .flow-node {
+      position: relative;
+      display: flex;
+      min-height: 150px;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 1rem;
+      border: 2px solid;
+      border-radius: var(--radius);
+    }
+
+    .flow-node::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -1.75rem;
+      color: var(--accent);
+      font-size: 1.5rem;
+      font-weight: 800;
+      transform: translateY(-50%);
+    }
+
+    .flow-node:last-child::after { content: ""; }
+    .flow-node.done { color: var(--done); background: var(--done-bg); border-color: #93ceb4; }
+    .flow-node.partial { color: var(--partial); background: var(--partial-bg); border-color: #edbd82; }
+    .flow-node.future { color: var(--future); background: var(--future-bg); border-color: #c3cbd1; border-style: dashed; }
+    .ai-badge {
+      position: absolute;
+      top: .55rem;
+      right: .65rem;
+      padding: .12rem .35rem;
+      border: 1px solid currentColor;
+      border-radius: .3rem;
+      color: var(--ink);
+      background: var(--paper);
+      font-size: .65rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+      line-height: 1;
+    }
+    .flow-node.has-ai h3 { padding-right: 2.25rem; }
+    .flow-node h3 { margin: .5rem 0 .3rem; color: inherit; font-size: 1.1rem; line-height: 1.25; }
+    .flow-node p { margin: 0; color: var(--ink); font-size: .9rem; line-height: 1.55; }
+    .step { color: currentColor; font-size: .76rem; font-weight: 800; letter-spacing: .08em; }
+
+    .decision {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 1rem;
+      align-items: center;
+      margin: 1.4rem 0;
+    }
+
+    .decision-label {
+      padding: .85rem 1rem;
+      color: var(--accent);
+      background: #eef4fc;
+      border: 1px solid #b7cde8;
+      border-radius: var(--radius);
+      text-align: center;
+      font-weight: 800;
+    }
+
+    .branch-arrow { color: var(--accent); font-size: 1.4rem; font-weight: 800; }
+
+    .branch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .branch article {
+      min-height: 160px;
+      padding: 1rem 1.15rem;
+      border-radius: var(--radius);
+    }
+
+    .branch .back { background: #fff8eb; border: 2px solid #edbd82; }
+    .branch .forward { background: #eaf7f1; border: 2px solid #93ceb4; }
+    .branch h3 { margin: 0 0 .4rem; font-size: 1.1rem; }
+    .branch p { margin: 0; font-size: .92rem; }
+
+    .rules {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .rule {
+      padding: 1rem;
+      background: #f7f5ef;
+      border-top: 3px solid var(--accent);
+    }
+
+    .rule strong { display: block; margin-bottom: .25rem; }
+    .rule p { margin: 0; color: var(--muted); font-size: .9rem; }
+
+    .scope-note {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .scope-note article { padding: 1.1rem; border-radius: var(--radius); }
+    .scope-note .done { background: var(--done-bg); border: 1px solid #93ceb4; }
+    .scope-note .future { background: var(--future-bg); border: 1px dashed #aab4bd; }
+    .scope-note h3 { margin: 0 0 .5rem; }
+    .scope-note ul { margin: 0; padding-left: 1.2rem; }
+    .scope-note li + li { margin-top: .3rem; }
+
+    .timeline-section { margin-top: clamp(3rem, 8vw, 6rem); }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 1rem;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      top: 1rem;
+      bottom: 1rem;
+      left: 1rem;
+      width: 2px;
+      background: var(--line);
+    }
+
+    .milestone {
+      position: relative;
+      display: grid;
+      grid-template-columns: 2rem 1fr;
+      gap: 1.25rem;
+      align-items: start;
+    }
+
+    .milestone-dot {
+      position: relative;
+      z-index: 1;
+      width: 2rem;
+      height: 2rem;
+      margin-top: 1rem;
+      border: 5px solid var(--paper);
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .milestone.teal .milestone-dot { background: var(--teal, #147d70); }
+    .milestone.violet .milestone-dot { background: #6e42b8; }
+    .milestone.orange .milestone-dot { background: var(--orange, #c86412); }
+    .milestone.green .milestone-dot { background: var(--green, #188447); }
+
+    .milestone article {
+      padding: 1.15rem 1.3rem;
+      background: var(--surface);
+      border: 1px solid #d9e1da;
+      border-radius: var(--radius);
+    }
+
+    .milestone.teal article { background: #eef9f5; border-color: #a7ddd0; }
+    .milestone.violet article { background: #f5f0fc; border-color: #d7c6f1; }
+    .milestone.orange article { background: #fff6e9; border-color: #f0c28c; }
+    .milestone.green article { background: #effaf1; border-color: #a8ddb5; }
+    .date { margin: 0 0 .25rem; color: var(--accent); font-size: .85rem; font-weight: 800; letter-spacing: .06em; }
+    .milestone.teal .date { color: #147d70; }
+    .milestone.violet .date { color: #6e42b8; }
+    .milestone.orange .date { color: #c86412; }
+    .milestone.green .date { color: #188447; }
+    .milestone h3 { margin: 0 0 .45rem; font-size: 1.25rem; line-height: 1.25; }
+    .milestone p { margin: .35rem 0 0; font-size: .94rem; }
+    .milestone strong { margin-right: .3rem; }
+    .milestone .detail {
+      margin-top: .7rem;
+      padding: .7rem .8rem;
+      border-radius: 9px;
+    }
+    .milestone .bug { color: #8d341d; background: #fff0eb; border-left: 4px solid #d65b3b; }
+    .milestone .fix { color: #185d45; background: #edf8f0; border-left: 4px solid #4a9b74; }
+    .milestone .no-bug { color: #5c6b64; background: #f2f4f0; border-left: 4px solid #aab7ae; }
+
+    footer {
+      padding: 1.5rem max(1.25rem, calc((100vw - 1240px) / 2));
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: .9rem;
+    }
+
+    @media (max-width: 940px) {
+      .flow-row { grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+      .flow-node::after { right: -.8rem; }
+      .flow-node:nth-child(3)::after { content: "↓"; right: 50%; top: auto; bottom: -1.65rem; transform: translateX(50%); }
+      .flow-node:nth-child(4)::after { content: "→"; }
+      .flow-node:nth-child(6)::after { content: ""; }
+    }
+
+    @media (max-width: 640px) {
+      main { width: min(100% - 1.25rem, 1240px); }
+      .section-heading { display: block; }
+      .section-heading p { margin-top: .5rem; }
+      .flow-row, .branch, .rules, .scope-note { grid-template-columns: 1fr; }
+      .flow-node::after { content: "↓"; right: 50%; top: auto; bottom: -1.55rem; transform: translateX(50%); }
+      .flow-node:nth-child(3)::after, .flow-node:nth-child(4)::after { content: "↓"; right: 50%; top: auto; bottom: -1.55rem; transform: translateX(50%); }
+      .flow-node:last-child::after { content: ""; }
+      .decision { grid-template-columns: 1fr; gap: .5rem; }
+      .branch-arrow { text-align: center; transform: rotate(90deg); }
+      .milestone { grid-template-columns: 1.5rem 1fr; gap: .75rem; }
+      .milestone-dot { width: 1.5rem; height: 1.5rem; border-width: 4px; }
+      .timeline::before { left: .75rem; }
+      .milestone article { padding: 1rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="eyebrow">FORGE RUNTIME / ARCHITECTURE + DELIVERY</p>
+    <h1>目前已完成的流程，從收到需求一路走到交接</h1>
+    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/25 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="flow-title">
+      <div class="section-heading">
+        <h2 id="flow-title">一、目前完成的主流程</h2>
+        <p>主流程依序往右，遇到需要人決定時才停下。</p>
+      </div>
+
+      <div class="legend" aria-label="流程狀態圖例">
+        <span class="done">已完成</span>
+        <span class="partial">部分完成</span>
+        <span class="future">架構要求，尚未完成</span>
+      </div>
+
+      <div class="diagram">
+        <div class="flow-row">
+          <article class="flow-node done">
+            <span class="step">01 / 入口</span>
+            <h3>使用者需求</h3>
+            <p>收到原始訊息，保留原文，不先改寫。</p>
+          </article>
+          <article class="flow-node done has-ai">
+            <span class="ai-badge" aria-label="此區塊包含 AI 判斷">AI</span>
+            <span class="step">02 / 分流</span>
+            <h3>先判斷要不要啟動流程</h3>
+            <p>只做一件事：判斷照原話處理，還是開始這套工作流程。</p>
+          </article>
+          <article class="flow-node done">
+            <span class="step">03 / 找資料</span>
+            <h3>先找相關檔案</h3>
+            <p>先列出可能有用的檔名和基本資料，不急著讀完所有內容。</p>
+          </article>
+          <article class="flow-node done has-ai">
+            <span class="ai-badge" aria-label="此區塊包含 AI 判斷">AI</span>
+            <span class="step">04 / 查證</span>
+            <h3>逐項查證</h3>
+            <p>檢查找到的資料，確認證據夠不夠，判斷能不能繼續。</p>
+          </article>
+          <article class="flow-node done has-ai">
+            <span class="ai-badge" aria-label="此區塊包含 AI 判斷">AI</span>
+            <span class="step">05 / 交接</span>
+            <h3>整理已確認的資料</h3>
+            <p>只使用前面確認過的資料，不把同一份來源重新讀一遍。</p>
+          </article>
+          <article class="flow-node partial has-ai">
+            <span class="ai-badge" aria-label="此區塊包含 AI 判斷">AI</span>
+            <span class="step">06 / 後續</span>
+            <h3>後面的完整工作</h3>
+            <p>還包括整理需求、寫規格、實作和審查，這一輪還沒有全部做完。</p>
+          </article>
+        </div>
+
+        <div class="decision" aria-label="查證結果分支">
+          <div class="decision-label">查證後判斷：資料夠不夠？要不要請人決定？</div>
+          <div class="branch-arrow" aria-hidden="true">↓</div>
+          <div class="decision-label">只有確認沒問題，才能交給下一步</div>
+        </div>
+
+        <div class="branch">
+          <article class="back">
+            <h3>資料不夠，或需要你做決定</h3>
+            <p>先停下來等你回答。你回答後，系統會重新找資料或再查一次，不會自動替你選答案。</p>
+          </article>
+          <article class="forward">
+            <h3>資料夠了，可以繼續</h3>
+            <p>確認資料足夠後，先關掉前面留下的等待，再把已確認的資料交給下一步整理。</p>
+          </article>
+        </div>
+
+        <div class="rules">
+          <article class="rule">
+            <strong>固定流程負責往下走</strong>
+            <p>模型可以理解和提出建議，但不能自己跳步，也不能替人做最後決定。</p>
+          </article>
+          <article class="rule">
+            <strong>同一輪只用同一批資料</strong>
+            <p>前面確認過的資料會保留；來源後來變動，也不會偷偷混進這一輪。</p>
+          </article>
+          <article class="rule">
+            <strong>每次等待都有自己的編號</strong>
+            <p>每一輪、每種等待和每個決定都有編號，避免舊訊息重開流程或把兩個問題混在一起。</p>
+          </article>
+        </div>
+
+        <div class="scope-note">
+          <article class="done">
+            <h3>這一輪已完成</h3>
+            <ul>
+              <li>需求分流、找檔案、逐項查證與資料交接。</li>
+              <li>使用者等待、回答、重試、取消與切換。</li>
+              <li>完成後真正停止，畫面訊息不誤送回模型。</li>
+              <li>不同輪次的資料分開，舊訊息不能把流程拉回去。</li>
+              <li>Deep Retrieval、Knowledge Understanding 與 Evidence Package 的最小交接；208/208 測試、check 與 diff-check 已有記錄。</li>
+            </ul>
+          </article>
+          <article class="future">
+            <h3>這一輪還沒做完</h3>
+            <ul>
+              <li>完整控制面板與固定畫面配置。</li>
+              <li>從多個來源整理摘要、知識卡與長期保存。</li>
+              <li>第二次查核，以及架構文件後面的完整工作。</li>
+              <li>不把未完成項目畫成目前已交付。</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="timeline-section" aria-labelledby="timeline-title">
+      <div class="section-heading">
+        <h2 id="timeline-title">二、這條流程是怎麼一步步完成的</h2>
+        <p>文件有些是數天合併記錄，這裡保留原日期，不把沒有證據的內容拆成單日。</p>
+      </div>
+
+      <div class="timeline">
+        <div class="milestone">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/07–08/10</p>
+            <h3>先完成骨架、入口與基本畫面</h3>
+            <p><strong>做了什麼：</strong>先把工作順序、需求分流、找資料、查證和等待人決定的規則定下來，也接上狀態、訊息和選單。</p>
+            <p><strong>設計考量：</strong>先守住固定流程和人類決策邊界，讓模型只能提出建議，不能自己跳過等待。</p>
+            <p><strong>實作細節：</strong>用集中狀態、訊息和選單接住入口、分流、找資料與等待，畫面先保留最小可操作範圍。</p>
+            <p class="detail no-bug"><strong>這段期間 Bug：</strong>沒有明確記錄的 Bug。當時主要的取捨是先不做完整畫面。</p>
+            <p class="detail fix"><strong>解決方案：</strong>先做能看、能操作的基本畫面，避免一開始就花時間做完整控制面板；完整控制面板列為後續項目，等待另案決定。</p>
+          </article>
+        </div>
+
+        <div class="milestone">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/11–08/16</p>
+            <h3>查證與等待流程變得可靠</h3>
+            <p><strong>做了什麼：</strong>完成查證工具、使用者確認、重試、取消、切換，以及完成遺漏時的復原。</p>
+            <p><strong>設計考量：</strong>等待、重試和取消都可能改變流程狀態，所以必須讓流程可回復，也不能把不完整資料誤當成已確認。</p>
+            <p><strong>實作細節：</strong>把共用檢查放在流程共通位置，依資料是否真的足夠決定阻擋，並讓互動測試有明確結束路徑。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>測試有時只是表面通過，測試資料不完整，空資料被錯誤擋下，互動測試也可能一直不結束。</p>
+            <p class="detail fix"><strong>解決方案：</strong>改用真正的啟動方式測試，補齊資料，只在真的需要時阻擋，補上共用檢查，並讓測試正常退出。</p>
+          </article>
+        </div>
+
+        <div class="milestone teal">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/17–08/20</p>
+            <h3>保住送出的內容，並正確結束一輪</h3>
+            <p><strong>做了什麼：</strong>讓完整查證指令原樣送出，完成後真的停止；畫面和紀錄保留需要看的訊息，但不再誤送回模型。</p>
+            <p><strong>設計考量：</strong>送出的內容和畫面顯示是兩件事；既要保留完整指令，也要用明確狀態表示流程已結束。</p>
+            <p><strong>實作細節：</strong>將原始內容與顯示內容分開處理，加入停止標記，並在重新整理、分支和重新載入時檢查是否還能送回模型。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>為了顯示在畫面上而改寫文字，曾讓模型看不到完整指令；把文字藏起來，也曾被誤以為等於流程已停止。</p>
+            <p class="detail fix"><strong>解決方案：</strong>移除會改寫訊息的做法，加入明確的停止標記，並在重新整理、分支和重新載入時都檢查內容是否不該送回模型。</p>
+          </article>
+        </div>
+
+        <div class="milestone orange">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/20 與 08/21 之間</p>
+            <h3>決定從頭開始，逐步確認後再往下走</h3>
+            <p><strong>做了什麼：</strong>重新整理開發方式，決定從頭開始，把整條流程拆成一個個小步驟，先確認前一步正確，再推進下一步。</p>
+            <p><strong>設計考量：</strong>08/20 前常發生改好 A 卻弄壞 B，影響是進度無法穩定累積；因此先建立可逐步確認的節奏，讓問題停在剛發生的地方。</p>
+            <p><strong>實作細節：</strong>每一步完成後先做對應確認；通過才往下走，失敗就停在當前步驟修正，不把未確認的變更繼續帶進後面的流程。</p>
+            <p class="detail bug"><strong>這段期間遇到的問題：</strong>前面的開發常出現改好 A 卻弄壞 B 的情況，導致修正彼此互相影響，進度無法穩定累積。</p>
+            <p class="detail fix"><strong>解決方案：</strong>從頭開始拆成小步驟，每一步先驗證，確認正確才往下一步；如果失敗，就停在當前步驟修正，避免問題一路擴大。</p>
+          </article>
+        </div>
+
+        <div class="milestone violet">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/21–08/22</p>
+            <h3>入口分流與第一階段找資料完成</h3>
+            <p><strong>做了什麼：</strong>把規則和使用者文字分開，完成只找檔名與基本資料的第一階段搜尋，每個來源最多列三筆並固定排序。</p>
+            <p><strong>設計考量：</strong>入口分流不能被使用者文字污染；第一階段只需快速找到候選檔案，避免把尚未查證的內容當成結論。</p>
+            <p><strong>實作細節：</strong>分開傳遞規則與使用者文字，對候選檔案固定排序並限制每個來源三筆，再讀取內容確認相關性。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>使用者文字可能混進規則裡，讓分流判斷不穩；明明找到相關檔案，系統也曾把它判成不相關；舊測試還會製造假失敗。</p>
+            <p class="detail fix"><strong>解決方案：</strong>把規則和使用者文字分開傳遞，真的讀取內容來判斷是否相關，清掉已淘汰的測試並改寫還有效的測試。完整測試最後 140/140 通過。</p>
+          </article>
+        </div>
+
+        <div class="milestone orange">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/23</p>
+            <h3>先把查證到下一步的交接規則說清楚</h3>
+            <p><strong>做了什麼：</strong>確認查證階段負責確認資料和取得人同意，下一步沿用同一份已確認資料，不重讀相同來源。</p>
+            <p><strong>設計考量：</strong>查證和後續整理各自負責不同工作；交接時要保留同一輪的資料，避免來源變動造成前後答案不一致。</p>
+            <p><strong>實作細節：</strong>為每輪、等待和決定保留清楚編號，進入下一步前先關掉舊等待，再把已確認資料交出去。</p>
+            <p class="detail no-bug"><strong>當天 Bug：</strong>這一天沒有經測試證實的新 Bug，主要是在確認可能出錯的地方和交接規則。</p>
+            <p class="detail fix"><strong>解決方案：</strong>先決定每一輪、每種等待和每個決定都要有清楚編號，並規定進入下一步前要先關掉舊等待。</p>
+          </article>
+        </div>
+
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/24</p>
+            <h3>完成交接，並補上最後的 Bug</h3>
+            <p><strong>做了什麼：</strong>完成資料分開保存、舊訊息防護、等待前收好舊狀態，並讓正式流程和除錯流程使用同一套檢查。</p>
+            <p><strong>設計考量：</strong>重試、舊訊息、不同等待和來源變動都可能讓流程回到錯的輪次，因此狀態識別必須比顯示文字更完整。</p>
+            <p><strong>實作細節：</strong>以完整輪次與等待編號識別狀態，正式與除錯共用檢查，下一步只讀取前面鎖定的已確認資料。</p>
+            <p class="detail bug"><strong>當天 Bug：</strong>重試時可能把「工具還在工作」誤當成「可以重播」；除錯流程可能繞過正式檢查；舊訊息可能重開查證；不同等待可能因編號文字相同而混淆；下一步也可能重新讀到已變動的來源。</p>
+            <p class="detail fix"><strong>解決方案：</strong>分開判斷工具是否還在工作和是否真的能重播；正式、除錯共用同一套檢查；在第一次等待前先關閉舊狀態；每輪使用完整編號；下一步只使用前面確認過的資料。</p>
+            <p><strong>驗證：</strong>文件記載為 157/157 測試通過、兩份程式格式檢查通過，兩輪審查沒有發現問題；本頁沒有重新執行驗證。</p>
+          </article>
+        </div>
+
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/25</p>
+            <h3>完成 Deep Retrieval、Knowledge Understanding 與 Evidence Package</h3>
+            <p><strong>做了什麼：</strong>把更深入的找資料、理解資料和證據交接串起來，讓下一步拿到同一份可核對的證據包。</p>
+            <p><strong>設計考量：</strong>深入搜尋和理解必須分成兩個階段，並保留證據來源、決策、發現與限制；資料不完整或有阻擋性限制時不能假裝完成。</p>
+            <p><strong>實作細節：</strong>證據包分開保存既有證據與深入搜尋補充證據，標記來源；交接前檢查數量、內容長度、重複 ID、引用是否存在，以及是否有阻擋性限制。</p>
+            <p class="detail no-bug"><strong>當天 Bug：</strong>沒有經記錄證實的新 Bug；本日重點是完成深度流程與證據包的邊界檢查。</p>
+            <p class="detail fix"><strong>解決方案：</strong>採用固定的 Evidence Package 結構與驗證規則，讓後續只使用已整理且可追溯的資料；未核准的完整控制面板、長期保存與後續查核仍等待另案決定。</p>
+            <p><strong>驗證：</strong>文件記載 208/208 測試通過、check 通過、diff-check 通過。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>更新日期：2026/08/25。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
+</body>
+</html>

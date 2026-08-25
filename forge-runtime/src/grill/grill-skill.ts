@@ -48,7 +48,9 @@ export function buildGrillingSkillInvocation(
 				"不得輸出 assistant 終局 JSON 代替 completion tool。",
 			]
 			: []),
-		...manifest.map((item) => `- ${item.candidateId} [${item.kind}] ${item.title} (${item.source})`),
+			...manifest.map(
+				(item) => `- ${item.candidateId} [${item.kind}] ${item.title} (${item.source})${item.rejection ? ` [${item.rejection}]` : ""}`,
+			),
 		`任務：${request}`,
 	].join("\n");
 }

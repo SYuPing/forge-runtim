@@ -1,5 +1,6 @@
 import { createOrchestrator, type Orchestrator } from "../workflow/orchestrator.ts";
 import { createForgeUiState, type ForgeUiState, type WaitUserState } from "../ui/ui-state.ts";
+import type { EvidenceDecision, EvidenceInput } from "../evidence/evidence-engine.ts";
 
 export interface WaitUserPayload extends WaitUserState {
 	decisionSummary?: string;
@@ -14,6 +15,7 @@ export type GrillEvidenceKind = "wiki" | "code_base" | "target";
 export interface GrillEvidenceManifestEntry {
 	readonly candidateId: `ev-${string}`;
 	readonly kind: GrillEvidenceKind;
+	readonly rejection?: "evidence_too_large";
 	readonly source: string;
 	readonly title: string;
 }
@@ -26,6 +28,11 @@ export interface GrillEvidenceCandidate extends GrillEvidenceManifestEntry {
 		relativePath?: string;
 		score?: number;
 		whyRelevant?: string;
+		rejection?: Readonly<{
+			reason: "evidence_too_large";
+			byteSize: number;
+			limit: number;
+		}>;
 	}>;
 }
 
@@ -41,19 +48,115 @@ export interface GrillRound {
 	snapshot: GrillEvidenceSnapshot;
 }
 
+export type DeepAttemptPhase = "DEEP_KNOWLEDGE_RETRIEVAL" | "KNOWLEDGE_UNDERSTANDING";
+export const DEEP_SEARCH_MAX_QUERY_CODE_POINTS = 1500;
+export const DEEP_SEARCH_MAX_PER_SOURCE_ROUND = 8;
+export const DEEP_EVIDENCE_MAX_BYTES = 256 * 1024;
+export const DEEP_EVIDENCE_ROUND_MAX_BYTES = 2 * 1024 * 1024;
+
+export function getDeepEvidenceContentBytes(
+	evidence: readonly Pick<EvidenceInput, "evidenceId" | "source" | "content">[],
+): number {
+	const seen = new Set<string>();
+	let total = 0;
+	for (const item of evidence) {
+		const key = `${item.evidenceId}\u0000${item.source}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		total += Buffer.byteLength(item.content, "utf8");
+	}
+	return total;
+}
+
+export interface DeepAttemptIdentity {
+	readonly attemptId: string;
+	readonly sourceRoundId: string;
+	readonly phase: DeepAttemptPhase;
+}
+
+export type DeepCallResult =
+	| {
+			readonly kind: "accepted";
+			readonly state: ForgeUiState;
+			readonly identity: DeepAttemptIdentity;
+	  }
+	| {
+			readonly kind: "stale";
+			readonly expected?: DeepAttemptIdentity;
+		readonly received: DeepAttemptIdentity;
+	};
+
+export interface LockedDeepEvidence {
+	readonly inherited: readonly EvidenceInput[];
+	readonly supplemental: readonly EvidenceInput[];
+}
+
+function copyEvidenceDecision(decision: EvidenceDecision): EvidenceDecision {
+	return { ...decision, evidenceIds: [...decision.evidenceIds] };
+}
+
+export interface DeepCompletedResult {
+	readonly kind: "completed";
+	readonly evidenceIds: string[];
+	readonly decisionSummary?: string;
+}
+
+export interface DeepNeedsDecisionResult {
+	readonly kind: "needs_decision";
+	readonly decisionId: string;
+	readonly question: string;
+	readonly options: string[];
+	readonly recommendation: string;
+	readonly evidenceIds: string[];
+	readonly decisionSummary?: string;
+}
+
+export interface DeepNeedsDiscoveryResult {
+	readonly kind: "needs_discovery";
+	readonly decisionSummary?: string;
+}
+
+export type DeepResult = DeepCompletedResult | DeepNeedsDecisionResult | DeepNeedsDiscoveryResult;
+
 export interface ForgeSessionState {
 	beginGrill(decisionSummary?: string): ForgeUiState;
 	beginIntent(decisionSummary?: string): ForgeUiState;
 	beginLightDiscovery(decisionSummary?: string): ForgeUiState;
-	beginDeepKnowledge(decisionSummary?: string): ForgeUiState;
-	completeDeepKnowledge(evidenceIds: string[], decisionSummary?: string): ForgeUiState;
+	beginDeepKnowledge(decisionSummary?: string, phase?: DeepAttemptPhase): ForgeUiState;
+	cancelDeepKnowledge(): ForgeUiState;
+	completeDeepKnowledge(
+		evidenceIds: string[],
+		decisionSummary: string | undefined,
+		identity: DeepAttemptIdentity,
+	): DeepCallResult;
+	retryDeepKnowledge(decisionSummary?: string): ForgeUiState;
+	completeDeepRetrieval(
+		inheritedEvidence: readonly EvidenceInput[],
+		decisionSummary: string | undefined,
+		identity: DeepAttemptIdentity,
+	): DeepCallResult;
 	confirm(): ForgeUiState;
 		current(): ForgeUiState;
+		currentDeepAttempt(): DeepAttemptIdentity | undefined;
 		continueGrillRound(): GrillRound;
 		retryGrillRound(): GrillRound | undefined;
-		getFetchedEvidenceIds(): ReadonlySet<string>;
+		getDeepSupplementalEvidenceIds(): ReadonlySet<string>;
+		getDeepSupplementalEvidence(): readonly EvidenceInput[];
+	getFetchedEvidenceIds(): ReadonlySet<string>;
+	getLockedDeepEvidence(): LockedDeepEvidence | undefined;
+	getHumanDecisions(): readonly EvidenceDecision[];
+		handleDeepResult(identity: DeepAttemptIdentity, result: DeepResult): DeepCallResult;
 	isFirstGrillRoundOfSnapshot(): boolean;
 	recordCompletionOmission(): boolean;
+	recordDeepSupplementalEvidence(
+			identity: DeepAttemptIdentity,
+			evidenceId: string,
+			evidence?: EvidenceInput,
+		): DeepCallResult;
+			consumeDeepSearchBudget(identity: DeepAttemptIdentity): "accepted" | "stale" | "limit";
+			reserveDeepSearchBudget(identity: DeepAttemptIdentity): "reserved" | "stale" | "limit";
+			commitDeepSearchBudget(identity: DeepAttemptIdentity): "accepted" | "stale";
+			releaseDeepSearchBudget(identity: DeepAttemptIdentity): "released" | "stale";
 	recordEvidenceFetch(candidateId: string): void;
 	recordAnswer(answer: string): ForgeUiState;
 	reset(): ForgeUiState;
@@ -63,12 +166,27 @@ export interface ForgeSessionState {
 	startGrillRound(request: string, snapshot: GrillEvidenceSnapshot): GrillRound;
 }
 
+function copyEvidenceInput(evidence: EvidenceInput): EvidenceInput {
+	return { ...evidence, metadata: { ...evidence.metadata } };
+}
+
 export function createForgeSessionState(): ForgeSessionState {
 		const answeredDecisionKeys = new Set<string>();
-		const fetchedEvidenceIds = new Set<string>();
+		const humanDecisions = new Map<string, EvidenceDecision>();
+	const deepSupplementalEvidenceIds = new Set<string>();
+	const deepSupplementalEvidence = new Map<string, EvidenceInput>();
+	const fetchedEvidenceIds = new Set<string>();
 		let currentGrillRound: GrillRound | undefined;
 		let orchestrator: Orchestrator | undefined;
-		let nextRoundId = 1;
+	let nextRoundId = 1;
+	let nextDeepAttemptId = 1;
+		let deepAttempt: DeepAttemptIdentity | undefined;
+		let deepSearchBudgetRoundId: string | undefined;
+		let deepSearchCount = 0;
+		const deepSearchReservations = new Map<string, number>();
+	let deepRetryPhase: DeepAttemptPhase | undefined;
+	let resumableDeepPhase: DeepAttemptPhase | undefined;
+	let lockedDeepEvidence: LockedDeepEvidence | undefined;
 		let completionOmissionRecorded = false;
 		let uiState = createForgeUiState("RECEIVE");
 
@@ -106,23 +224,81 @@ export function createForgeSessionState(): ForgeSessionState {
 			};
 			return uiState;
 		},
-		beginDeepKnowledge(decisionSummary) {
+		beginDeepKnowledge(decisionSummary, phase: DeepAttemptPhase = "DEEP_KNOWLEDGE_RETRIEVAL") {
+			if (!currentGrillRound) {
+				throw new Error("Deep Knowledge 需要目前的 Grill 回合。");
+			}
+
 			orchestrator =
 				!orchestrator || orchestrator.getStage() === "RECEIVE"
-					? createOrchestrator({ initialStage: "DEEP_KNOWLEDGE_RETRIEVAL" })
+					? createOrchestrator({ initialStage: phase })
 					: orchestrator;
 			uiState = {
 				...uiState,
 				decisionSummary: decisionSummary ?? uiState.decisionSummary,
-				stage:
-					orchestrator.getStage() === "DEEP_KNOWLEDGE_RETRIEVAL"
-						? "DEEP_KNOWLEDGE_RETRIEVAL"
-						: orchestrator.transitionTo("DEEP_KNOWLEDGE_RETRIEVAL"),
+					stage: orchestrator.getStage() === phase ? phase : orchestrator.transitionTo(phase),
 				waitUser: undefined,
 			};
+		deepAttempt = Object.freeze({
+			attemptId: `deep-${nextDeepAttemptId++}`,
+			sourceRoundId: currentGrillRound.roundId,
+			phase,
+		});
+		deepSearchReservations.clear();
+		deepRetryPhase = undefined;
+		resumableDeepPhase = undefined;
+		return uiState;
+	},
+	completeDeepRetrieval(inheritedEvidence, decisionSummary, identity) {
+		const supplemental = [...deepSupplementalEvidence.values()];
+		const result = this.completeDeepKnowledge(
+			[...inheritedEvidence, ...supplemental].map((evidence) => evidence.evidenceId),
+			decisionSummary,
+			identity,
+		);
+		if (result.kind === "accepted") {
+			lockedDeepEvidence = Object.freeze({
+				inherited: Object.freeze(inheritedEvidence.map(copyEvidenceInput)),
+				supplemental: Object.freeze(supplemental.map(copyEvidenceInput)),
+			});
+		}
+		return result;
+	},
+		cancelDeepKnowledge() {
+			const phase = deepAttempt?.phase ?? deepRetryPhase ?? (uiState.stage === "KNOWLEDGE_UNDERSTANDING" ? "KNOWLEDGE_UNDERSTANDING" : "DEEP_KNOWLEDGE_RETRIEVAL");
+			deepAttempt = undefined;
+			deepRetryPhase = undefined;
+			resumableDeepPhase = phase;
+			orchestrator = createOrchestrator({ initialStage: phase });
+			uiState = { ...uiState, stage: phase, waitUser: undefined };
 			return uiState;
 		},
-		completeDeepKnowledge(evidenceIds, decisionSummary) {
+		retryDeepKnowledge(decisionSummary) {
+			if (!currentGrillRound) return uiState;
+			const phase = deepRetryPhase ?? resumableDeepPhase;
+			if (!phase) return uiState;
+			orchestrator = createOrchestrator({ initialStage: phase });
+			uiState = { ...uiState, decisionSummary: decisionSummary ?? uiState.decisionSummary, stage: phase, waitUser: undefined };
+				deepAttempt = Object.freeze({
+					attemptId: `deep-${nextDeepAttemptId++}`,
+					sourceRoundId: currentGrillRound.roundId,
+					phase,
+				});
+				deepSearchReservations.clear();
+			deepRetryPhase = undefined;
+			resumableDeepPhase = undefined;
+			return uiState;
+		},
+		completeDeepKnowledge(evidenceIds, decisionSummary, identity) {
+			if (
+				!deepAttempt ||
+				deepAttempt.attemptId !== identity.attemptId ||
+				deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+				deepAttempt.phase !== identity.phase
+			) {
+				return { kind: "stale", expected: deepAttempt, received: identity };
+			}
+
 			orchestrator =
 				!orchestrator || orchestrator.getStage() === "RECEIVE"
 					? createOrchestrator({ initialStage: "KNOWLEDGE_UNDERSTANDING" })
@@ -137,7 +313,8 @@ export function createForgeSessionState(): ForgeSessionState {
 						: orchestrator.transitionTo("KNOWLEDGE_UNDERSTANDING"),
 				waitUser: undefined,
 			};
-			return uiState;
+			deepAttempt = Object.freeze({ ...deepAttempt, phase: "KNOWLEDGE_UNDERSTANDING" });
+			return { kind: "accepted", state: uiState, identity: deepAttempt };
 		},
 		confirm() {
 			if (!orchestrator || orchestrator.getStage() !== "WAIT_USER") {
@@ -157,6 +334,9 @@ export function createForgeSessionState(): ForgeSessionState {
 		},
 		current() {
 			return uiState;
+		},
+		currentDeepAttempt() {
+			return deepAttempt;
 		},
 			continueGrillRound() {
 				if (!currentGrillRound) {
@@ -178,8 +358,97 @@ export function createForgeSessionState(): ForgeSessionState {
 				};
 				return currentGrillRound;
 			},
-			getFetchedEvidenceIds() {
-			return new Set(fetchedEvidenceIds);
+		getDeepSupplementalEvidenceIds() {
+			return new Set(deepSupplementalEvidenceIds);
+		},
+		getDeepSupplementalEvidence() {
+			return [...deepSupplementalEvidence.values()].map(copyEvidenceInput);
+		},
+	getFetchedEvidenceIds() {
+		return new Set(fetchedEvidenceIds);
+	},
+		getLockedDeepEvidence() {
+			return lockedDeepEvidence;
+		},
+		getHumanDecisions() {
+			return [...humanDecisions.values()].map(copyEvidenceDecision);
+		},
+		handleDeepResult(identity, result) {
+			if (result.kind === "needs_decision") {
+				if (
+					!deepAttempt ||
+					deepAttempt.attemptId !== identity.attemptId ||
+					deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+					deepAttempt.phase !== identity.phase
+				) {
+					return { kind: "stale", expected: deepAttempt, received: identity };
+				}
+
+				orchestrator = ensureOrchestrator(orchestrator);
+				uiState = {
+					...uiState,
+					decisionSummary: result.decisionSummary ?? uiState.decisionSummary,
+					lastEvidenceIds: result.evidenceIds,
+					stage: orchestrator.transitionTo("WAIT_USER"),
+					waitUser: {
+						kind: "deep_decision",
+						roundId: identity.attemptId,
+						decisionId: result.decisionId,
+						evidenceIds: result.evidenceIds,
+						options: result.options,
+						question: result.question,
+						recommendation: result.recommendation,
+					},
+				};
+				deepRetryPhase = identity.phase;
+				deepAttempt = undefined;
+				return { kind: "accepted", state: uiState, identity };
+			}
+
+			if (result.kind === "needs_discovery") {
+				if (
+					!deepAttempt ||
+					deepAttempt.attemptId !== identity.attemptId ||
+					deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+					deepAttempt.phase !== identity.phase
+				) {
+					return { kind: "stale", expected: deepAttempt, received: identity };
+				}
+
+				orchestrator = ensureOrchestrator(orchestrator);
+				uiState = {
+					...uiState,
+					decisionSummary: result.decisionSummary ?? uiState.decisionSummary,
+					stage: orchestrator.transitionTo("LIGHT_DISCOVERY"),
+					waitUser: undefined,
+				};
+				deepAttempt = undefined;
+				return { kind: "accepted", state: uiState, identity };
+			}
+
+			if (identity.phase === "DEEP_KNOWLEDGE_RETRIEVAL") {
+				return this.completeDeepKnowledge(result.evidenceIds, result.decisionSummary, identity);
+			}
+
+			if (
+				!deepAttempt ||
+				deepAttempt.attemptId !== identity.attemptId ||
+				deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+				deepAttempt.phase !== identity.phase
+			) {
+				return { kind: "stale", expected: deepAttempt, received: identity };
+			}
+
+			orchestrator = ensureOrchestrator(orchestrator);
+			uiState = {
+				...uiState,
+				decisionSummary: result.decisionSummary ?? uiState.decisionSummary,
+				lastEvidenceIds: result.evidenceIds,
+				stage: orchestrator.transitionTo("CONTEXT_BUILD"),
+				waitUser: undefined,
+			};
+			deepAttempt = undefined;
+			return { kind: "accepted", state: uiState, identity };
 		},
 			isFirstGrillRoundOfSnapshot() {
 				return currentGrillRound?.isFirstRoundOfSnapshot ?? false;
@@ -199,9 +468,92 @@ export function createForgeSessionState(): ForgeSessionState {
 				};
 				return true;
 			},
-			recordEvidenceFetch(candidateId) {
+		recordDeepSupplementalEvidence(identity, evidenceId, evidence) {
+				if (
+					!deepAttempt ||
+					deepAttempt.attemptId !== identity.attemptId ||
+					deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+					deepAttempt.phase !== identity.phase
+				) {
+					return { kind: "stale", expected: deepAttempt, received: identity };
+				}
+
+		deepSupplementalEvidenceIds.add(evidenceId);
+		if (evidence) {
+			deepSupplementalEvidence.set(evidenceId, copyEvidenceInput(evidence));
+		}
+			return { kind: "accepted", state: uiState, identity: deepAttempt };
+			},
+			consumeDeepSearchBudget(identity) {
+				const reservation = this.reserveDeepSearchBudget(identity);
+				if (reservation === "stale") return "stale";
+				if (reservation === "limit") return "limit";
+				return this.commitDeepSearchBudget(identity);
+			},
+			reserveDeepSearchBudget(identity) {
+					if (
+					!deepAttempt ||
+					deepAttempt.attemptId !== identity.attemptId ||
+					deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+					deepAttempt.phase !== identity.phase ||
+					!currentGrillRound ||
+					currentGrillRound.roundId !== identity.sourceRoundId
+				) {
+					return "stale";
+				}
+					if (deepSearchBudgetRoundId !== identity.sourceRoundId) {
+						deepSearchBudgetRoundId = identity.sourceRoundId;
+						deepSearchCount = 0;
+						deepSearchReservations.clear();
+					}
+					const reservationKey = `${identity.attemptId}:${identity.sourceRoundId}:${identity.phase}`;
+					if (
+						!deepSearchReservations.has(reservationKey) &&
+						deepSearchCount + [...deepSearchReservations.values()].reduce((total, count) => total + count, 0) >=
+							DEEP_SEARCH_MAX_PER_SOURCE_ROUND
+					)
+						return "limit";
+					deepSearchReservations.set(reservationKey, (deepSearchReservations.get(reservationKey) ?? 0) + 1);
+					return "reserved";
+				},
+			commitDeepSearchBudget(identity) {
+					if (
+						!deepAttempt ||
+						deepAttempt.attemptId !== identity.attemptId ||
+						deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+						deepAttempt.phase !== identity.phase ||
+						!currentGrillRound ||
+						currentGrillRound.roundId !== identity.sourceRoundId
+					)
+						return "stale";
+					const reservationKey = `${identity.attemptId}:${identity.sourceRoundId}:${identity.phase}`;
+					const reservations = deepSearchReservations.get(reservationKey) ?? 0;
+					if (reservations > 0) {
+						if (reservations === 1) deepSearchReservations.delete(reservationKey);
+						else deepSearchReservations.set(reservationKey, reservations - 1);
+						deepSearchCount += 1;
+					}
+					return "accepted";
+				},
+				releaseDeepSearchBudget(identity) {
+					if (
+						!deepAttempt ||
+						deepAttempt.attemptId !== identity.attemptId ||
+						deepAttempt.sourceRoundId !== identity.sourceRoundId ||
+						deepAttempt.phase !== identity.phase ||
+						!currentGrillRound ||
+						currentGrillRound.roundId !== identity.sourceRoundId
+					)
+						return "stale";
+					const reservationKey = `${identity.attemptId}:${identity.sourceRoundId}:${identity.phase}`;
+					const reservations = deepSearchReservations.get(reservationKey) ?? 0;
+					if (reservations === 1) deepSearchReservations.delete(reservationKey);
+					else if (reservations > 1) deepSearchReservations.set(reservationKey, reservations - 1);
+					return "released";
+				},
+				recordEvidenceFetch(candidateId) {
 			if (!currentGrillRound) {
-				throw new Error("No active Grill round for evidence fetch");
+				throw new Error("目前沒有可讀取證據的 Grill 回合。");
 			}
 			fetchedEvidenceIds.add(candidateId);
 		},
@@ -226,18 +578,38 @@ export function createForgeSessionState(): ForgeSessionState {
 
 			orchestrator.handleUserConfirmation();
 			answeredDecisionKeys.add(decisionKey);
+			if (!humanDecisions.has(decisionId)) {
+				humanDecisions.set(
+					decisionId,
+					copyEvidenceDecision({
+						decisionId,
+						statement: `問題：${uiState.waitUser.question}；決定：${answer}`,
+						evidenceIds: [...uiState.waitUser.evidenceIds],
+					}),
+				);
+			}
 			uiState = {
 				...uiState,
-				decisionSummary: `User answered decision ${JSON.stringify(decisionId)} with ${JSON.stringify(answer)}.`,
+				decisionSummary: `使用者已回答決策 ${JSON.stringify(decisionId)}：${JSON.stringify(answer)}。`,
 				stage: isRelevanceClarification ? orchestrator.getStage() : orchestrator.transitionTo("GRILL"),
 				waitUser: undefined,
 			};
 			return uiState;
 		},
-		reset() {
-			answeredDecisionKeys.clear();
-			fetchedEvidenceIds.clear();
+	reset() {
+		answeredDecisionKeys.clear();
+		humanDecisions.clear();
+		deepSupplementalEvidenceIds.clear();
+		deepSupplementalEvidence.clear();
+		fetchedEvidenceIds.clear();
 			currentGrillRound = undefined;
+			deepSearchBudgetRoundId = undefined;
+			deepSearchCount = 0;
+		deepSearchReservations.clear();
+		deepAttempt = undefined;
+		deepRetryPhase = undefined;
+		resumableDeepPhase = undefined;
+		lockedDeepEvidence = undefined;
 			orchestrator = undefined;
 			completionOmissionRecorded = false;
 				uiState = createForgeUiState("RECEIVE");
@@ -291,12 +663,19 @@ export function createForgeSessionState(): ForgeSessionState {
 			};
 			return uiState;
 		},
-		startGrillRound(request, snapshot) {
-			completionOmissionRecorded = false;
+			startGrillRound(request, snapshot) {
+				completionOmissionRecorded = false;
+				deepSearchBudgetRoundId = undefined;
+				deepSearchCount = 0;
 			const isFirstRoundOfSnapshot = currentGrillRound?.snapshot !== snapshot;
-			if (isFirstRoundOfSnapshot) {
-				fetchedEvidenceIds.clear();
-			}
+			deepAttempt = undefined;
+		if (isFirstRoundOfSnapshot) {
+			humanDecisions.clear();
+			deepSupplementalEvidenceIds.clear();
+			deepSupplementalEvidence.clear();
+			fetchedEvidenceIds.clear();
+			lockedDeepEvidence = undefined;
+		}
 			currentGrillRound = {
 				isFirstRoundOfSnapshot,
 				roundId: `grill-${nextRoundId++}`,

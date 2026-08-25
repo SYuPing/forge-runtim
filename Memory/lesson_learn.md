@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-24
+updated: 2026-08-25
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: completed
 ---
@@ -52,6 +52,20 @@ status: completed
 30. **測試 fixture 的 literal 型別也屬 contract 維護**：新增 round/evidence fixture 時，寬化的 `kind` 或 `candidateId` literal 會先造成 TypeScript check 失敗，掩蓋 runtime 驗證結果。修復為以 literal-preserving fixture 建立測試資料；不放寬 production 型別。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、兩份 tsconfig `npm run check` 通過紀錄。
 
 ## 可重用教訓
+
+## 2026-08-25 Deep Knowledge 實作教訓
+
+- 讀檔後才檢大小：根因是 discovery／Grill adapter 先建立完整 content；修復為讀檔前 `stat`，超過 256 KiB 直接拒絕。證據：`forge-runtime/src/discovery/discovery-sources.ts`、`forge-runtime/extensions/forge-runtime.ts`、`forge-grill-guard-green.log`。
+- Grill 累計 2 MiB 可繞過：根因是只檢單筆 evidence；修復為以 Grill fetched 加 Deep supplemental 的整輪總量原子檢查。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-full-final3.log`。
+- stale Retrieval completed／needs_discovery 未先攔 capability：根因是 capability 檢查早於 stale 分流；修復為 stale outcome 優先 quiet reject。證據：`forge-stale-capability-green.log`。
+- stale Understanding package validation 順序錯誤：根因是先驗證 package 再判 identity；修復為 stale 優先。證據：`forge-final-review-regressions-final.log`。
+- human decision 未注入／duplicate override：根因是 package 只採模型提交；修復為先注入不可覆寫的 human decisions，模型重複 ID 拒絕。證據：`forge-runtime/src/evidence/evidence-engine.ts`、`forge-full-final3.log`。
+- dynamic active-tools fail-open：根因是只檢查啟動當下工具；修復為對 active identity 動態檢查，能力消失即拒絕。證據：`forge-stale-capability-green.log`。
+- stale needs_decision 未知 evidence 驗證順序：根因是先檢 evidence ID；修復為先判 stale。證據：`forge-final-review-regressions-final.log`。
+- Deep decision resume 誤回 Grill：根因是回答分流沿用 Grill recovery；修復為保留原 Deep phase 與 source round，建立新 attempt。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-full-final3.log`。
+- confirm guard 太早造成合法 confirm regression：根因是 boundary guard 在確認合法性前執行；修復為先完成 session confirm legality／publish，再套工具邊界。證據：`forge-grill-guard-green.log`。
+- TypeScript evidence shape／narrowing：根因是 evidence union 與 metadata／content shape 不一致；修復為收窄型別並讓 validator 與 adapter 共用正確結構。證據：`forge-check-final3.log`。
+- 英文 public copy 與測試預期不同步：根因是新工具 label／錯誤訊息未同步繁中；修復為更新使用者可見文字與 README 工具清單。證據：`forge-check-final3.log`、`forge-runtime/README.md`。
 
 ## 2026-08-22 最終審查
 

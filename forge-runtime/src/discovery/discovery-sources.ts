@@ -1,9 +1,22 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { DEEP_EVIDENCE_MAX_BYTES } from "../runtime/session-state.ts";
+
+export interface EvidenceReadRejection {
+	reason: "evidence_too_large";
+	byteSize: number;
+	limit: number;
+}
+
+export interface EvidenceReadResult {
+	content: string;
+	rejection?: EvidenceReadRejection;
+}
 
 export interface DiscoverySource {
 	path: string;
 	content: string;
+	rejection?: EvidenceReadRejection;
 }
 
 export interface CodeBaseCandidate extends DiscoverySource {
@@ -59,7 +72,7 @@ export function loadWikiDiscoverySources(rootDir: string): DiscoverySource[] {
 	}
 
 	return walkFiles(wikiDir).map((filePath) => ({
-		content: readFileSync(filePath, "utf8"),
+		...readEvidenceSource(filePath),
 		path: filePath,
 	}));
 }
@@ -71,10 +84,11 @@ export function findCodeBaseCandidates(rootDir: string, seeds: string[], limit =
 	}
 
 	return walkFiles(codeBaseDir)
-		.map((filePath) => {
-			const content = readFileSync(filePath, "utf8");
-			const relativePath = filePath.slice(codeBaseDir.length + 1).replaceAll("\\", "/");
-			const pathScore = scoreSeedMatches(relativePath, seeds);
+			.map((filePath) => {
+				const relativePath = filePath.slice(codeBaseDir.length + 1).replaceAll("\\", "/");
+				const readResult = readEvidenceSource(filePath);
+				const { content } = readResult;
+				const pathScore = scoreSeedMatches(relativePath, seeds);
 			const contentScore = scoreSeedMatches(content, seeds);
 			const matches = [pathScore > 0 ? "path" : undefined, contentScore > 0 ? "content" : undefined].filter(
 				(value): value is string => Boolean(value),
@@ -93,13 +107,25 @@ export function findCodeBaseCandidates(rootDir: string, seeds: string[], limit =
 				pathScore,
 				relativePath,
 				score: pathScore + contentScore,
-				whyRelevant: buildWhyRelevant(relativePath, matches),
-			};
-		})
-		// ponytail: 至少要有 path + content 兩種訊號，避免只靠單一字串把無關檔案帶進 deep 候選。
-		.filter((candidate) => candidate.matches.length >= 2)
+					whyRelevant: buildWhyRelevant(relativePath, matches),
+					rejection: readResult.rejection,
+				};
+			})
+			// ponytail: 至少要有 path + content 兩種訊號，避免只靠單一字串把無關檔案帶進 deep 候選。
+			.filter((candidate) => candidate.rejection ? candidate.matches.includes("path") : candidate.matches.length >= 2)
 		.sort((left, right) => right.score - left.score || left.relativePath.localeCompare(right.relativePath))
 		.slice(0, limit);
+}
+
+export function readEvidenceSource(filePath: string): EvidenceReadResult {
+	const byteSize = statSync(filePath).size;
+	if (byteSize > DEEP_EVIDENCE_MAX_BYTES) {
+		return {
+			content: "",
+			rejection: { byteSize, limit: DEEP_EVIDENCE_MAX_BYTES, reason: "evidence_too_large" },
+		};
+	}
+	return { content: readFileSync(filePath, "utf8") };
 }
 
 export function detectCodeBaseConflict(rootDir: string, seeds: string[]): CodeBaseConflict | undefined {

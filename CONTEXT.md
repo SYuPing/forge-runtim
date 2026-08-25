@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-24
+updated: 2026-08-25
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: implemented
+status: follow-up-fix-in-progress
 ---
 
 # Forge Runtime v4 Context
@@ -59,6 +59,49 @@ status: implemented
 - formal、debug、relevance 與 UI lease 路徑共用相同 identity；fetched evidence 只屬於目前 snapshot。Deep 前同步釋放 Grill boundary，stale `message_end` 與 `/continue` 不得重開 Grill；relevance `/confirm` 不代替使用者回答。
 - 驗證：`npm run check` 兩個 tsconfig 通過；`npm test` 157/157、0 fail、0 skip；Standards／Spec final review 的 P0、P1、P2 均為 0。
 - 詳細決策見 [`ADR-0015`](docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md)；本 ticket 已完成。
+
+## 2026-08-24 Deep Knowledge Retrieval／Understanding 設計核准
+
+- 設計階段歷史快照（其後已完成）：當時狀態為 ready-for-implementation，本段是下一個 ticket 的設計基線；目前完成狀態見下方「2026-08-25 Deep Knowledge 實作與驗證完成」。
+- Grill 只收集足以讓人做決策的最小證據；Deep 只接收 Grill 實際引用的完整 `content`／`metadata` 與 immutable decisions，不重讀相同 evidence。Deep 可補查客觀缺口，但新需求、取捨或矛盾必須由 Workflow 建立新的 `WAIT_USER` round；證據整體不足則回 `LIGHT_DISCOVERY`。
+- Grill snapshot 保持不變；Deep 產生衍生 Evidence Package，合併 inherited evidence 與 supplemental evidence。新增來源必須使用新的 Evidence ID，並標示 `origin: grill | deep_retrieval`。
+- Deep 分成兩階段：`Deep Retrieval` 可使用 `forge_deep_search` 補查並由 `forge_deep_retrieval_complete` 鎖定證據集合；`Knowledge Understanding` 只能讀取固定集合，透過 `forge_deep_complete` 產生 Evidence Package。兩階段沿用主 session active model，不加入模型派發、fallback 或 custom loop。
+- 結果只有 `completed`、`needs_decision`、`needs_discovery`。完成結果必須通過 deterministic validator：Evidence ID 唯一、每個 finding 至少引用一個 Evidence ID，且所有引用 ID 必須存在於 package、證據保留來源與完整內容；blocking gap／conflict 不得進入 completed。Evidence Package 僅含 `evidence`、`decisions`、`findings`、非阻擋 `limitations`，不另設重複 `citations`。
+- `attemptId + sourceRoundId + phase` 是 Deep attempt identity；stale call 拒絕，失敗／取消保留輸入，`/continue` 以新 attemptId 重試，技術錯誤不回 Grill。target source 只接受 Grill snapshot 已明確存在的檔案；不明確時走 `needs_decision`，來源不足走 `needs_discovery`。
+- 本 ticket 完成點是通過驗證的 Evidence Package 並轉入 `CONTEXT_BUILD`；不生成 Context／ADR／SPEC／Ticket 內容、不做 Pattern Card、持久化、第二 verifier、UI 或 `pi-main/` 修改。詳細計畫見 [`docs/PLAN-A.md`](docs/PLAN-A.md) 與 [`ADR-0016`](docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md)。
+- 使用者已核准 Evidence Package public seams：`createEvidencePackage({ inherited, supplemental, decisions, findings, limitations })` 與 `validateEvidencePackage(package)`；前者自動標記 `origin`、固定 inherited 後 supplemental 順序且不公開 merge 細節，後者以 `{ ok: true }`／`{ ok: false, errors: string[] }` 回傳正常驗證結果、不 throw。
+- Evidence 欄位固定為 `evidenceId`、`kind: string`、`source`、`title`、`content`、`metadata: Record<string, unknown>`、`origin: "grill" | "deep_retrieval"`；limitation 為 `{ statement, blocking }`，blocking 時不得完成；package 內 ID 必須唯一，finding 至少引用且只能引用存在的 ID。
+- Deep retry 保留 `sourceRoundId`、只更換 `attemptId`；第一個 public test seam 驗收名稱為 `EvidencePackage_WhenInheritedAndSupplementalEvidenceMerge_ShouldPreserveOrigins`。詳情以 [`ADR-0016`](docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md) 為單一決策來源，實作清單見 [`docs/PLAN-A.md`](docs/PLAN-A.md)。
+- 使用者於 2026-08-25 核准 Deep Session State 行為：狀態只放在 `ForgeSessionState`，不新增 UI state interface；public test seam 沿用或擴充 `ForgeSessionState`，方法命名留在最小實作細節。
+- Deep identity 固定為 `attemptId + sourceRoundId + phase`。retry 保留 `sourceRoundId` 與 current input，只更換 `attemptId`；stale call 回傳可辨識的 stale 結果，不以 throw 表示。cancel 清除 active attempt 但保留 current input。
+- 同一 snapshot 的 retry／cancel 保留 supplemental evidence；切換新 snapshot 時清除舊 supplemental evidence。snapshot 沿用 immutable object identity，不新增 hash 或持久化 ID。
+
+### 2026-08-25 Deep Knowledge 實作與驗證完成
+
+- Deep 三個工具與 Grill 兩個工具均已實作並通過驗證。Retrieval／Understanding 的 identity 固定為 `attemptId + sourceRoundId + phase`；retry 產生新 attempt、保留 source round 並回到原 Deep phase，cancel 保留 input／evidence，`continue` 回原 Deep phase，不回 Grill。
+- 所有 stale outcome 都先安靜拒絕；active-tools capability 對 active identity 採 fail-closed，無法安全確認時拒絕啟動 Deep。
+- 人類決策持久格式精確為 `問題：…；決定：…`；同一 decisionId 首筆不可覆寫。Evidence Package 先注入人類決策，模型 duplicate decisionId 會被拒絕。
+- 固定安全上限已落地：query 1500 Unicode code points、同 source／Grill round 最多 8 次搜尋且 retry／cancel 不重設、單筆 256 KiB、整輪 2 MiB（含 Grill fetched 與 Deep supplemental）、decisions／findings／limitations 各 50、每段 statement 4,000 Unicode code points。超限在寫入 state 前拒絕且不改 state；讀檔先 stat，恰好上限可讀。
+- Evidence Package 驗證 ID 唯一、finding 引用存在、blocking limitation 不可 complete；Deep 重用 Grill fetched evidence，不重讀。
+- 最終驗證：`npm test` 208/208、`npm run check` exit 0、`git diff --check` exit 0（僅 LF／CRLF warning）。下一步只剩使用者檢閱並決定是否 commit；目前未 commit、未 staged。
+
+### 2026-08-25 Workflow 分流介面核准
+
+- 使用者已核准 `ForgeSessionState` 的單一 public seam：`handleDeepResult(identity, result)`。
+- `result` union 僅包含 `completed`、`needs_decision`、`needs_discovery`；technical failure 不屬於 result，走 cancel／no-op，保留原 Deep phase 與 input，等待 `/continue`。
+- `completed` 依 `identity.phase` 分流：`Deep Retrieval` → `Knowledge Understanding`；`Knowledge Understanding` → `CONTEXT_BUILD`。
+- `needs_decision` 建立全新的 `WAIT_USER` round，`kind` 為 `deep_decision`，`roundId` 使用目前 `attemptId`，不冒充 Grill round；保留 input／evidence，並使該 attempt 後續呼叫回傳 stale。
+- `needs_discovery` 轉入 `LIGHT_DISCOVERY` 並結束目前 attempt；stale 結果靜默忽略，不改變 state。
+- public test seam 補為 `handleDeepResult(identity, result)`；第一個 Workflow 紅燈測試為 `StateMachine_WhenRetrievalCompletes_ShouldEnterKnowledgeUnderstanding`。
+
+### 2026-08-25 Deep 工具契約核准
+
+- `forge_deep_search` 接收 attempt identity、`query` 與單一 `source`（`wiki`、`code_base` 或 `target`），每次最多 3 筆；`target` 只接受 snapshot 中可唯一匹配的明確 target source，缺失或多義時回 `needs_decision`，不得猜測。
+- supplemental ID 由 runtime 產生；已存在的 inherited／supplemental evidence 必須重用，不重讀、不重複加入。
+- `forge_deep_retrieval_complete` 接收 attempt identity 與 `completed`／`needs_decision`／`needs_discovery` outcome；completed 時 runtime 鎖定全部實際 inherited 與 accepted supplemental evidence，模型不可任選並轉 Understanding，其他 outcome 交由 `handleDeepResult`。
+- `forge_deep_complete` 接收 attempt identity 與同一 outcome；completed 時模型只提交 decisions、findings、limitations，runtime 注入 locked evidence 並驗證 Evidence Package，成功才轉 `CONTEXT_BUILD`，invalid 不轉移，其他 outcome 交由 `handleDeepResult`。
+- Retrieval 只啟用 search＋retrieval-complete，Understanding 只啟用 deep-complete；完成、轉 decision／discovery 或 cancel 後恢復原 active tools，無法安全限制時拒絕啟動 Deep。技術失敗走 cancel／no-op 並保留 input/evidence，stale 安靜忽略。
+- Integration 測試使用現有 `forge-runtime-extension.test.ts` 輕量 `registeredTools` harness，不啟動完整 TUI。
 
 ## 已驗證的上游 PI 事實
 
@@ -250,7 +293,7 @@ status: implemented
 - **Grill 成功完成**：`forge_grill_complete` 成功接受後，是目前 Grill 嘗試的終止邊界；該完成事件封口當前代理回合，不能只靠顯示抑制表示結束。
 - **WAIT_USER**：代表工作流程正在等待人類回答；產生該狀態的前一個代理回合已經終止，回答後才建立新的 Grill 回合。
 - **KNOWLEDGE_UNDERSTANDING**：v1 `READY_FOR_DEEP` 路徑在深度知識完成後的穩定結束點；後續工作流程可由此進入既有下游階段。
-- **深度知識後的歧義**：`KNOWLEDGE_UNDERSTANDING → GRILL → WAIT_USER` 的新轉移尚未定義，不由本 ticket 推測或實作。
+- **深度知識後的歧義**：ADR-0016 已定義 `needs_decision` 經 `Workflow → WAIT_USER → Grill` 處理；Deep 不直接詢問人類。`needs_discovery` 則回到 Light Discovery。
 
 ## Grill 完成終止邊界最終同步（2026-08-20）
 
@@ -274,3 +317,9 @@ status: implemented
 - Spec review P2 已修正：移除 public custom augmentation；public `CustomMessage` 與 `CustomAgentMessages.custom` 回到 HEAD，只有 internal intersection 保留 `excludeFromContext` marker。
 - display-only 的排除範圍明確包含 branch summarization rehydrate，不只一般 compaction；summarizer provider conversion 不得洩漏 marker 訊息。
 - 最終 review 後下一步為 targeted re-review 與 final handoff；不得再描述為僅完成普通 compaction。
+
+## 2026-08-25 首次 Grill→Deep identity handoff 修正設計確認
+
+- Grill READY 建立 active identity 後，首次模型回合必須透過既有 decision-retry 的 `pi.sendUserMessage(..., { deliverAs: "followUp" })` transport 收到含 `attemptId`、`sourceRoundId`、`phase` 的 invocation；目前僅完成設計確認，尚未實作或測試。
+- identity 不放入 tool details；Deep tools 不自取 identity；不改 stale guard、不改 `pi-main/`、不加 sequential 設定。
+- public seam 是現有 `registeredTools`／harness。先由測試代理新增 failing integration test，再最小修改 `forge-runtime/extensions/forge-runtime.ts`，最後跑 focused 與相關 suite。最脆弱假設是 followUp 在目前 tool round 結束後觸發下一模型回合；現有 PI API 已如此定義。沒有 UI 工作，不建立 Plan B。

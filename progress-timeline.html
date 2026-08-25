@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forge Runtime 開發進度時間線</title>
+  <style>
+    :root {
+      --ink: #17251f;
+      --muted: #62736b;
+      --paper: #f4f1e9;
+      --surface: #fffdf8;
+      --line: #c9d1c8;
+      --blue: #1f5fbf;
+      --teal: #147d70;
+      --violet: #6e42b8;
+      --orange: #c86412;
+      --green: #188447;
+      --radius-sm: 10px;
+      --radius-md: 18px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+      line-height: 1.75;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .skip-link {
+      position: absolute;
+      left: 1rem;
+      top: -4rem;
+      padding: .5rem .75rem;
+      color: white;
+      background: var(--ink);
+      border-radius: var(--radius-sm);
+    }
+
+    .skip-link:focus { top: 1rem; }
+
+    header {
+      padding: clamp(2rem, 6vw, 5rem) max(1.25rem, calc((100vw - 1180px) / 2));
+      color: #f8faf6;
+      background: var(--ink);
+    }
+
+    header p { margin: .5rem 0 0; color: #b9c8bf; }
+
+    .eyebrow {
+      margin: 0 0 .7rem;
+      color: #8fcfc0;
+      font-size: .8rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+    }
+
+    h1, h2, p {
+      text-wrap: pretty;
+      overflow-wrap: anywhere;
+    }
+
+    h1 {
+      max-width: 850px;
+      margin: 0;
+      font-family: Georgia, "Songti TC", "Noto Serif TC", serif;
+      font-size: clamp(2.2rem, 6vw, 4.5rem);
+      line-height: 1.08;
+      letter-spacing: -.025em;
+    }
+
+    .range {
+      margin-top: 1rem;
+      font-size: clamp(1rem, 2vw, 1.25rem);
+    }
+
+    .source {
+      max-width: 760px;
+      margin-top: 1rem;
+      font-size: .92rem;
+      color: #9eb0a6;
+    }
+
+    main {
+      width: min(100% - 2.5rem, 1180px);
+      margin: 0 auto;
+      padding: clamp(2rem, 5vw, 4rem) 0;
+    }
+
+    .intro {
+      max-width: 760px;
+      margin: 0 0 3rem 4.25rem;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 1.4rem;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      top: 1.25rem;
+      bottom: 1.25rem;
+      left: 1.1rem;
+      width: 2px;
+      background: var(--line);
+    }
+
+    .entry {
+      position: relative;
+      display: grid;
+      grid-template-columns: 2.2rem 1fr;
+      gap: 1.5rem;
+      align-items: start;
+      min-width: 0;
+    }
+
+    .dot {
+      position: relative;
+      z-index: 1;
+      width: 2.2rem;
+      height: 2.2rem;
+      margin-top: 1.15rem;
+      border: 6px solid var(--paper);
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    .entry.teal .dot { background: var(--teal); }
+    .entry.violet .dot { background: var(--violet); }
+    .entry.orange .dot { background: var(--orange); }
+    .entry.green .dot { background: var(--green); }
+
+    article {
+      min-width: 0;
+      padding: clamp(1.2rem, 3vw, 2rem);
+      background: var(--surface);
+      border: 1px solid #dde2d9;
+      border-radius: var(--radius-md);
+      box-shadow: 0 1px 3px rgb(23 37 31 / 10%);
+    }
+
+    .entry.teal article { background: #eef9f5; border-color: #a7ddd0; }
+    .entry.violet article { background: #f5f0fc; border-color: #d7c6f1; }
+    .entry.orange article { background: #fff6e9; border-color: #f0c28c; }
+    .entry.green article { background: #effaf1; border-color: #a8ddb5; }
+
+    .date {
+      margin: 0 0 .35rem;
+      color: var(--blue);
+      font-size: .9rem;
+      font-weight: 800;
+      letter-spacing: .06em;
+    }
+
+    .teal .date { color: var(--teal); }
+    .violet .date { color: var(--violet); }
+    .orange .date { color: var(--orange); }
+    .green .date { color: var(--green); }
+
+    h2 {
+      margin: 0 0 .8rem;
+      font-size: clamp(1.25rem, 2.4vw, 1.8rem);
+      line-height: 1.25;
+    }
+
+    article p { margin: .55rem 0 0; }
+
+    .label {
+      display: inline-block;
+      min-width: 4.5rem;
+      margin-right: .35rem;
+      color: var(--ink);
+      font-weight: 800;
+    }
+
+    .plain { color: var(--muted); }
+
+    footer {
+      padding: 1.5rem max(1.25rem, calc((100vw - 1180px) / 2));
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: .9rem;
+    }
+
+    @media (max-width: 620px) {
+      main { width: min(100% - 1.25rem, 1180px); }
+      header p, .intro, article p { max-width: 100%; word-break: break-word; }
+      .intro { margin-left: 0; }
+      .timeline { gap: 1rem; }
+      .timeline::before { left: .75rem; }
+      .entry { grid-template-columns: 1.5rem 1fr; gap: .75rem; }
+      .dot { width: 1.5rem; height: 1.5rem; margin-top: 1.25rem; border-width: 4px; }
+      article { padding: 1rem; border-radius: var(--radius-sm); }
+      article p { font-size: .95rem; }
+      .label { display: block; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到時間線</a>
+
+  <header>
+    <p class="eyebrow">FORGE RUNTIME / DEVELOPMENT LOG</p>
+    <h1>從打地基，到完成交接</h1>
+    <p class="range">2026/08/07 → 2026/08/24　｜　白話版進度、問題與解法</p>
+    <p class="source">資料來源：Memory/record.md、Memory/lesson_learn.md。只保留文件中有明確紀錄的日期與結果。</p>
+  </header>
+
+  <main id="main-content">
+    <p class="intro">這條時間線把每天的開發工作濃縮成三件事：做了什麼、哪裡出問題、最後怎麼處理。日期採原始紀錄中的區間，不替沒有明確記載的日子補寫內容。</p>
+
+    <section class="timeline" aria-label="Forge Runtime 開發時間線">
+      <div class="entry">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/07–08/08</p>
+          <h2>先把基本骨架搭起來</h2>
+          <p><span class="label">進度</span>建立工作流程、入口分流、找資料、深入查證，以及需要人決定時先停下的基本規則。</p>
+          <p><span class="label">問題與解法</span>先把流程責任分清楚，避免模型自己跳過人的決定；複雜畫面先不做，只保留最小可用版本。</p>
+          <p class="plain"><span class="label">白話</span>先蓋好房子的樑柱，再慢慢裝潢。</p>
+        </article>
+      </div>
+
+      <div class="entry">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/09–08/10</p>
+          <h2>把最小畫面與入口接上</h2>
+          <p><span class="label">進度</span>接上狀態顯示、訊息與選單，讓使用者看得到目前做到哪裡，也能在需要時選擇下一步。</p>
+          <p><span class="label">問題與解法</span>完整儀表板太早、成本太高，所以先做能顯示狀態和選擇的最小版本，其他畫面留待後續。</p>
+          <p class="plain"><span class="label">白話</span>先讓人看得懂、按得到，不急著把所有按鈕都做滿。</p>
+        </article>
+      </div>
+
+      <div class="entry">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/11–08/16</p>
+          <h2>完成查證、等待決定與收尾</h2>
+          <p><span class="label">進度</span>完成查證工具、完成判斷入口、使用者確認後再繼續；也補上重試、取消、切換等復原路徑。</p>
+          <p><span class="label">主要問題</span>有些測試只是「看起來通過」、測試資料不完整、空資料被錯誤擋下，互動測試也可能跑不完。</p>
+          <p><span class="label">解法</span>改用真正的啟動方式驗證、補齊真實資料、只在該擋的情況擋，並讓測試完成後正常退出。</p>
+          <p class="plain"><span class="label">白話</span>不只看燈有沒有變綠，而是確認整條路真的走得通。</p>
+        </article>
+      </div>
+
+      <div class="entry teal">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/17</p>
+          <h2>確保送出的內容沒有被改壞</h2>
+          <p><span class="label">進度</span>讓完整的查證指令同時保留在使用者訊息和模型收到的內容裡。</p>
+          <p><span class="label">問題與解法</span>畫面上的訊息曾被改回原始問題，模型因此看不到必要規則；移除這個改寫路徑，並用三條測試固定行為。</p>
+          <p class="plain"><span class="label">白話</span>不能只看畫面有沒有字，還要確認真正收到的內容一樣完整。</p>
+        </article>
+      </div>
+
+      <div class="entry teal">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/19–08/20</p>
+          <h2>完成與顯示分開處理</h2>
+          <p><span class="label">進度</span>完成後能真正停止這一輪；需要使用者看的訊息會留在畫面與紀錄，但不會誤送回模型。</p>
+          <p><span class="label">主要問題</span>只把文字藏起來，不代表流程真的停止；只改畫面，也可能讓內容偷偷進入模型。</p>
+          <p><span class="label">解法</span>加上明確的「停止」訊號，並在轉換、整理、分支與重新載入時檢查哪些內容不能送回模型。</p>
+        </article>
+      </div>
+
+      <div class="entry violet">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/21</p>
+          <h2>把入口分流變得單純、可靠</h2>
+          <p><span class="label">進度</span>模型只負責判斷「照原話處理」或「開始這套流程」，原文則完整保留。</p>
+          <p><span class="label">問題與解法</span>使用者文字曾可能混入規則區，或讓測試把不同呼叫混在一起；把規則與使用者文字分開，並重新整理測試。</p>
+          <p class="plain"><span class="label">白話</span>先把門口分流做好，避免一開始就走錯房間。</p>
+        </article>
+      </div>
+
+      <div class="entry violet">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/22</p>
+          <h2>先找相關檔案，再進一步查證</h2>
+          <p><span class="label">進度</span>完成第一階段的檔案搜尋，只回報檔名與基本資料；每個來源最多列出三筆，結果固定排序。</p>
+          <p><span class="label">主要問題</span>明明找得到檔案，卻被誤判為不相關；舊測試也留著已淘汰的用法，造成假失敗。</p>
+          <p><span class="label">解法</span>補上實際內容的相關性判斷，清掉過時測試並改寫仍有效的測試；完整測試最後 140/140 通過。</p>
+          <p class="plain"><span class="label">白話</span>先列出可能有用的資料，不急著一次讀完所有內容。</p>
+        </article>
+      </div>
+
+      <div class="entry orange">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/23</p>
+          <h2>確認查證與深入處理的交接規則</h2>
+          <p><span class="label">進度</span>決定查證階段負責確認資料與取得人同意，下一階段沿用同一份已確認資料，不重讀相同內容。</p>
+          <p><span class="label">風險與處理</span>等待中的舊事件可能重開流程；不同問題剛好用了相同文字，也可能被誤認成同一件事。處理方式是替每一輪、每一種等待、每一個決定清楚編號，並在進入下一階段前先關閉舊等待。</p>
+        </article>
+      </div>
+
+      <div class="entry green">
+        <div class="dot" aria-hidden="true"></div>
+        <article>
+          <p class="date">08/24</p>
+          <h2>完成交接，並把最後問題補起來</h2>
+          <p><span class="label">進度</span>完成查證到深入處理的交接；資料版本固定、每輪編號不重複，舊事件不能把流程拉回去。</p>
+          <p><span class="label">問題與解法</span>重試、除錯完成、等待澄清、資料變動都曾有邊界漏洞；改成共用同一套檢查，並在等待前先收好舊狀態。</p>
+          <p><span class="label">驗證</span>157/157 測試通過、兩份型別檢查通過，兩輪審查都沒有發現問題；沒有修改上游主程式，也沒有新增套件。</p>
+          <p class="plain"><span class="label">目前狀態</span>本階段完成。更完整的深入分析、長期保存與第二層檢查，另案再做。</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>本頁只整理有文件依據的進度；未單獨記錄的日期已移除。</footer>
+</body>
+</html>

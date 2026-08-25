@@ -455,14 +455,13 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 					status: "READY_FOR_DEEP",
 				}, { id: "call-complete-ready-1" })],
 			),
-			fauxAssistantMessage("已完成 deep knowledge。")
 		]);
 		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
 		void mode.run();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		terminal.sendInput("請幫我測試 test");
 		terminal.sendInput("\r");
-		await waitForViewport(terminal, "KNOWLEDGE_UNDERSTANDING");
+		await waitForViewport(terminal, "DEEP_KNOWLEDGE_RETRIEVAL");
 		assert.doesNotMatch((await terminal.flushAndGetViewport()).join("\n"), /continue/i);
 		const userMessages = runtime.session.messages.filter((message) => message.role === "user");
 		assert.equal(userMessages.length, 1);

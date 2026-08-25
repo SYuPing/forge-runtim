@@ -1,5 +1,5 @@
 export interface WaitUserState {
-	kind: "grill_confirmation" | "relevance_clarification";
+	kind: "deep_decision" | "grill_confirmation" | "relevance_clarification";
 	roundId: string;
 	decisionId: string;
 	evidenceIds: string[];
