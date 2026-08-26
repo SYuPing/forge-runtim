@@ -355,7 +355,7 @@
   <header>
     <p class="eyebrow">FORGE RUNTIME / ARCHITECTURE + DELIVERY</p>
     <h1>目前已完成的流程，從收到需求一路走到交接</h1>
-    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/25 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
+    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/26 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
   </header>
 
   <main>
@@ -449,15 +449,17 @@
               <li>使用者等待、回答、重試、取消與切換。</li>
               <li>完成後真正停止，畫面訊息不誤送回模型。</li>
               <li>不同輪次的資料分開，舊訊息不能把流程拉回去。</li>
-              <li>Deep Retrieval、Knowledge Understanding 與 Evidence Package 的最小交接；208/208 測試、check 與 diff-check 已有記錄。</li>
+              <li>Deep Retrieval、Knowledge Understanding 與 Evidence Package 的最小交接；完整 <code>npm test</code> 209/209 通過，<code>npm run check</code> exit 0，並有 diff-check 記錄。</li>
+              <li>Deep Retrieval 與 Knowledge Understanding 的輸出守門：只保留合法工具呼叫，不讓實作內容提前出現。</li>
             </ul>
           </article>
           <article class="future">
             <h3>這一輪還沒做完</h3>
             <ul>
-              <li>完整控制面板與固定畫面配置。</li>
-              <li>從多個來源整理摘要、知識卡與長期保存。</li>
-              <li>第二次查核，以及架構文件後面的完整工作。</li>
+              <li>尚未由使用者在真實 PI session 重跑原始情境。</li>
+              <li>完整控制面板與固定畫面配置（widget tree、dashboard）。</li>
+              <li>從多個來源整理摘要、知識卡（Pattern Card）與長期保存。</li>
+              <li>第二次查核，以及架構文件後面的完整工作，包括外部來源。</li>
               <li>不把未完成項目畫成目前已交付。</li>
             </ul>
           </article>
@@ -560,7 +562,7 @@
             <p><strong>實作細節：</strong>以完整輪次與等待編號識別狀態，正式與除錯共用檢查，下一步只讀取前面鎖定的已確認資料。</p>
             <p class="detail bug"><strong>當天 Bug：</strong>重試時可能把「工具還在工作」誤當成「可以重播」；除錯流程可能繞過正式檢查；舊訊息可能重開查證；不同等待可能因編號文字相同而混淆；下一步也可能重新讀到已變動的來源。</p>
             <p class="detail fix"><strong>解決方案：</strong>分開判斷工具是否還在工作和是否真的能重播；正式、除錯共用同一套檢查；在第一次等待前先關閉舊狀態；每輪使用完整編號；下一步只使用前面確認過的資料。</p>
-            <p><strong>驗證：</strong>文件記載為 157/157 測試通過、兩份程式格式檢查通過，兩輪審查沒有發現問題；本頁沒有重新執行驗證。</p>
+            <p><strong>驗證：</strong>文件記載為 157/157 測試通過、兩份 tsconfig 的 <code>npm run check</code> 通過，兩輪審查沒有發現問題；本頁沒有重新執行驗證。</p>
           </article>
         </div>
 
@@ -571,16 +573,30 @@
             <h3>完成 Deep Retrieval、Knowledge Understanding 與 Evidence Package</h3>
             <p><strong>做了什麼：</strong>把更深入的找資料、理解資料和證據交接串起來，讓下一步拿到同一份可核對的證據包。</p>
             <p><strong>設計考量：</strong>深入搜尋和理解必須分成兩個階段，並保留證據來源、決策、發現與限制；資料不完整或有阻擋性限制時不能假裝完成。</p>
-            <p><strong>實作細節：</strong>證據包分開保存既有證據與深入搜尋補充證據，標記來源；交接前檢查數量、內容長度、重複 ID、引用是否存在，以及是否有阻擋性限制。</p>
-            <p class="detail no-bug"><strong>當天 Bug：</strong>沒有經記錄證實的新 Bug；本日重點是完成深度流程與證據包的邊界檢查。</p>
-            <p class="detail fix"><strong>解決方案：</strong>採用固定的 Evidence Package 結構與驗證規則，讓後續只使用已整理且可追溯的資料；未核准的完整控制面板、長期保存與後續查核仍等待另案決定。</p>
-            <p><strong>驗證：</strong>文件記載 208/208 測試通過、check 通過、diff-check 通過。</p>
+            <p><strong>實作細節：</strong>每輪用 <code>attemptId + sourceRoundId + phase</code> 組成 identity；重試只更換 attempt，保留原本的輸入與證據。Workflow 依三種結果分流：完成、需要人決定、需要補資料。Evidence Package validator 會檢查查詢數、檔案數、總量、文字長度、重複 ID、引用與阻擋性限制，並套用安全上限。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>讀檔後才檢查大小，可能先讀入過大檔案；單筆檢查可繞過整輪 2 MiB 上限；stale outcome 先做其他處理，可能污染目前流程；模型可能覆寫人類決策；active tools 能力消失時仍可能繼續；首次 Grill 轉 Deep 沒有傳 identity，可能讓交接失去這一輪的身分。</p>
+            <p class="detail fix"><strong>解決方案：</strong>改成讀檔前先用 stat 檢查大小，並用整輪原子檢查守住 2 MiB；stale outcome 優先驗證後靜默拒絕；先把 human decisions 注入上下文並拒絕重複 decisionId；每次動態檢查 active tools，無法安全限制時 fail-closed；首次 Grill 先建立 pendingReplayInvocation marker，再用 follow-up 傳遞 identity。</p>
+            <p><strong>驗證：</strong>文件記載初次 <code>npm test</code> 208/208，identity handoff 修正後完整 209/209 通過；<code>npm run check</code> exit 0，並有 diff-check 記錄。</p>
+          </article>
+        </div>
+
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/26</p>
+            <h3>擋住 Deep 階段提前輸出實作內容</h3>
+            <p><strong>做了什麼：</strong>讓 Deep Retrieval 和 Knowledge Understanding 只整理、查證後續實作需要的證據，不在這兩個階段開始寫 RTL 或其他實作內容。</p>
+            <p><strong>設計考量：</strong>找資料階段可以保留合法工具呼叫，但不能把模型產生的實作文字帶進畫面或後續流程。</p>
+            <p><strong>實作細節：</strong>在 Deep active attempt 的串流更新和結束事件清空 <code>text</code>／<code>thinking</code>，同時保留合法的 <code>toolCall</code>；不影響等待、取消後或後續階段。</p>
+            <p class="detail bug"><strong>當天 Bug：</strong>Deep 階段原本只有工具限制，沒有同步攔住文字輸出，因此流程曾出現 RTL；這會讓尚未到實作階段的內容提前被看見。</p>
+            <p class="detail fix"><strong>解決方案：</strong>新增 Deep active 判斷，統一處理串流與終局事件，只清除文字內容並保留合法工具呼叫；因此不必擴大 Grill recovery 或修改 <code>pi-main/</code>。</p>
+            <p><strong>驗證：</strong>先以 <code>FORBIDDEN_IMPLEMENTATION_MARKER</code> 形成紅燈，修正後 targeted 9/9；完整 <code>npm test</code> 209/209 通過，<code>npm run check</code> exit 0，production review 沒有功能問題。</p>
           </article>
         </div>
       </div>
     </section>
   </main>
 
-  <footer>更新日期：2026/08/25。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
+  <footer>更新日期：2026/08/26。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、docs/PLAN-A.md、docs/handoff.md、agent-state/deep-stage-output-guard-20260826.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
 </body>
 </html>

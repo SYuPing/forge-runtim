@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-25
+updated: 2026-08-26
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: follow-up-fix-in-progress
+status: implemented-and-verified
 ---
 
 # Forge Runtime v4 Context
@@ -83,7 +83,7 @@ status: follow-up-fix-in-progress
 - 人類決策持久格式精確為 `問題：…；決定：…`；同一 decisionId 首筆不可覆寫。Evidence Package 先注入人類決策，模型 duplicate decisionId 會被拒絕。
 - 固定安全上限已落地：query 1500 Unicode code points、同 source／Grill round 最多 8 次搜尋且 retry／cancel 不重設、單筆 256 KiB、整輪 2 MiB（含 Grill fetched 與 Deep supplemental）、decisions／findings／limitations 各 50、每段 statement 4,000 Unicode code points。超限在寫入 state 前拒絕且不改 state；讀檔先 stat，恰好上限可讀。
 - Evidence Package 驗證 ID 唯一、finding 引用存在、blocking limitation 不可 complete；Deep 重用 Grill fetched evidence，不重讀。
-- 最終驗證：`npm test` 208/208、`npm run check` exit 0、`git diff --check` exit 0（僅 LF／CRLF warning）。下一步只剩使用者檢閱並決定是否 commit；目前未 commit、未 staged。
+- 初次 Deep 實作驗證：`npm test` 208/208、`npm run check` exit 0；identity handoff follow-up 完成後完整 suite 為 209/209，詳見本文件下方收尾紀錄。
 
 ### 2026-08-25 Workflow 分流介面核准
 
@@ -318,8 +318,28 @@ status: follow-up-fix-in-progress
 - display-only 的排除範圍明確包含 branch summarization rehydrate，不只一般 compaction；summarizer provider conversion 不得洩漏 marker 訊息。
 - 最終 review 後下一步為 targeted re-review 與 final handoff；不得再描述為僅完成普通 compaction。
 
-## 2026-08-25 首次 Grill→Deep identity handoff 修正設計確認
+## 2026-08-25 首次 Grill→Deep identity handoff 修正完成
 
-- Grill READY 建立 active identity 後，首次模型回合必須透過既有 decision-retry 的 `pi.sendUserMessage(..., { deliverAs: "followUp" })` transport 收到含 `attemptId`、`sourceRoundId`、`phase` 的 invocation；目前僅完成設計確認，尚未實作或測試。
-- identity 不放入 tool details；Deep tools 不自取 identity；不改 stale guard、不改 `pi-main/`、不加 sequential 設定。
-- public seam 是現有 `registeredTools`／harness。先由測試代理新增 failing integration test，再最小修改 `forge-runtime/extensions/forge-runtime.ts`，最後跑 focused 與相關 suite。最脆弱假設是 followUp 在目前 tool round 結束後觸發下一模型回合；現有 PI API 已如此定義。沒有 UI 工作，不建立 Plan B。
+### 最終完成
+
+- Grill READY 建立 active identity 後，首次模型回合已透過既有 decision-retry 的 `pi.sendUserMessage(..., { deliverAs: "followUp" })` transport 收到含 `attemptId`、`sourceRoundId`、`phase` 的 identity-bearing invocation。
+- `forge-runtime/extensions/forge-runtime.ts` 的三個 caller 以 closure-local setter 傳遞 `pendingReplayInvocation`；`continueDeepKnowledge` 建立 attempt 後先設定 marker，再送出 identity-bearing followUp。
+- identity 不放入 tool details；Deep tools 不自取 identity；未修改 stale guard、tool schema、`pi-main/`，也未加入 sequential 設定。
+- 驗證完成：handoff regression 由 114 pass/1 fail（handoff undefined）修正為 115/0；聚焦 4/4；相關 147/147（`.tmp/deep-related-green-20260825.log`）；完整 209/209（`.tmp/deep-full-green-20260825.log`）；`npm run check` exit 0（`.tmp/deep-caller-check-20260825.log`）；final quick review 為 0 functional findings。
+- 尚未由使用者在真實 PI session 重跑原始情境；這不是目前 blocker。
+
+### 2026-08-25 最後驗證與工作樹狀態
+
+- 工作期間 HEAD 由外部移至並同步 `origin/main` 的 `324501a0412bbfdead9642aeb845bb26192b57cc`；這不是本代理建立的 commit。
+- 目前本 ticket 剩九檔 tracked 修改未提交。隔離 detached worktree 只套用九檔 diff 後，`npm run check` exit 0，四個關鍵測試均 4/4 exit 0；證據：`forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。
+- 主工作樹完整 suite 仍為 209/209；未解仍只有使用者尚未在真實 PI session 重跑原始情境。
+
+## 2026-08-26 Deep 階段輸出守門完成
+
+- Ticket：`deep-stage-output-guard-20260826`。Deep Retrieval／Knowledge Understanding 只準備後續實作所需證據，不在此階段開始實作。
+- Guard 只在存在 active Deep attempt，且 stage 為 `DEEP_KNOWLEDGE_RETRIEVAL` 或 `KNOWLEDGE_UNDERSTANDING` 時成立；`message_update` 與 `message_end` 都移除 assistant `text`／`thinking`，保留合法 `toolCall`。
+- 不沿用 Grill recovery，不影響 `WAIT_USER`、Deep cancel 後或後續階段；Deep active tool 清單維持排除 write/edit 類工具。
+- 根因已確認：assistant prose guard 只覆蓋 Grill；Deep active 後只切換 active tools，`message_update` 與 `message_end` 未同步攔截 `text`／`thinking`。
+- 修正已完成：新增 `hasActiveDeepAttempt`；Deep Retrieval／Understanding active attempt 的串流清空 `text`／`thinking`，final message 只保留合法 `toolCall`。
+- 驗證完成：先由 `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue` 以 `FORBIDDEN_IMPLEMENTATION_MARKER` 形成紅燈（exit 1），修正後 targeted 9/9；修正 retrieval／understanding fixture schema 與過時 transition assertion 後，`npm test` 209 passed/0 failed/0 skipped，`npm run check` exit 0。production review 零 functional findings，scope on target。
+- 不新增 Plan B、不修改 `pi-main/`。Grill 的 `message_end` 含 toolCall 分支仍依賴 `message_update` 先清文字，列為未證實後續風險，不在本 ticket 擴修。

@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-25
+updated: 2026-08-26
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: completed
 ---
@@ -87,3 +87,15 @@ status: completed
 - ADR-0007／ADR-0003 的 omission `continue` replay 已由 ADR-0008 的 `retry/cancel/switch` 取代；一般 active workflow 的 `continue` 仍保留，但 recovery 中拒絕。
 - 正常 completion 的 assistant terminal JSON 已由 `forge_grill_complete` 取代；`/forge-runtime grill-result` 僅保留 debug injection。
 - Plan B 固定 widget tree 尚未完成，不能用 Plan A TUI acceptance 宣稱 UI tree 已完成。
+
+## 2026-08-25 Deep identity handoff 修正教訓
+
+- 首次 Grill READY→Deep 漏傳 runtime-issued `attemptId`、`sourceRoundId`、`phase`，模型自行猜測 identity，導致 Deep tool stale reject。修復為由 extension 在建立 attempt 後送 identity-bearing followUp；證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`.tmp/deep-related-green-20260825.log`（相關 147/147）。
+- followUp 在 queue 前會經過 input hook；若沒有 marker，合法的內部 replay 會被當成一般輸入處理，handoff regression 出現 `handoff undefined`。修復為先設定 closure-local `pendingReplayInvocation` marker，再送 `pi.sendUserMessage(..., { deliverAs: "followUp" })`；證據：`forge-runtime/extensions/forge-runtime.ts`、handoff regression 由 114 pass/1 fail 轉為 115/0、`.tmp/deep-full-green-20260825.log`。
+- module helper 無法直接存取 extension closure-local marker，且 positional caller 必須全量更新；本次由三個 caller 共用 closure-local setter 傳遞 marker，避免只修單一路徑。證據：`forge-runtime/extensions/forge-runtime.ts`、`.tmp/deep-caller-check-20260825.log`（`npm run check` exit 0）、`.tmp/deep-related-green-20260825.log`。
+- PowerShell pipeline／`Tee` 可能使 `$LASTEXITCODE` 判定失真；驗證時必須直接捕捉 process exit，並核對 Node 的正式 summary，避免把隔離環境失敗誤報成通過。證據：isolated3 的 `forge-runtime/.tmp/deep-isolated3-check-20260825.log`、`forge-runtime/.tmp/deep-isolated3-test-20260825.log`（209/197/12，12 項皆在 assertion 前因 `ERR_MODULE_NOT_FOUND typebox`）與 isolated4 的 `forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。
+
+## 2026-08-26 Deep 階段輸出守門教訓
+
+- **Deep 階段誤輸出實作內容**：觀察到 Deep Retrieval 完成並轉 Understanding 的流程出現 RTL；可驗證根因是 `forge-runtime/extensions/forge-runtime.ts` 的 assistant prose guard 只覆蓋 Grill，Deep active 後只更換 active tools，`message_update`／`message_end` 未同時攔 `text`／`thinking`。修復為新增 `hasActiveDeepAttempt`，串流清空兩類文字、final message 只保留合法 toolCall；證據：同一 production 檔、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`，以及 `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue` 紅燈 exit 1 後 targeted 9/9、完整 209 passed/0 failed/0 skipped、`npm run check` exit 0。
+- **可重用教訓**：active tools 排除 write/edit 不能代替輸出邊界；階段契約必須同時覆蓋串流更新與終局事件，並以保留合法 toolCall 的測試固定。Grill `message_end` 含 toolCall 分支仍依賴 `message_update` 先清文字，現列為未證實後續風險，不把它寫成已確認 bug。

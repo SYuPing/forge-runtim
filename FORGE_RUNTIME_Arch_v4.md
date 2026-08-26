@@ -1589,7 +1589,7 @@ Intent
 → Deep Retrieval
 ```
 
-Light Discovery 供 Grill 建立背景；Deep Retrieval 用於實作。
+Light Discovery 供 Grill 建立背景；Deep Retrieval 與 Knowledge Understanding 用於整理、驗證後續實作所需證據，不在這兩個階段開始實作。
 
 ---
 

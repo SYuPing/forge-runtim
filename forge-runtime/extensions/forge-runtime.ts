@@ -282,16 +282,23 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		};
 	const hasUnknownEvidenceIds = (ids: readonly string[], known: ReadonlySet<string>) =>
 		ids.some((evidenceId) => !known.has(evidenceId));
-	const isCurrentDeepAttempt = (identity: DeepAttemptIdentity) => {
-		const attempt = sessionState.currentDeepAttempt();
-		return Boolean(
-			attempt &&
-			attempt.attemptId === identity.attemptId &&
-			attempt.sourceRoundId === identity.sourceRoundId &&
-			attempt.phase === identity.phase,
-		);
-	};
-	const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
+		const isCurrentDeepAttempt = (identity: DeepAttemptIdentity) => {
+			const attempt = sessionState.currentDeepAttempt();
+			return Boolean(
+				attempt &&
+				attempt.attemptId === identity.attemptId &&
+				attempt.sourceRoundId === identity.sourceRoundId &&
+				attempt.phase === identity.phase,
+			);
+		};
+		const hasActiveDeepAttempt = () => {
+			const stage = sessionState.current().stage;
+			return Boolean(
+				sessionState.currentDeepAttempt() &&
+				(stage === "DEEP_KNOWLEDGE_RETRIEVAL" || stage === "KNOWLEDGE_UNDERSTANDING"),
+			);
+		};
+		const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
 	const parseActiveGrillCompletion = (payload: unknown) => {
 		const round = sessionState.continueGrillRound();
 		return parseGrillCompletion(payload, {
@@ -512,12 +519,15 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						pi,
 						ctx as CommandContext,
 						sessionState,
-						activeWorkflow,
-						publishWaitUser,
-						requireDeepToolBoundary,
-						completion.recommendation.reason,
-						completion,
-						activateDeepRetrievalTools,
+							activeWorkflow,
+							publishWaitUser,
+							requireDeepToolBoundary,
+							(invocation) => {
+								pendingReplayInvocation = invocation;
+							},
+							completion.recommendation.reason,
+							completion,
+							activateDeepRetrievalTools,
 					);
 					if (!enteredDeep) {
 						return {
@@ -1172,8 +1182,16 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 
 		pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx?: CommandContext) => {
 			if (event.message?.role !== "assistant") {
-			return;
-		}
+				return;
+			}
+			if (hasActiveDeepAttempt()) {
+				return {
+					message: {
+						...event.message,
+						content: event.message.content?.filter((block) => block.type === "toolCall") ?? [],
+					},
+				};
+			}
 			if (!hasActiveGrillAttempt()) {
 				return;
 			}
@@ -1202,9 +1220,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	});
 
 		pi.on?.("message_update", async (event: AssistantMessageEvent) => {
-		if (!pendingGrillRun || event.message?.role !== "assistant") {
-			return;
-		}
+			if ((!pendingGrillRun && !hasActiveDeepAttempt()) || event.message?.role !== "assistant") {
+				return;
+			}
 
 		for (const content of event.message.content ?? []) {
 			if (content.type === "text") {
@@ -1420,6 +1438,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							activeWorkflow,
 							publishWaitUser,
 							requireDeepToolBoundary,
+			(invocation) => {
+				pendingReplayInvocation = invocation;
+			},
 			grillResult.recommendation.reason,
 			grillResult,
 			activateDeepRetrievalTools,
@@ -1583,11 +1604,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					pi,
 					ctx,
 					sessionState,
-					activeWorkflow,
-					publishWaitUser,
-					requireDeepToolBoundary,
-					releaseGrillBoundary,
-				);
+						activeWorkflow,
+						publishWaitUser,
+						requireDeepToolBoundary,
+						(invocation) => {
+							pendingReplayInvocation = invocation;
+						},
+						releaseGrillBoundary,
+					);
 				return;
 			}
 
@@ -1813,6 +1837,7 @@ async function confirmAndContinueDeepKnowledge(
 		activeWorkflow: ActiveWorkflowContext | undefined,
 		publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
 		requireDeepToolBoundary: (ctx: CommandContext) => boolean,
+		setPendingReplayInvocation: (invocation: string) => void,
 		onProceedToDeepKnowledge: () => void,
 	): Promise<ForgeUiState> {
 		const beforeConfirm = sessionState.current();
@@ -1831,12 +1856,13 @@ async function confirmAndContinueDeepKnowledge(
 		pi,
 		ctx,
 		sessionState,
-		activeWorkflow,
-		publishWaitUser,
-		requireDeepToolBoundary,
-		beforeConfirm.decisionSummary,
-		undefined,
-		onProceedToDeepKnowledge,
+			activeWorkflow,
+			publishWaitUser,
+			requireDeepToolBoundary,
+			setPendingReplayInvocation,
+			beforeConfirm.decisionSummary,
+			undefined,
+			onProceedToDeepKnowledge,
 	);
 	return nextState;
 }
@@ -1848,6 +1874,7 @@ async function continueDeepKnowledge(
 		activeWorkflow: ActiveWorkflowContext | undefined,
 		publishWaitUser: (payload: WaitUserPayload, ctx: CommandContext) => Promise<void>,
 		requireDeepToolBoundary: (ctx: CommandContext) => boolean,
+		setPendingReplayInvocation: (invocation: string) => void,
 		decisionSummary?: string,
 		_grillResult?: StructuredGrillResult,
 		onProceedToDeepKnowledge?: () => void,
@@ -1883,7 +1910,7 @@ async function continueDeepKnowledge(
 		}
 		await publishState(pi, ctx, nextState);
 		const invocation = `Deep Knowledge 已開始。請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
-		pendingReplayInvocation = invocation;
+		setPendingReplayInvocation(invocation);
 		await pi.sendUserMessage?.(invocation, { deliverAs: "followUp" });
 		return true;
 	}

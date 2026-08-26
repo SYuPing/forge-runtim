@@ -1023,8 +1023,8 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldTerminateToolTurnAndEnterDee
 		},
 	};
 	await harness.messageUpdateHandler(updateEvent);
-	assert.equal(updateEvent.message.content[0]?.text, "ready completion prose must not leak");
-	assert.equal(updateEvent.message.content[1]?.thinking, "ready completion thinking must not leak");
+	assert.equal(updateEvent.message.content[0]?.text, "");
+	assert.equal(updateEvent.message.content[1]?.thinking, "");
 });
 
 test("Integration_WhenDeepSearchUsesAllowedSources_ShouldReturnAtMostThreeEvidence", async (t) => {

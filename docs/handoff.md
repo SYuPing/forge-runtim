@@ -2,9 +2,9 @@
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
 scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824
-updated: 2026-08-25
+updated: 2026-08-26
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、scoped validation logs
-status: follow-up-fix-in-progress
+status: implemented-and-verified
 ---
 
 # Intent route-only LLM 交接
@@ -150,15 +150,38 @@ Grill 只準備決策所需的最小證據。Deep 直接接手 Grill 實際引�
 - 人類決策持久格式是 `問題：…；決定：…`，同一 decisionId 首筆不可覆寫；Evidence Package 先注入 human decisions，模型 duplicate decisionId 拒絕。
 - 固定上限：query 1500 Unicode code points；同 source／Grill round 最多 8 次搜尋且 retry／cancel 不重設；單筆 256 KiB（讀檔前 stat，恰好上限可）；整輪 2 MiB，包含 Grill fetched 與 Deep supplemental；decisions／findings／limitations 各 50；每段 statement 4,000 Unicode code points。超限先拒絕、不改 state。
 - 「每次來源搜尋最多 3 個相關候選」仍保留，這是呈現／候選上限，不是 Evidence Package 每類 50 筆安全上限。Deep 不重讀 Grill fetched evidence；ID 唯一、finding 引用必須存在、blocking limitation 不可 complete。
-- 驗證：`npm test` 208/208；`npm run check` exit 0；`git diff --check` exit 0（僅 LF／CRLF warning）。Standards 唯一 hard finding 是 README tool 清單過時，已修正；Divergent Change／Repeated Switches 是固定三來源與 Ponytail/YAGNI 下的 judgement call；Spec 無 production 缺口；adversarial 最終無 P0/P1。
-- 下一步只剩使用者檢閱並決定是否 commit；目前未 commit、未 staged。
+- 驗證：初次 Deep 實作 `npm test` 208/208；identity handoff follow-up 完成後完整 209/209，`npm run check` exit 0。Standards 唯一 hard finding 是 README tool 清單過時，已修正；Divergent Change／Repeated Switches 是固定三來源與 Ponytail/YAGNI 下的 judgement call；Spec 無 production 缺口；adversarial 最終無 P0/P1。
+- 下一步：由使用者在真實 PI session 重跑原始情境；目前未 commit、未 staged，無 production blocker。
 
 ### 首次 Grill→Deep identity handoff 修正交接（2026-08-25）
 
-已確認首次 READY→Deep 建立 active identity 後，必須沿用 decision-retry 的 `pi.sendUserMessage(..., { deliverAs: "followUp" })`，將 `attemptId`、`sourceRoundId`、`phase` 傳入下一模型回合；本 follow-up 尚未實作或測試。
+首次 READY→Deep 建立 active identity 後，已沿用 decision-retry 的 `pi.sendUserMessage(..., { deliverAs: "followUp" })`，將 `attemptId`、`sourceRoundId`、`phase` 傳入下一模型回合。
 
-- identity 不放入 tool details；Deep tools 不自行取得 identity；不改 stale guard、不改 `pi-main/`、不加 sequential 設定。
-- public seam 是現有 `registeredTools`／harness。先由測試代理新增 failing integration test，再最小修改 `forge-runtime/extensions/forge-runtime.ts`，最後執行 focused 與相關 suite。
-- 最脆弱假設：followUp 在目前 tool round 結束後觸發下一模型回合；現有 PI API 已如此定義。沒有 UI 工作，不建立 Plan B。
+- production `forge-runtime/extensions/forge-runtime.ts` 的三個 caller 以 closure-local setter 傳遞 `pendingReplayInvocation`；`continueDeepKnowledge` 建立 attempt 後先設定 marker，再送出 identity-bearing followUp。
+- identity 不放入 tool details；Deep tools 不自行取得 identity；不改 stale guard、tool schema、`pi-main/`、不加 sequential 設定。public seam 是現有 `registeredTools`／harness。
+- 驗證：handoff regression red 為 114 pass/1 fail（handoff undefined），修正後 green 115/0；聚焦 4/4；相關 147/147（`.tmp/deep-related-green-20260825.log`）；完整 209/209（`.tmp/deep-full-green-20260825.log`）；`npm run check` exit 0（`.tmp/deep-caller-check-20260825.log`）；final quick review 0 functional findings。
+- 修改檔案：production 1、tests 2，以及本次五份交付文件與兩份 Memory 文件。
+- 未解風險：尚未由使用者在真實 PI session 重跑原始情境；這不是 blocker。
 
-（歷史快照）先建立紅燈、完成最小 production diff，再執行完整驗證與雙軸 review；上述工作已在下方收尾完成。
+## Deep 階段輸出守門交接（2026-08-26）
+
+- Ticket：`deep-stage-output-guard-20260826`。
+- 狀態：implemented-and-verified。
+- 目標：Deep Retrieval 與 Knowledge Understanding 只準備後續實作所需證據，不在此階段開始寫 RTL 或其他實作內容。
+- 核准契約：guard 僅在有 active Deep attempt 且 stage 為 `DEEP_KNOWLEDGE_RETRIEVAL`／`KNOWLEDGE_UNDERSTANDING` 時成立；`message_update`／`message_end` 移除 assistant `text`／`thinking`，保留合法 `toolCall`。
+- 邊界：不沿用 Grill recovery，不影響 `WAIT_USER`、Deep cancel 後或後續階段；不新增 Plan B、不修改 `pi-main/`。
+- 根因：`forge-runtime/extensions/forge-runtime.ts` 的 assistant prose guard 只覆蓋 Grill；Deep active 後只換 active tools，未在 `message_update` 與 `message_end` 同時攔 `text`／`thinking`。
+- 修正：新增 `hasActiveDeepAttempt`；Deep Retrieval／Understanding active attempt 的串流清空 `text`／`thinking`，final message 只保留合法 `toolCall`；不改 `pi-main/`。
+- 驗證：`PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue` 先以 `FORBIDDEN_IMPLEMENTATION_MARKER` 紅燈（exit 1），修正後 targeted 9/9；修正 fixture schema 與過時 transition assertion 後，`npm test` 209 passed/0 failed/0 skipped，`npm run check` exit 0。production review 零 functional findings，scope on target。
+- 修改檔案：production `forge-runtime/extensions/forge-runtime.ts`；tests `forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`；以及本 ticket 交付文件與兩份 Memory 文件。
+- 未解風險：Grill 的 `message_end` 含 toolCall 分支仍依賴 `message_update` 先清文字，未證實且不在本 ticket 擴修。
+- Context／ADR／Spec／Ticket／Planning 尚未串成 runtime flow：這是本 ticket 範圍外的後續風險，不影響 `deep-stage-output-guard` 已完成；未來若啟用該串接，另開 ticket 建立各階段輸出契約。
+
+（歷史快照）先建立紅燈、完成最小 production diff，再執行完整驗證與 review；上述工作已完成。
+
+### 最後驗證與工作樹狀態（2026-08-25）
+
+- 工作期間 HEAD 由外部移至並同步 `origin/main` 的 `324501a0412bbfdead9642aeb845bb26192b57cc`，不是本代理 commit；目前本 ticket 剩九檔 tracked 修改未提交。
+- 隔離 detached worktree 只套用九檔 diff 後，`npm run check` exit 0，四個關鍵測試均 4/4 exit 0；logs：`forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。主工作樹 full 仍 209/209。
+- isolated3 不列為通過：正式結果為 209/197/12，12 項皆在 assertion 前因 `ERR_MODULE_NOT_FOUND typebox`，根因是隔離 package-resolution setup 失敗；證據：`forge-runtime/.tmp/deep-isolated3-check-20260825.log`、`forge-runtime/.tmp/deep-isolated3-test-20260825.log`。
+- 未解仍只有使用者尚未在真實 PI session 重跑原始情境；isolated3 caveat 不構成 production blocker。

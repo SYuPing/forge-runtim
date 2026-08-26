@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-25
+updated: 2026-08-26
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
 status: implemented-and-verified
 ---
@@ -118,11 +118,32 @@ status: implemented-and-verified
 - 目標：完成 Deep Retrieval／Understanding、Evidence Package 與五個工具，維持 Workflow 對 state、證據與人類決策的最終控制權。
 - 重大決策：identity=`attemptId+sourceRoundId+phase`；retry 新 attempt 並回原 Deep phase；cancel／continue 保留 input／evidence 並回原 Deep phase，不回 Grill；stale outcome quiet reject；active-tools capability fail-closed。
 - 重大實作：人類決策以 `問題：…；決定：…` 保存且首筆 decisionId 不可覆寫；package 先注入 human decisions，再拒絕模型 duplicate；Deep 重用 Grill fetched evidence。固定上限為 query 1500、每 source／Grill round 8 次、單筆 256 KiB、整輪 2 MiB、各類 50 筆、每段 4,000 code points，超限不改 state，讀檔前先 stat。
-- 驗證：`npm test` 208/208、`npm run check` exit 0、`git diff --check` exit 0（僅 LF／CRLF warning）。logs 位置與 final review 判定見 [`docs/handoff.md`](../docs/handoff.md)。
-- 狀態：已實作、已驗證；下一步只剩使用者檢閱與決定是否 commit，目前未 commit、未 staged。
+- 初次 Deep 實作驗證為 `npm test` 208/208；identity handoff follow-up 完成後完整 suite 為 209/209，`npm run check` exit 0。logs 位置與 final review 判定見 [`docs/handoff.md`](../docs/handoff.md)。
+- 狀態：初次 Deep 實作已驗證；後續 identity handoff follow-up 已於下方完成，目前未 commit、未 staged。
 
 - 設計目標：在既有 Grill immutable snapshot 交接之上，建立 `Deep Retrieval → Knowledge Understanding → Evidence Package` 的最小完整流程，完成後轉入 `CONTEXT_BUILD`。
 - 重大決策：Grill 只收集決策所需的最小證據；Deep 沿用 Grill 實際引用的完整 evidence 與 decisions，不重讀相同 evidence。客觀缺口可補查，新增 evidence 必須使用新 ID；新需求／取捨／矛盾由 Workflow 建立 `WAIT_USER`，來源整體不足回 `LIGHT_DISCOVERY`。
 - 重大決策：Retrieval 可搜尋受限 `wiki/`／`code_base/` 並鎖定證據；Understanding 只能讀固定集合。三種 result 是 `completed`、`needs_decision`、`needs_discovery`；Evidence Package 僅含 evidence、decisions、findings、非阻擋 limitations，completed 由 deterministic validator 守門。
 - 重大決策：沿用主 session active model；使用者撤回模型派發、fallback、custom loop 設計。本 ticket 不做 Pattern Card、持久化、第二 verifier、UI、外部來源或 `pi-main/`。
-- 歷史快照（其後已完成）：當時狀態為 ready-for-implementation；實作範圍、測試與驗證命令記錄於 [`docs/PLAN-A.md`](../docs/PLAN-A.md)。目前完成狀態與 208/208 驗證見上方「2026-08-25 Deep Knowledge 實作與驗證完成」及 [`docs/handoff.md`](../docs/handoff.md)。
+- 歷史快照（其後已完成）：當時狀態為 ready-for-implementation；實作範圍、測試與驗證命令記錄於 [`docs/PLAN-A.md`](../docs/PLAN-A.md)。初次完成狀態為 208/208，最新 handoff follow-up 與 209/209 驗證見下方「2026-08-25 Deep identity handoff 修正完成」及 [`docs/handoff.md`](../docs/handoff.md)。
+
+## 2026-08-25 Deep identity handoff 修正完成
+
+- 目標：讓首次 Grill READY→Deep handoff 將 runtime-issued `attemptId`、`sourceRoundId`、`phase` 傳入下一個模型回合，恢復 Deep search 依設計流程執行。
+- 重大實作：`forge-runtime/extensions/forge-runtime.ts` 的三個 caller 以 closure-local setter 傳遞 `pendingReplayInvocation`；`continueDeepKnowledge` 建立 attempt 後設定 marker，再以既有 `pi.sendUserMessage(..., { deliverAs: "followUp" })` 傳送 identity-bearing invocation。
+- 邊界：未修改 stale guard、tool schema、`pi-main/`，未新增 sequential 設定或 UI。
+- 驗證：handoff regression 由 114 pass/1 fail（handoff undefined）修正為 115/0；聚焦 4/4；相關 147/147（`.tmp/deep-related-green-20260825.log`）；完整 209/209（`.tmp/deep-full-green-20260825.log`）；`npm run check` exit 0（`.tmp/deep-caller-check-20260825.log`）；final quick review 0 functional findings。
+- 狀態：已完成實作與驗證；僅待使用者在真實 PI session 重跑原始情境，未形成 blocker。
+
+## 2026-08-25 最後驗證與工作樹狀態
+
+- 工作期間 HEAD 由外部移至並同步 `origin/main` 的 `324501a0412bbfdead9642aeb845bb26192b57cc`，不是本代理 commit；目前本 ticket 剩九檔 tracked 修改未提交。
+- 隔離 detached worktree 只套用九檔 diff 後，`npm run check` exit 0，四個關鍵測試均 4/4 exit 0；證據：`forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。
+- 主工作樹 full 仍 209/209。狀態維持已完成實作與驗證；唯一未解是使用者尚未在真實 PI session 重跑原始情境。
+
+## 2026-08-26 Deep 階段輸出守門完成
+
+- 目標：阻止 Deep Retrieval／Knowledge Understanding 在正式實作 gate 前輸出 RTL、程式碼或其他 implementation artifact，保留合法 Deep toolCall。
+- 重大過程：確認原 assistant prose guard 只覆蓋 Grill；新增 `hasActiveDeepAttempt`，在 Deep active attempt 的 `message_update` 與 `message_end` 清空 `text`／`thinking`，final message 只保留 toolCall。未修改 `pi-main/`。
+- 驗證：先由 `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue` 以 `FORBIDDEN_IMPLEMENTATION_MARKER` 形成紅燈（exit 1），實作後 targeted 9/9；修正兩個 fixture／transition 測試契約後，`npm test` 209 passed/0 failed/0 skipped，`npm run check` exit 0；production review 零 functional findings，scope on target。
+- 狀態：ticket `deep-stage-output-guard-20260826` 已完成並驗證。未解風險與後續邊界見 [`lesson_learn.md`](./lesson_learn.md) 與 [`docs/handoff.md`](../docs/handoff.md)。

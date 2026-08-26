@@ -387,6 +387,11 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 	const terminal = new VirtualTerminal(100, 30);
 	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
 	let mode: InteractiveMode | undefined;
+	let unsubscribeSearch: () => void = () => {};
+	let searchToolCalls = 0;
+	let retrievalCompleteToolCalls = 0;
+	let understandingCompleteToolCalls = 0;
+	let searchResult: unknown;
 	try {
 		const authStorage = AuthStorage.inMemory();
 		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
@@ -440,6 +445,18 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 			sessionManager: SessionManager.create(tempDir),
 		});
 		await runtime.session.bindExtensions({});
+		unsubscribeSearch = runtime.session.subscribe((event) => {
+			if (event.type === "tool_execution_end" && event.toolName === "forge_deep_search") {
+				searchToolCalls += 1;
+				searchResult = event.result;
+			}
+			if (event.type === "tool_execution_end" && event.toolName === "forge_deep_retrieval_complete") {
+				retrievalCompleteToolCalls += 1;
+			}
+			if (event.type === "tool_execution_end" && event.toolName === "forge_deep_complete") {
+				understandingCompleteToolCalls += 1;
+			}
+		});
 		faux.setResponses([
 			routerStartForgeResponse(),
 			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
@@ -455,6 +472,43 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 					status: "READY_FOR_DEEP",
 				}, { id: "call-complete-ready-1" })],
 			),
+			// READY_FOR_DEEP 後的第二模型回合必須使用 runtime 提供的 Deep identity。
+			fauxAssistantMessage(
+				[
+					{ type: "text", text: "FORBIDDEN_IMPLEMENTATION_MARKER" },
+					fauxToolCall("forge_deep_search", {
+						attemptId: "deep-1",
+						sourceRoundId: "grill-1",
+						phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+						query: "test.ts",
+						source: "code_base",
+					}, { id: "call-deep-search-1" }),
+				],
+			),
+			fauxAssistantMessage([
+				{ type: "text", text: "FORBIDDEN_IMPLEMENTATION_MARKER" },
+				fauxToolCall("forge_deep_retrieval_complete", {
+					attemptId: "deep-1",
+					sourceRoundId: "grill-1",
+					phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+					outcome: { kind: "completed" },
+				}, { id: "call-deep-retrieval-complete-1" }),
+			]),
+			fauxAssistantMessage([
+				{ type: "text", text: "FORBIDDEN_IMPLEMENTATION_MARKER" },
+				fauxToolCall("forge_deep_complete", {
+					attemptId: "deep-1",
+					sourceRoundId: "grill-1",
+					phase: "KNOWLEDGE_UNDERSTANDING",
+					outcome: {
+						kind: "completed",
+						decisions: [],
+						findings: [],
+						limitations: [],
+					},
+				}, { id: "call-deep-complete-1" }),
+			]),
+			fauxAssistantMessage("Deep knowledge 已完成。"),
 		]);
 		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
 		void mode.run();
@@ -464,9 +518,20 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 		await waitForViewport(terminal, "DEEP_KNOWLEDGE_RETRIEVAL");
 		assert.doesNotMatch((await terminal.flushAndGetViewport()).join("\n"), /continue/i);
 		const userMessages = runtime.session.messages.filter((message) => message.role === "user");
-		assert.equal(userMessages.length, 1);
-		assert.match(JSON.stringify(userMessages[0]), /請幫我測試 test/);
+		assert.ok(userMessages.length >= 1);
+		assert.match(JSON.stringify(userMessages), /請幫我測試 test/);
+		await runtime.session.waitForIdle();
+		assert.equal(faux.getPendingResponseCount(), 0, "後續模型回合應已被消耗");
+		assert.equal(searchToolCalls, 1, "Deep 搜尋工具應成功執行一次");
+		assert.equal(retrievalCompleteToolCalls, 1, "Deep Retrieval 完成工具應成功執行一次");
+		assert.equal(understandingCompleteToolCalls, 1, "Knowledge Understanding 完成工具應成功執行一次");
+		assert.match(JSON.stringify(searchResult), /accepted/);
+		const messages = runtime.session.messages.map((message) => JSON.stringify(message)).join("\n");
+		assert.doesNotMatch(messages, /FORBIDDEN_IMPLEMENTATION_MARKER/);
+		assert.doesNotMatch(messages, /已有進行中的 workflow|continue/i);
+		assert.match((await terminal.flushAndGetViewport()).join("\n"), /CONTEXT_BUILD/);
 	} finally {
+		unsubscribeSearch();
 		mode?.stop();
 		await runtime?.dispose();
 		faux.unregister();

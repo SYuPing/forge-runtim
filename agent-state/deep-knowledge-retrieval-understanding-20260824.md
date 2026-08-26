@@ -4,7 +4,7 @@ type: agent-state
 scope: deep-knowledge-retrieval-understanding-20260824
 updated: 2026-08-25
 source: 使用者核准設計、ADR-0016、docs/PLAN-A.md、docs/handoff.md
-status: design-confirmed-not-implemented
+status: implemented-and-verified
 ---
 
 # Deep Knowledge Retrieval／Understanding ticket state
@@ -125,7 +125,7 @@ status: design-confirmed-not-implemented
 
 ### 測試結果
 
-- `npm test`：208/208。
+- 初次 Deep 實作 `npm test`：208/208；identity handoff follow-up 完成後完整 suite：209/209。
 - `npm run check`：exit 0。
 - `git diff --check`：exit 0，僅 LF／CRLF warning。
 - 完整 logs：`C:\Users\User\AppData\Local\Temp\forge-full-final3.log`、`C:\Users\User\AppData\Local\Temp\forge-check-final3.log`、`C:\Users\User\AppData\Local\Temp\forge-runtime-diffcheck-final2-20260825.log`；focused logs：`forge-stale-capability-green.log`、`forge-final-review-regressions-final.log`、`forge-grill-guard-green.log`。
@@ -224,30 +224,67 @@ status: design-confirmed-not-implemented
 - 修改檔案：`forge-runtime/extensions/forge-runtime.ts`、相關 extension 測試檔、本狀態檔。
 - 下一步：執行 full suite 與 `npm run check`。
 
-## 2026-08-25 首次 Grill→Deep identity handoff 修正設計里程碑
+## 2026-08-25 首次 Grill→Deep identity handoff 修正完成里程碑
 
 ### 已完成項目
 
-- 已確認首次 Grill READY→Deep 建立 active identity 後，必須用 `pi.sendUserMessage(..., { deliverAs: "followUp" })` 傳送含 `attemptId`、`sourceRoundId`、`phase` 的 invocation。
-- 已確認 public seam 為現有 `registeredTools`／harness；不把 identity 放入 tool details、不讓 Deep tools 自取 identity、不改 stale guard、不改 `pi-main/`、不加 sequential 設定；沒有 UI 工作，不建立 Plan B。
+- 首次 Grill READY→Deep 建立 active identity 後，已透過既有 decision-retry 的 `pi.sendUserMessage(..., { deliverAs: "followUp" })` 傳送含 `attemptId`、`sourceRoundId`、`phase` 的 identity-bearing invocation。
+- `forge-runtime/extensions/forge-runtime.ts` 的三個 caller 以 closure-local setter 傳遞 `pendingReplayInvocation`；`continueDeepKnowledge` 建立 attempt 後先設定 marker，再送出 followUp。
+- identity 不放入 tool details；Deep tools 不自取 identity；未修改 stale guard、tool schema、`pi-main/`，未加入 sequential 設定。
 
 ### 重要決策
 
-- 先由測試代理新增首次 handoff identity-bearing followUp 的 failing integration test，再最小修改 `forge-runtime/extensions/forge-runtime.ts`，最後執行 focused 與相關 suite。
-- 最脆弱假設：followUp 在目前 tool round 結束後觸發下一模型回合；現有 PI API 已如此定義。
+- public seam 維持現有 `registeredTools`／harness；先以 failing integration test 鎖定 handoff identity，再做 extension 最小修正。
+- followUp 在目前 tool round 結束後觸發下一模型回合，沿用現有 PI API 定義；不新增 UI 或 Plan B。
 
 ### 修改檔案
 
-- 本里程碑僅更新本狀態檔與五份交付文件，未修改 production code 或測試。
+- Production：`forge-runtime/extensions/forge-runtime.ts`。
+- Tests：兩個既有測試檔。
+- 文件與狀態：`CONTEXT.md`、`docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md`、`docs/PLAN-A.md`、`docs/handoff.md`、`Memory/record.md`、`Memory/lesson_learn.md`、本狀態檔。
 
 ### 測試結果
 
-- 尚未執行測試；failing integration test 尚待建立。
+- finalized regression test：RED 114 pass/1 fail（`handoff undefined`），修正後 GREEN 115/0。
+- 聚焦測試 4/4；相關 suite 147/147，證據：`.tmp/deep-related-green-20260825.log`。
+- 完整 suite 209/209，證據：`.tmp/deep-full-green-20260825.log`。
+- `npm run check` exit 0，證據：`.tmp/deep-caller-check-20260825.log`。
+- final quick review：0 functional findings。
 
 ### 未解問題
 
-- 尚未驗證 followUp invocation 會帶入目前 active identity，亦尚未驗證 Deep search 能取得結果並繼續流程。
+- 尚未由使用者在真實 PI session 重跑原始情境；此項不是 blocker。
 
 ### 下一步
 
-- 等待測試代理建立 failing integration test；其後由實作代理修改 extension，再由獨立測試代理執行 focused 與相關 suite。
+- 交付使用者在真實 PI session 重跑原始情境；在此之前不再擴大本 ticket 範圍。
+
+## 2026-08-25 最後驗證與工作樹狀態里程碑
+
+### 已完成項目
+
+- 工作期間 HEAD 由外部移至並同步 `origin/main` 的 `324501a0412bbfdead9642aeb845bb26192b57cc`；該 commit 不是本代理建立。目前本 ticket 剩九檔 tracked 修改未提交。
+- 隔離 detached worktree 只套用九檔 diff 後，`npm run check` exit 0，四個關鍵測試均 4/4 exit 0；logs：`forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。
+- 主工作樹 full 仍為 209/209。
+
+### 重要決策
+
+- 不把 isolated3 視為通過：正式結果為 209/197/12，12 項皆在 assertion 前因 `ERR_MODULE_NOT_FOUND typebox`，屬隔離 package-resolution setup 失敗；只保留為環境 caveat。證據：`forge-runtime/.tmp/deep-isolated3-check-20260825.log`、`forge-runtime/.tmp/deep-isolated3-test-20260825.log`。
+
+### 修改檔案
+
+- 本里程碑只更新七份既有 Markdown；不修改 code/test。
+
+### 測試結果
+
+- 隔離 detached worktree：`npm run check` exit 0、四個關鍵測試 4/4 exit 0，證據見 isolated4 logs。
+- 主工作樹：full 209/209。
+- isolated3：209/197/12，12 項均於 assertion 前因 `ERR_MODULE_NOT_FOUND typebox` 失敗，不列為 pass；logs 同上。
+
+### 未解問題
+
+- 尚未由使用者在真實 PI session 重跑原始情境；這是唯一未解事項，不是 blocker。
+
+### 下一步
+
+- 由使用者在真實 PI session 重跑原始情境；維持目前九檔 tracked 修改未提交狀態。
