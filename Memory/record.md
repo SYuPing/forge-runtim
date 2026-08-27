@@ -4,7 +4,7 @@ type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
 updated: 2026-08-27
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: automated-verified-awaiting-real-session
+status: completed
 ---
 
 # Forge Runtime v4 開發記錄
@@ -167,3 +167,16 @@ status: automated-verified-awaiting-real-session
 - 驗證：真實 AgentSession／InteractiveMode／faux provider regression 未修版 RED 1 fail、修正版 GREEN 1 pass，後續合法 Deep search accepted；extension targeted 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。logs 位於 `forge-runtime/artifacts/test-logs/`。
 - 狀態：`deep-stale-result-loop-20260826` 已完成自動驗證，等待使用者在真實 PI session 重跑原始情境；review 僅限指定 scope，未改 `pi-main/`。
 - 真實 PI v0.83.0 已從 repo root 以 `.\pi-main\pi-test.bat --approve` 啟動，啟動畫面列出 `forge-runtime.ts`；此為啟動 smoke check，尚未完成原始情境人工驗收。
+
+## 2026-08-27 Deep target source contract 設計核准
+
+- 目標：修正 Grill→Deep Retrieval 的 target manifest 轉換與 `targetSource` 輸入契約，避免缺少檔名時誤耗用 Deep attempt，並封住同批 stale sibling。
+- 核准決策：沿用 `workflow.snapshot.candidates` 列出 manifest；target 必填 `targetSource`；缺少時 retryable invalid 且保留 attempt，非唯一匹配才進 `WAIT_USER`；stale sibling 回 `terminate: true`。完整契約見 [`ADR-0017`](../docs/adr/ADR-0017-deep-target-source-contract.md)。
+- 狀態：`design-approved-ready-for-red`。尚未修改 production code、尚未執行測試；下一步先 RED，再最小實作與獨立驗證。
+
+## 2026-08-27 Deep target source contract 實作與驗證完成
+
+- 目標：完成 Grill→Deep Retrieval 的 target manifest 與 `targetSource` 契約，避免缺少檔名誤進 `WAIT_USER` 或耗用 attempt，並讓同批 stale sibling 正確終止。
+- 重大實作：follow-up invocation 先提供由 `workflow.snapshot.candidates` 建立的 manifest；target 要求 `targetSource`；缺欄位保留 retry 額度；非唯一匹配才建立 `WAIT_USER`；stale sibling 回傳 `terminate: true`。
+- TDD 與驗證：完成 RED→GREEN；targeted regression、schema phase 與完整套件驗證通過，完整 `npm test` 為 217/217，`npm run check` exit 0。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/schema-phase-targeted-20260827.log`、`forge-runtime/.tmp/targeted-regression-20260827.log`、`forge-runtime/.tmp/post-schema-test.log`、`forge-runtime/.tmp/post-schema-check.log`。
+- 審查與狀態：Standards／Spec 雙軸 re-review 均 PASS；ticket `deep-target-source-contract-20260827` 已完成，未修改 `pi-main/`。

@@ -1,10 +1,10 @@
 ---
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
-scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826
+scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827
 updated: 2026-08-27
-source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、scoped validation logs
-status: automated-verified-awaiting-real-session
+source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、scoped validation logs
+status: implemented-and-verified
 ---
 
 # Intent route-only LLM 交接
@@ -288,3 +288,21 @@ Ticket `deep-stale-result-loop-20260826` 已 implemented-and-automated-verified-
 ### 邊界與未解風險
 
 review 僅針對 target scope；未修改 `pi-main/`，無暫時 debug probe。blocked tool result `terminate=false` 可能延遲 followUp；其他 Deep `/continue` panel 預設 sendMessage 仍可能形成 steer；Grill `message_end` sibling risk 不在本 ticket。上述均未宣稱已修，未擴大本輪範圍。
+
+## Deep target source contract 設計交接（2026-08-27）
+
+### 狀態
+
+Ticket `deep-target-source-contract-20260827` 已完成實作、驗證與 Standards／Spec re-review，狀態為 `implemented-and-verified`。契約唯一真相來源是 [`ADR-0017`](adr/ADR-0017-deep-target-source-contract.md)。目前無待決設計；僅有 Node `DEP0190` 非阻塞警告。
+
+### 範圍與決策
+
+follow-up 從既有 `workflow.snapshot.candidates` 列出 target manifest，空清單也明確呈現；`forge_deep_search` 的 target 分支必填 `targetSource`。缺少時回 retryable invalid、保留 attempt 與 budget；明確但無唯一匹配才進 `WAIT_USER`。stale sibling 回 `terminate: true`。不修改 `pi-main/`、`session-state.ts`、snapshot 契約、合法 Deep 後續，不自動選 target，不加 sequential。
+
+### 實作、驗證與下一步
+
+- production schema 已改為 discriminated union：`target` 必填 `targetSource`，`wiki`／`code_base` 維持不要求。
+- handler 對缺少 `targetSource` 在扣除預算前回 retryable invalid，保留 attempt／budget；明確但無唯一匹配時進 `WAIT_USER`。
+- Deep follow-up 帶有 target manifest，包含空清單；四個 stale Deep outcomes 均回傳 `terminate: true`。
+- 五個指定情境測試均通過；完整 `npm test` `217/217`（`forge-runtime/.tmp/post-schema-test.log`）；`npm run check` exit 0（`forge-runtime/.tmp/post-schema-check.log`）；Standards／Spec re-review PASS。
+- 下一步：使用者檢閱並決定提交；目前不捏造 commit。僅剩 Node `DEP0190` 非阻塞警告。

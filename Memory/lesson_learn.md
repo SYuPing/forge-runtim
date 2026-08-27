@@ -4,7 +4,7 @@ type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
 updated: 2026-08-27
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
-status: automated-verified-awaiting-real-session
+status: completed
 ---
 
 # Forge Runtime v4 開發教訓
@@ -117,3 +117,17 @@ status: automated-verified-awaiting-real-session
 - **測試 fixture 教訓**：Grill 必須先 fetch evidence；成功 Deep search 契約是 `details.status=accepted`，不是 `candidateId`；TUI stage 應查 scrollback，避免 30 行 viewport 捲出造成假陰性。證據：`deep-target-extension-suite-20260827.log`、`deep-target-pi-integration-rerun-20260827.log`。
 - **未解風險**：blocked tool result `terminate=false` 可能延遲 followUp；其他 Deep `/continue` panel 預設 sendMessage 仍可能形成 steer。這些是殘餘風險，本輪未擴修；本輪未發現新 bug。
 - **可重用驗收教訓**：真實 PI 啟動成功不等於原始情境驗收完成。人工驗收必須保留原始輸入、關鍵輸出，以及指定錯誤字串是否出現的證據；本次只有 PI v0.83.0 啟動畫面列出 `forge-runtime.ts` 的 smoke check，沒有捕捉 stale 情境輸入／結果，因此仍標記為待人工驗收。證據：`docs/handoff.md`、`docs/tickets/deep-stale-result-loop-20260826.md`、本次啟動 smoke check 記錄。
+
+## 2026-08-27 Deep target source contract 觀察
+
+- **觀察**：使用者提供的實際輸出顯示 Grill 完成後第一次 `forge_deep_search` 回覆「Target source 不明確」，同批後續呼叫回覆「過期的 Deep Retrieval 嘗試已忽略」。目前尚無本 ticket 的自動測試證據，故不把修復前輸入缺少檔名寫成已驗證根因。證據：`docs/tickets/deep-target-source-contract-20260827.md`、`forge-runtime/extensions/forge-runtime.ts:548-560, 614-657, 1923-1931`、`forge-runtime/src/runtime/session-state.ts:376-405`、`pi-main/packages/agent/src/agent-loop.ts:489-584`。
+- **教訓**：跨 source 的輸入契約應同時由 discriminated union 與 handler guard 固定；需要人類選擇時保留 `WAIT_USER` 邊界，不自動猜 target。正式契約見 [`ADR-0017`](../docs/adr/ADR-0017-deep-target-source-contract.md)。
+- **狀態**：本輪未有自動測試、修復或新 GREEN 證據；不得宣稱已修復。
+
+## 2026-08-27 Deep target source contract 修復教訓
+
+- **缺少 `targetSource` 誤進 `WAIT_USER`**：觀察到缺少檔名時被當成一般歧義；已驗證根因是 handler 未將 target source 契約視為可重試的輸入錯誤；修復為缺欄位回傳 retryable invalid 並保留 attempt。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/targeted-regression-20260827.log`。
+- **follow-up 沒有 manifest**：觀察到 Deep follow-up 只帶 identity；已驗證根因是 transport payload 未附 workflow snapshot candidates 建出的 target manifest；修復為在 identity JSON 前提供 manifest，讓 marker 後到字尾仍是純 JSON，並保留明確 target contract。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/schema-phase-targeted-20260827.log`。
+- **stale sibling 未 terminate**：觀察到同批過期呼叫只被忽略；已驗證根因是 stale 分支缺少終止訊號；修復為 stale sibling 回傳 `terminate: true`，避免持續循環。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/targeted-regression-20260827.log`。
+- **manifest 位置造成 parser 回歸**：觀察到首次把 manifest 接在 identity JSON 後使既有 parser 測試失敗；已驗證根因是 parser 仍假設固定 identity JSON shape；修復為同步 parser 與測試契約，並由 post-schema 驗證確認。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/post-schema-test.log`、`forge-runtime/.tmp/post-schema-check.log`。
+- **schema 與舊測試契約漂移**：觀察到 `targetSource` 一度仍為 optional，且舊測試以缺欄位表示歧義、只讀 top-level `properties`；已驗證根因是 schema、測試 fixture 與新巢狀 shape 未同時更新，Spec review 捕捉到 optional 缺口；修復為將 `targetSource` 設為 required、更新測試至新 shape，並以完整 217/217 與雙軸 re-review PASS 固定契約。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/post-schema-test.log`、`forge-runtime/.tmp/post-schema-check.log`。

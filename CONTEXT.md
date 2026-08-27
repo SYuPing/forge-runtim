@@ -4,7 +4,7 @@ type: context
 scope: Forge Runtime v4 設計、實作與交接
 updated: 2026-08-27
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: automated-verified-awaiting-real-session
+status: implemented-and-verified
 ---
 
 # Forge Runtime v4 Context
@@ -381,3 +381,10 @@ status: automated-verified-awaiting-real-session
 - 目前不變量：Deep identity 仍為 `attemptId + sourceRoundId + phase`；stale outcome 維持 quiet reject；不改 Grill completion、WAIT_USER、cancel/retry/switch、relevance、state transition、snapshot、合法 Deep 後續或 `pi-main/`。
 - 已核准最小方向：Deep stage panel 使用 `displayOnly`；pending identity 保留到 matching user message 進入 `message_start` 才 consume；pending 期間 Deep tool-call gate 維持不可用。
 - 尚未修改 production 或 tests；先由測試代理建立真實 PI agent-loop queue priority／followUp drain regression 並打紅燈，再進行最小 production 修正。
+
+## 2026-08-27 Deep target source contract 完成驗證
+
+- Ticket `deep-target-source-contract-20260827` 狀態為 `implemented-and-verified`；本輪聚焦 Grill→Deep Retrieval 的 target manifest 轉換與輸入驗證，不改其他 Deep semantic flow。
+- 契約唯一真相來源為 [`ADR-0017`](docs/adr/ADR-0017-deep-target-source-contract.md)：follow-up 列出既有 `workflow.snapshot.candidates`，target 分支要求 `targetSource`；缺少時 retryable invalid 且保留 attempt，非唯一匹配才進 `WAIT_USER`；stale sibling 回 `terminate: true`。
+- production schema 已使用 discriminated union；handler 在預算扣除前拒絕缺少 `targetSource`，保留 attempt／budget；follow-up 明確帶 target manifest（含空清單），四個 stale outcomes 均終止 sibling。
+- 五個指定情境測試均通過；完整 `npm test` `217/217`（`forge-runtime/.tmp/post-schema-test.log`）；`npm run check` exit 0（`forge-runtime/.tmp/post-schema-check.log`）；Standards／Spec re-review PASS。未修改 `pi-main/`、`session-state.ts` 或 snapshot 契約，不自動選 target、不加 sequential。僅有 Node `DEP0190` 非阻塞警告；下一步為使用者檢閱／提交。

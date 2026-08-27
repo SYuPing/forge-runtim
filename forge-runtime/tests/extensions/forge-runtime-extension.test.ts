@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import type { TSchema } from "typebox";
+import { Compile } from "typebox/compile";
 
 type RegisteredCommand = {
 	description?: string;
@@ -1071,29 +1073,28 @@ test("Integration_WhenDeepSearchUsesAllowedSources_ShouldReturnAtMostThreeEviden
 
 	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
 	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
-	const phaseSchema = (
-		(deepSearchTool.parameters as { properties?: Record<string, unknown> } | undefined)?.properties?.phase as
-			| { const?: unknown; enum?: unknown[]; anyOf?: Array<{ const?: unknown }> }
-			| undefined
-	);
-	const phaseLiterals = [
-		phaseSchema?.const,
-		...(phaseSchema?.enum ?? []),
-		...(phaseSchema?.anyOf?.map((variant) => variant.const) ?? []),
-	];
+	const deepSearchValidator = Compile(deepSearchTool.parameters as TSchema);
+	const deepSearchArgs = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+		query: "DeepSearchAllowedNeedle",
+	};
 	assert.ok(
-		phaseLiterals.includes("DEEP_KNOWLEDGE_RETRIEVAL"),
-		"forge_deep_search phase schema must accept DEEP_KNOWLEDGE_RETRIEVAL",
+		deepSearchValidator.Check({ ...deepSearchArgs, source: "wiki" }),
+		"forge_deep_search schema must accept wiki source",
+	);
+	assert.ok(
+		deepSearchValidator.Check({ ...deepSearchArgs, source: "code_base" }),
+		"forge_deep_search schema must accept code_base source",
+	);
+	assert.ok(
+		deepSearchValidator.Check({ ...deepSearchArgs, source: "target", targetSource: "docs/target.md" }),
+		"forge_deep_search schema must accept target source with targetSource",
 	);
 	const searchResult = await deepSearchTool.execute(
 		"call-deep-search",
-		{
-			attemptId: "deep-1",
-			sourceRoundId: "grill-1",
-			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
-			query: "DeepSearchAllowedNeedle",
-			source: "wiki",
-		},
+		{ ...deepSearchArgs, source: "wiki" },
 		undefined,
 		undefined,
 		harness.buildContext(),
@@ -1424,6 +1425,7 @@ test("Integration_WhenTargetSourceIsAmbiguous_ShouldNeedDecision", async (t) => 
 			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
 			query: "TargetAmbiguousNeedle",
 			source: "target",
+			targetSource: "src/missing-target.ts",
 		},
 		undefined,
 		undefined,
@@ -1437,6 +1439,295 @@ test("Integration_WhenTargetSourceIsAmbiguous_ShouldNeedDecision", async (t) => 
 	assert.match(harness.observedMessages.join("\n"), /WAIT_USER/);
 	assert.deepEqual(harness.getActiveTools(), ["read"]);
 	assert.equal(harness.getActiveTools().some((toolName) => toolName.startsWith("forge_deep_")), false);
+});
+
+test("Extension_DeepSearchTargetWithoutTargetSource_ShouldRejectBeforeBudgetAndKeepAttempt", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"src/target.ts",
+		"// TargetSourceRequiredNeedle is the only allowed target source.\nexport const target = true;\n",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/target.ts",
+		"// TargetSourceRequiredNeedle provides the formal Grill seed.\n",
+	);
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const deepSearchDefinition = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchDefinition?.parameters, "Expected forge_deep_search to expose its public schema");
+	const deepSearchSchema = Compile(deepSearchDefinition.parameters as TSchema);
+	const identityAndQuery = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+		query: "TargetSourceRequiredNeedle",
+	};
+	assert.equal(
+		deepSearchSchema.Check({ ...identityAndQuery, source: "target" }),
+		false,
+		"target source must require a non-empty targetSource",
+	);
+	assert.equal(
+		deepSearchSchema.Check({ ...identityAndQuery, source: "target", targetSource: "src/target.ts" }),
+		true,
+		"target source with a non-empty targetSource must be valid",
+	);
+	for (const source of ["wiki", "code_base"] as const) {
+		assert.equal(
+			deepSearchSchema.Check({ ...identityAndQuery, source }),
+			true,
+			`${source} must not require targetSource`,
+		);
+	}
+	const startResult = await harness.sendInput(
+		"請幫我測試 TargetSourceRequiredNeedle target-source-seed.ts src/target.ts",
+	);
+	const invocation = (startResult as { text?: string }).text ?? "";
+	const candidateId = invocation.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	const targetCandidateId = invocation
+		.split(/\r?\n/)
+		.find((line) => line.includes("[target]") && line.includes("(target/src/target.ts)"))
+		?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+	assert.ok(targetCandidateId, "Expected the target manifest to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to be registered");
+	await evidenceTool.execute("call-target-source-required-grill-evidence", { candidateId: targetCandidateId }, undefined, undefined, harness.buildContext());
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to be registered");
+	await completionTool.execute(
+		"call-target-source-required-grill-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [targetCandidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const invalidResult = await deepSearchTool.execute(
+		"call-target-source-required-missing-source",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "TargetSourceRequiredNeedle",
+			source: "target",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(invalidResult.details.status, "invalid");
+	assert.equal(invalidResult.details.retryable, true);
+	assert.equal(invalidResult.details.reason, "target_source_required");
+
+	const retryResult = await deepSearchTool.execute(
+		"call-target-source-required-retry",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "TargetSourceRequiredNeedle",
+			source: "target",
+			targetSource: "src/target.ts",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(retryResult.details.status, "accepted");
+	assert.deepEqual(retryResult.details.evidence, []);
+	assert.deepEqual(retryResult.details.reusedEvidenceIds, [targetCandidateId]);
+});
+
+test("Extension_DeepSearchWikiAndCodeBase_ShouldRemainUnaffected", async (t) => {
+	for (const source of ["wiki", "code_base"] as const) {
+		const rootDir = createTempRoot();
+		t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+		const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+		const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+		const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+		assert.ok(evidenceTool?.execute);
+		await evidenceTool.execute(`call-${source}-regression-evidence`, { candidateId }, undefined, undefined, harness.buildContext());
+
+		const completionTool = harness.registeredTools.get("forge_grill_complete");
+		assert.ok(completionTool?.execute);
+		await completionTool.execute(
+			`call-${source}-regression-completion`,
+			{
+				roundId: "grill-1",
+				status: "READY_FOR_DEEP",
+				questions: [],
+				recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+				evidence: [candidateId],
+				requiresUserConfirmation: false,
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+
+		const searchTool = harness.registeredTools.get("forge_deep_search");
+		assert.ok(searchTool?.execute);
+		const result = await searchTool.execute(
+			`call-${source}-regression-search`,
+			{
+				attemptId: "deep-1",
+				sourceRoundId: "grill-1",
+				phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+				query: "BoundaryToken",
+				source,
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+
+		assert.equal(result.details.status, "accepted");
+	}
+});
+
+test("Extension_DeepSearchStaleSibling_ShouldTerminate", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "src/stale-sibling.ts", "// DeepStaleSiblingNeedle target source.\n");
+	writeWorkspaceFile(rootDir, "code_base/src/stale-sibling.ts", "// DeepStaleSiblingNeedle Grill snapshot.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput("請幫我測試 DeepStaleSiblingNeedle stale-sibling.ts");
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute("call-stale-sibling-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
+	await completionTool.execute(
+		"call-stale-sibling-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to expose execute after entering Deep Retrieval");
+	const staleResult = await deepSearchTool.execute(
+		"call-stale-sibling-search",
+		{
+			attemptId: "deep-stale",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "DeepStaleSiblingNeedle",
+			source: "target",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(staleResult.details.status, "stale");
+	assert.equal(staleResult.terminate, true);
+});
+
+test("Extension_DeepSearchTargetSourceUnmatched_ShouldEnterWaitUser", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(
+		rootDir,
+		"src/target.ts",
+		"// TargetSourceUnmatchedNeedle is the only allowed target source.\nexport const target = true;\n",
+	);
+	writeWorkspaceFile(
+		rootDir,
+		"code_base/src/target.ts",
+		"// TargetSourceUnmatchedNeedle provides the formal Grill seed.\n",
+	);
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput(
+		"請幫我測試 TargetSourceUnmatchedNeedle target-source-seed.ts src/target.ts",
+	);
+	const invocation = (startResult as { text?: string }).text ?? "";
+	const targetCandidateId = invocation
+		.split(/\r?\n/)
+		.find((line) => line.includes("[target]") && line.includes("(target/src/target.ts)"))
+		?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(targetCandidateId, "Expected the target manifest to expose a snapshot candidate id");
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
+	await evidenceTool.execute(
+		"call-target-source-unmatched-grill-evidence",
+		{ candidateId: targetCandidateId },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute, "Expected forge_grill_complete to expose execute");
+	await completionTool.execute(
+		"call-target-source-unmatched-grill-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "候選已通過相關性 gate", confidence: 0.9 },
+			evidence: [targetCandidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const deepSearchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(deepSearchTool?.execute, "Expected forge_deep_search to be registered after entering Deep Retrieval");
+	const searchResult = await deepSearchTool.execute(
+		"call-target-source-unmatched-search",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: "TargetSourceUnmatchedNeedle",
+			source: "target",
+			targetSource: "src/missing-target.ts",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(searchResult.details.status, "needs_decision");
+	assert.deepEqual(searchResult.details.options, ["src/target.ts"]);
+	assert.deepEqual(searchResult.details.evidenceIds, [targetCandidateId]);
+	assert.equal(searchResult.terminate, true);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
 });
 
 test("Integration_WhenDeepSearchReusesGrillEvidence_ShouldAvoidDuplicateRead", async (t) => {
@@ -3278,6 +3569,84 @@ test("Extension_WhenUserConfirmed_ShouldResumeDeepKnowledge", async (t) => {
 	assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
 	assert.match(nextInvocation, /使用者已回答決策 "confirm"："confirm"。/);
 	assert.doesNotMatch(nextInvocation, /DEEP_KNOWLEDGE_RETRIEVAL|KNOWLEDGE_UNDERSTANDING/);
+});
+
+test("Extension_DeepRetrievalFollowUp_ShouldCarryTargetManifestIncludingEmptyList", async (t) => {
+	const scenarios = [
+		{
+			name: "with target candidate",
+			setup(rootDir: string) {
+				writeWorkspaceFile(rootDir, "src/deep-target.ts", "// DeepTargetManifestNeedle target candidate.\n");
+				writeWorkspaceFile(rootDir, "code_base/src/deep-target.ts", "// DeepTargetManifestNeedle code_base seed.\n");
+			},
+			request: "請幫我測試 DeepTargetManifestNeedle deep-target.ts",
+			expectation: (invocation: string) => {
+				const targetLine = invocation
+					.split(/\r?\n/)
+					.find((line) => line.includes("[target]") && line.includes("src/deep-target.ts"));
+				const candidateId = targetLine?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+				assert.ok(candidateId, "Expected the public Grill invocation to expose the target candidate id");
+				return candidateId;
+			},
+			manifest: /target(?:\s+source)?\s+manifest[^\[]*\[[^\]]*src\/deep-target\.ts[^\]]*\]/i,
+		},
+		{
+			name: "without target candidate",
+			setup(rootDir: string) {
+				writeWorkspaceFile(rootDir, "code_base/src/deep-no-target.ts", "// DeepNoTargetManifestNeedle code_base candidate.\n");
+			},
+			request: "請幫我測試 DeepNoTargetManifestNeedle deep-no-target.ts",
+			expectation: (invocation: string) => {
+				const candidateId = invocation.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+				assert.ok(candidateId, "Expected the public Grill invocation to expose the Grill candidate id");
+				return candidateId;
+			},
+			manifest: /target(?:\s+source)?\s+manifest[^\[]*\[\s*\]/i,
+		},
+	] as const;
+
+	for (const scenario of scenarios) {
+		const rootDir = createTempRoot();
+		scenario.setup(rootDir);
+		t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+
+		const harness = await createExtensionHarness({ cwd: rootDir });
+		const startResult = await harness.sendInput(scenario.request);
+		const invocation = (startResult as { text?: string }).text ?? "";
+		const candidateId = scenario.expectation(invocation);
+
+		const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+		assert.ok(evidenceTool?.execute, `Expected forge_grill_evidence for ${scenario.name}`);
+		await evidenceTool.execute(
+			`call-deep-follow-up-${scenario.name}-evidence`,
+			{ candidateId },
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+
+		const completionTool = harness.registeredTools.get("forge_grill_complete");
+		assert.ok(completionTool?.execute, `Expected forge_grill_complete for ${scenario.name}`);
+		await completionTool.execute(
+			`call-deep-follow-up-${scenario.name}-completion`,
+			{
+				roundId: "grill-1",
+				status: "READY_FOR_DEEP",
+				questions: [],
+				recommendation: { value: "proceed", reason: "target manifest follow-up", confidence: 0.9 },
+				evidence: [candidateId],
+				requiresUserConfirmation: false,
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+
+		const followUp = harness.observedUserMessageCalls.at(-1);
+		assert.equal(followUp?.options?.deliverAs, "followUp");
+		assert.match(followUp?.content ?? "", /"attemptId"\s*:\s*"deep-1"/);
+		assert.match(followUp?.content ?? "", scenario.manifest);
+	}
 });
 
 test("Extension_WhenUiSelectAvailable_ShouldUseSelectorToResumeWaitUser", async (t) => {

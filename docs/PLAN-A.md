@@ -1577,3 +1577,60 @@ npm test
 - 目標僅為修正 stale completion 循環：stage panel 改 `displayOnly`；input 只預載 Deep tools；matching user `message_start` 才 consume pending identity；pending 期間阻擋 Deep tool_call。
 - 真實 AgentSession／InteractiveMode／faux provider regression：未修版 RED 1 fail，修正版 GREEN 1 pass，後續合法 Deep search accepted；TUI 以 `waitForScrollBuffer` 驗證 stage。
 - extension targeted 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。未修改 `pi-main/`，不改其他 workflow；殘餘風險另行記錄，下一步只有使用者重跑真實 PI session。
+
+## Plan A：Deep target source contract（deep-target-source-contract-20260827）
+
+日期：2026-08-27；狀態：implemented-and-verified。
+
+### Building
+
+- 從既有 `workflow.snapshot.candidates` 在 Deep follow-up 列出允許的 target manifest，空清單也明確呈現。
+- 讓 `forge_deep_search` 依 `source` 使用 discriminated union：target 必填 `targetSource`，wiki／code_base 不要求。
+- handler 對 target 缺檔名回 retryable invalid，保留 attempt 與 budget；明確但無唯一匹配維持 `needs_decision`。
+- stale Deep sibling 回傳 `terminate: true`。
+
+### Not Building
+
+- 不修改 `pi-main/`、`session-state.ts`、snapshot 契約或合法 Deep 後續。
+- 不自動選 target、不加入 sequential、custom loop、migration 或新依賴。
+
+### Approach
+
+以 [`ADR-0017`](adr/ADR-0017-deep-target-source-contract.md) 為契約唯一真相來源，沿用既有 snapshot 與 handler guard。Fragile assumption 是 PI/provider 能正確使用 discriminated union，因此 runtime guard 不可省略。rollback 為還原單一正式程式檔。
+
+### Files
+
+- Production：`forge-runtime/extensions/forge-runtime.ts`。
+- Tests：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。
+- 文件：本檔、`CONTEXT.md`、`docs/handoff.md`、`docs/adr/ADR-0017-deep-target-source-contract.md`、ticket、agent-state、Memory 兩檔。
+
+### Tests
+
+先由測試子代理打 RED，主代理確認紅燈後才修改 production code；之後由不同測試子代理執行驗證。新增 5 個測試：
+
+- `Extension_DeepSearchTargetWithoutTargetSource_ShouldRejectBeforeBudgetAndKeepAttempt`：斷言 retryable invalid、不進 WAIT_USER、attempt／budget 保留。
+- `Extension_DeepRetrievalFollowUp_ShouldCarryTargetManifestIncludingEmptyList`：斷言 follow-up 含既有 manifest，空清單仍明確存在。
+- `Extension_DeepSearchTargetSourceUnmatched_ShouldEnterWaitUser`：斷言明確但無唯一匹配轉 `WAIT_USER`。
+- `Extension_DeepSearchStaleSibling_ShouldTerminate`：斷言 stale sibling 的 `terminate` 為 `true`。
+- `Extension_DeepSearchWikiAndCodeBase_ShouldRemainUnaffected`：斷言 wiki／code_base 不要求 targetSource。
+
+五個指定情境測試均通過；完整 `npm test` `217/217`（`forge-runtime/.tmp/post-schema-test.log`）；0 failed。
+
+### Execution Order
+
+1. 新 session 先讀 handoff、CONTEXT、ADR-0017、ticket 與 agent-state，展示摘要並等使用者確認。
+2. 測試子代理新增 5 個測試並執行 targeted test，確認 RED。
+3. 主代理確認 RED 後，只修改 `forge-runtime/extensions/forge-runtime.ts`。
+4. 不同測試子代理執行 targeted test、完整 `npm test` 與 `npm run check`。
+
+### Verification
+
+從 `forge-runtime/` 執行：
+
+```text
+npx tsx --test tests/extensions/forge-runtime-extension.test.ts
+npm test
+npm run check
+```
+
+實際驗證：五個指定情境測試均通過；完整 `npm test` `217/217`（`forge-runtime/.tmp/post-schema-test.log`）；`npm run check` exit 0（`forge-runtime/.tmp/post-schema-check.log`）；Standards／Spec re-review PASS。僅有 Node `DEP0190` 非阻塞警告。下一步為使用者檢閱與決定提交；本文件不捏造 commit。

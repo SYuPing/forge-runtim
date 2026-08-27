@@ -549,17 +549,29 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		name: "forge_deep_search",
 			label: "Forge Deep 搜尋",
 			description: "在目前的 Deep Retrieval 嘗試中搜尋允許的知識來源。",
-		parameters: Type.Object(
-			{
-				attemptId: Type.String(),
-				sourceRoundId: Type.String(),
-				phase: Type.Literal("DEEP_KNOWLEDGE_RETRIEVAL"),
-				query: Type.String({ minLength: 1 }),
-				source: Type.Union([Type.Literal("wiki"), Type.Literal("code_base"), Type.Literal("target")]),
-				targetSource: Type.Optional(Type.String()),
-			},
-			{ additionalProperties: false },
-		),
+			parameters: Type.Union([
+				Type.Object(
+					{
+						attemptId: Type.String(),
+						sourceRoundId: Type.String(),
+						phase: Type.Literal("DEEP_KNOWLEDGE_RETRIEVAL"),
+						query: Type.String({ minLength: 1 }),
+						source: Type.Union([Type.Literal("wiki"), Type.Literal("code_base")]),
+					},
+					{ additionalProperties: false },
+				),
+				Type.Object(
+					{
+						attemptId: Type.String(),
+						sourceRoundId: Type.String(),
+						phase: Type.Literal("DEEP_KNOWLEDGE_RETRIEVAL"),
+						query: Type.String({ minLength: 1 }),
+						source: Type.Literal("target"),
+						targetSource: Type.String({ minLength: 1 }),
+					},
+					{ additionalProperties: false },
+				),
+			]),
 		async execute(
 			_toolCallId: string,
 			params: {
@@ -587,8 +599,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				attempt.phase !== identity.phase
 			) {
 				return {
-						content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
+					content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
 					details: { status: "stale", evidence: [] },
+					terminate: true,
 				};
 			}
 			if (!activeWorkflow) {
@@ -610,8 +623,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					};
 				}
 				const query = trimmedQuery.toLowerCase();
-				let selectedTarget: GrillEvidenceCandidate | undefined;
+			let selectedTarget: GrillEvidenceCandidate | undefined;
 			if (params.source === "target") {
+				if (!params.targetSource?.trim()) {
+					return {
+						content: [{ type: "text", text: "Target source 不得為空白。" }],
+						details: { status: "invalid", retryable: true, reason: "target_source_required" },
+					};
+				}
 				const targetCandidates = Object.values(workflow.snapshot.candidates).filter(
 					(candidate) =>
 						candidate.kind === "target" &&
@@ -645,8 +664,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					});
 					if (decision.kind === "stale") {
 						return {
-						content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
+							content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
 							details: { status: "stale", evidence: [] },
+							terminate: true,
 						};
 					}
 					restoreActiveTools();
@@ -701,6 +721,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				return {
 					content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
 					details: { status: "stale", evidence: [] },
+					terminate: true,
 				};
 			}
 			if (searchBudget === "limit") {
@@ -839,6 +860,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				return {
 					content: [{ type: "text", text: "過期的 Deep Retrieval 嘗試已忽略。" }],
 					details: { status: "stale", evidence: [] },
+					terminate: true,
 				};
 			}
 
@@ -1921,12 +1943,21 @@ async function continueDeepKnowledge(
 			return false;
 		}
 		const nextState = sessionState.beginDeepKnowledge(decisionSummary);
-		const deepAttempt = sessionState.currentDeepAttempt();
-		if (!deepAttempt) {
-			throw new Error("Deep Knowledge attempt 未建立");
-		}
-		await publishState(pi, ctx, nextState, { deliverAs: "displayOnly" });
-		const invocation = `Deep Knowledge 已開始。請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
+			const deepAttempt = sessionState.currentDeepAttempt();
+			if (!deepAttempt) {
+				throw new Error("Deep Knowledge attempt 未建立");
+			}
+			await publishState(pi, ctx, nextState, { deliverAs: "displayOnly" });
+			const targetSources = workflow
+				? [
+						...new Set(
+							Object.values(workflow.snapshot.candidates)
+								.filter((candidate) => candidate.kind === "target")
+								.map((candidate) => candidate.metadata.relativePath ?? candidate.source),
+						),
+					].sort()
+				: [];
+			const invocation = `Deep Knowledge 已開始。Target source manifest：${JSON.stringify(targetSources)}\n請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
 		setPendingReplayInvocation(invocation);
 		await pi.sendUserMessage?.(invocation, { deliverAs: "followUp" });
 		return true;
