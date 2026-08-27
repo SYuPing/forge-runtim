@@ -171,7 +171,7 @@ Prerequisite
 
 使用者於 2026-08-13 已確認 interface：`ForgeSessionState` 以私有 attempt 狀態維護 omission budget；公開 `recordCompletionOmission(): boolean` 僅首次記錄並進 recovery 時回傳 `true`，重複事件回傳 `false` 且 no-op。`retryGrillRound(): GrillRound | undefined` 只在 recovery 中可用，保留 roundId、request 與 immutable snapshot 並重置 omission budget。`GrillRound` 不公開 attemptId 或 omission marker；retry 後新 attempt 的首次 omission 可再次回傳 `true`。這個小 interface 旨在維持 deep module，避免測試耦合私有狀態；private attempt interface 已於本 session 實作，#1 至 #3 targeted tests GREEN，但完整驗證仍未跑。
 
-`/forge-runtime retry` 驗證目前確為 recovery，再重用既有 round、snapshot、decision summary 與 evidence cache建立新 attempt；新 attempt 有新的 omission budget。`continue` 在 recovery 中不 replay。
+`/forge-runtime retry` 驗證目前確為 recovery，再重用既有 round、snapshot、decision summary 與 evidence cache 建立新 attempt；新 attempt 有新的 omission budget。`continue` 在 recovery 中不 replay。
 
 ### Gap 2：正常 completion 與可見輸出
 
@@ -228,7 +228,7 @@ production／test 預計 9 個檔案（1 新增、8 修改）；durable docs 依
 | --- | --- |
 | `SessionState_WhenCompletionOmissionFirstOccurs_ShouldEnterRecoveryOnce` | 首次 omission 記錄一次並設定 recovery |
 | `SessionState_WhenSameAttemptOmissionRepeats_ShouldRemainSingleRecovery` | 同 attempt 重複事件不新增 recovery |
-| `SessionState_WhenExplicitRetryRequested_ShouldRetainRoundAndSnapshotAndStartNewAttempt` | retry 建立新 attempt但保留 round／snapshot |
+| `SessionState_WhenExplicitRetryRequested_ShouldRetainRoundAndSnapshotAndStartNewAttempt` | retry 建立新 attempt 但保留 round／snapshot |
 | `Extension_WhenCompletionOmissionOccurs_ShouldShowRetryCancelSwitchAndSettle` | 顯示三個 action，且沒有待送 follow-up |
 | `Extension_WhenStreamingMessageEndsWithoutCompletion_ShouldNotSteerOrAutoReplay` | `message_end` 不呼叫 steer／replay |
 | `Extension_WhenContinueRequestedDuringRecovery_ShouldNotReplayAttempt` | recovery 中 continue 不重播 |
@@ -1249,7 +1249,7 @@ runtime gate 與 active-stage guard 能阻止舊 Grill event 在 Deep 啟動後�
 
 狀態：completed（以下保留設計階段的分 slice 記錄；最終收尾見本段末）
 
-前置條件：`ADR-0015` 交接邊界已完成；`ADR-0016` 已 Accepted；使用者已確認 Q1–Q21，並撤回模型派發設計。
+前置條件：`ADR-0015` 交接邊界已完成；`ADR-0016` 已 Accepted；使用者已確認 Q1 至 Q21，並撤回模型派發設計。
 
 ### 建置內容
 
@@ -1278,7 +1278,7 @@ runtime gate 與 active-stage guard 能阻止舊 Grill event 在 Deep 啟動後�
 - `validateEvidencePackage(package)` 成功回傳 `{ ok: true }`，正常驗證失敗回傳 `{ ok: false, errors: string[] }`，不 throw。
 - Evidence 欄位為 `evidenceId`、`kind: string`、`source`、`title`、`content`、`metadata: Record<string, unknown>`、`origin: "grill" | "deep_retrieval"`；limitation 為 `{ statement: string, blocking: boolean }`。
 - Package 內 Evidence ID 必須唯一；每個 finding 至少一個引用且只能引用存在的 ID；blocking limitation 不得完成。retry 保留 `sourceRoundId`，只換 `attemptId`。
-- 第一個測試固定為 `EvidencePackage_WhenInheritedAndSupplementalEvidenceMerge_ShouldPreserveOrigins`。完整決策以 [`ADR-0016`](docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md) 為準。
+- 第一個測試固定為 `EvidencePackage_WhenInheritedAndSupplementalEvidenceMerge_ShouldPreserveOrigins`。完整決策以 [`ADR-0016`](adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md) 為準。
 - 使用者於 2026-08-25 核准 Session State seam：Deep 狀態只放在 `ForgeSessionState`，沿用或擴充該 seam，不新增 UI state interface；方法命名留在最小實作細節。
 - retry 保留 `sourceRoundId`、current input 與同 snapshot 的 supplemental evidence，只換 `attemptId`；cancel 清除 active attempt 但保留 current input；stale call 回傳可辨識結果而非 throw。
 - 換成新 snapshot 時清除舊 supplemental evidence；snapshot 沿用 immutable object identity，不新增 hash 或持久化 ID。
@@ -1403,11 +1403,117 @@ identity 不放入 tool details，Deep tools 不自取 identity。測試由 114 
 
 回退本 ticket 的 5 個 production 檔與 4 個 test 檔變更，不涉及 migration；保留 ADR-0015 與 ADR-0016 的設計歷史，若 runtime seam 不成立則回報具體衝突後另開設計修訂。
 
+## Plan A Addendum：Deep stale-result loop（deep-stale-result-loop-20260826，修正前歷史快照）
+
+日期：2026-08-26
+
+狀態：`plan-approved-ready-for-red`（修正前歷史狀態）；本 ticket 已於 2026-08-27 完成自動化驗證，無 Plan B，因本 ticket 不做 UI 功能。
+
+### Building
+
+- 只修正 Deep Retrieval 完成結果因 identity followUp 尚未真正進入 agent loop 而反覆被 stale reject 的循環。
+- Deep stage panel 使用 `deliverAs: "displayOnly"`；pending identity 保留到 matching user message 進入 `message_start` 才 consume；pending 期間 Deep tool-call gate 阻擋 Deep tools。
+- 保留既有 identity、stale quiet reject、合法 Deep 後續與所有 Workflow 邊界。
+
+### Not Building
+
+- 不修改 Grill completion、WAIT_USER、cancel/retry/switch、relevance、state transition、snapshot 或合法 Deep 後續。
+- 不處理 Grill `message_end` sibling risk；不新增 custom loop、sequential 設定、新狀態機、第二 verifier 或 UI 功能；不修改 `pi-main/`。
+
+### Files
+
+| 類別 | 檔案 | 預計變動 |
+| --- | --- | --- |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | displayOnly panel、message_start identity gate、pending 期間 Deep tool-call gate |
+| Tests | `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | 真實 PI agent-loop queue priority／followUp drain regression，先形成紅燈 |
+| 文件 | `CONTEXT.md`、`docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md`、`docs/handoff.md`、本檔、`agent-state/deep-stale-result-loop-20260826.md` | 同步狀態與邊界 |
+
+### Tests
+
+- 測試代理先補 regression，必須覆蓋 `steer` 優先於 followUp、followUp 延後 drain，以及 pending identity 期間 Deep tools 不可用。
+- 先執行測試確認舊程式碼紅燈；主代理確認紅燈後才改 production。驗證代理再執行 targeted、完整 suite 與 check。
+
+### Verification
+
+- RED：新 regression 在舊程式碼失敗，且失敗證據寫入 agent-state／log。
+- GREEN：targeted regression 通過；完整 suite 與 `npm run check` 通過；確認未修改 `pi-main/` 且既有合法 Deep／WAIT_USER／cancel/retry/switch 路徑未退化。
+
 ### 最後驗證與工作樹狀態（2026-08-25）
 
 - 工作期間 HEAD 由外部移至並同步 `origin/main` 的 `324501a0412bbfdead9642aeb845bb26192b57cc`，不是本代理 commit；目前本 ticket 剩九檔 tracked 修改未提交。
 - 隔離 detached worktree 只套用九檔 diff 後，`npm run check` exit 0，四個關鍵測試均 4/4 exit 0；logs：`forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。主工作樹 full 仍 209/209。
 - 未解仍只有使用者尚未在真實 PI session 重跑原始情境。
+
+---
+
+## Plan A Addendum：Deep identity handoff activation（deep-followup-identity-activation-20260826）
+
+日期：2026-08-26
+
+狀態：implemented-and-verified。
+
+### Building
+
+- 修正 Grill completion 建立 Deep attempt 後，工具啟用早於 identity-bearing followUp 進入 `input` 的時序缺口。
+- 只有在既有 `pi.on("input", ...)` exact pending replay invocation 條件命中、且已清除 `pendingReplayInvocation` 後，才啟用 Deep Retrieval tools，接著沿用 `{ action: "continue" }`。
+- 保留 identity 三元組、stale quiet reject、followUp transport、主 session 與既有 verifier。
+
+### Not Building
+
+- 不修改 `pi-main/`。
+- 不把 identity 放入 completion tool result；不新增 custom loop、sequential 設定、新狀態機或 UI。
+- 不做 Plan B；不處理 Grill `message_end` 含 toolCall 的文字清除 sibling risk。
+
+### Approach
+
+`forge_grill_complete` 只建立 attempt 與排入 identity-bearing followUp，不在當下直接啟用 Deep Retrieval tools。既有 input handler 收到 exact pending replay invocation 時，採一次性 gate：先清 marker，再啟用工具，最後回傳 `{ action: "continue" }`。在 gate 開啟前 Deep tools 保持不可用，舊 identity 事件維持既有 stale quiet reject。
+
+最脆弱假設已驗證：test harness 的 followUp bridge 會在下一次模型推論前重入 input handler；exact marker 可作一次性 gate。
+
+### Files
+
+| 類別 | 檔案 | 預計變動 |
+| --- | --- | --- |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | 延後 Deep Retrieval tool activation 至 exact pending replay invocation；其餘 lifecycle 不變 |
+| Tests | `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | 新增兩個 handoff timing regression |
+
+### Tests
+
+- `Extension_WhenGrillCompletionQueuesDeepIdentity_ShouldEnableDeepToolsOnlyAfterFollowUpStarts`
+- `Extension_WhenDeepHandoffIsPending_ShouldKeepDeepToolsUnavailableAndIgnoreStaleEvent`
+
+### Execution Order
+
+1. 測試代理先新增第一個回歸測試，實際執行並確認舊程式碼有效紅燈。
+2. 主代理確認紅燈後，才修改 `forge-runtime/extensions/forge-runtime.ts` 的最小 production seam。
+3. 驗證代理依序執行 targeted tests、`npm test`、`npm run check`；不得由實作角色兼任驗證。
+
+### Verification
+
+```text
+# 僅由獨立驗證子代理執行
+cd forge-runtime
+npx tsx --test tests/extensions/forge-runtime-extension.test.ts
+npm test
+npm run check
+```
+
+基線依既有 handoff 為 209/209；新增 2 個測試後實際為 211/211。
+
+### Plan B
+
+不做 Plan B。本 ticket 是純 runtime 工具啟用時序修正，沒有 UI／View 變更。
+
+### 最終完成狀態（2026-08-26）
+
+- 已將 Deep Retrieval activation 從 `continueDeepKnowledge` 延後至 exact `pendingReplayInvocation` input gate；gate 先清 marker，再啟用 Deep Retrieval tools，並沿用 `{ action: "continue" }`。
+- 新增 2 個 timing regression；targeted 117/117、完整 `npm test` 211/211、`npm run check` exit 0。
+- 本輪未發現新 bug。未解風險僅保留 Grill `message_end` 含 toolCall 的未證實 sibling risk，以及真實 PI session 尚未重跑的既有非 blocker；兩者均不擴大本 ticket。
+
+### Final review medium finding 修正（2026-08-26）
+
+- `requireDeepToolBoundary` 必須同時具備 tool boundary 與 `sendUserMessage`，才能完成 Deep handoff；若無法送出 identity-bearing followUp，維持未完成，不進入半完成狀態。
+- 修正後驗證：targeted 117/117、`npm test` exit 0、`npm run check` exit 0；本輪未發現新 bug。
 
 ## Plan A：Deep 階段輸出守門（deep-stage-output-guard-20260826）
 
@@ -1463,3 +1569,11 @@ npm test
 - 修改測試：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。production review 零 functional findings，scope on target。
 - 未解風險：Grill 的 `message_end` 含 toolCall 分支仍依賴 `message_update` 先清文字，尚未由本 ticket 證實；不擴修。
 - Context／ADR／Spec／Ticket／Planning 尚未串成 runtime flow：這是本 ticket 範圍外的後續風險，不影響 `deep-stage-output-guard` 已完成；未來若啟用該串接，另開 ticket 建立各階段輸出契約。
+
+## Plan A：Deep stale-result loop（deep-stale-result-loop-20260826）收尾
+
+日期：2026-08-27；狀態：implemented-and-automated-verified-awaiting-real-session。
+
+- 目標僅為修正 stale completion 循環：stage panel 改 `displayOnly`；input 只預載 Deep tools；matching user `message_start` 才 consume pending identity；pending 期間阻擋 Deep tool_call。
+- 真實 AgentSession／InteractiveMode／faux provider regression：未修版 RED 1 fail，修正版 GREEN 1 pass，後續合法 Deep search accepted；TUI 以 `waitForScrollBuffer` 驗證 stage。
+- extension targeted 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。未修改 `pi-main/`，不改其他 workflow；殘餘風險另行記錄，下一步只有使用者重跑真實 PI session。

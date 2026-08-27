@@ -1238,12 +1238,12 @@ S18 JUDGE
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ LAYER 1 — INTERFACE                          │
+│ LAYER 1：INTERFACE                          │
 │ PI TUI / CLI / REST / Web / IDE              │
 └───────────────────────┬──────────────────────┘
                         ▼
 ┌──────────────────────────────────────────────┐
-│ LAYER 2 — ORCHESTRATION                      │
+│ LAYER 2：ORCHESTRATION                      │
 │ Workflow Orchestrator                        │
 │ State Machine                                │
 │ Skill Dispatcher                             │
@@ -1252,7 +1252,7 @@ S18 JUDGE
 └───────────────────────┬──────────────────────┘
                         ▼
 ┌──────────────────────────────────────────────┐
-│ LAYER 3 — INTELLIGENCE                       │
+│ LAYER 3：INTELLIGENCE                       │
 │ Intent                                      │
 │ Grill                                        │
 │ Knowledge Understanding                      │
@@ -1262,7 +1262,7 @@ S18 JUDGE
 └───────────────────────┬──────────────────────┘
                         ▼
 ┌──────────────────────────────────────────────┐
-│ LAYER 4 — KNOWLEDGE & EVIDENCE               │
+│ LAYER 4：KNOWLEDGE & EVIDENCE               │
 │ Light Discovery                              │
 │ Deep Retrieval                               │
 │ Wiki / Code Graph / ADR / Rules              │
@@ -1271,7 +1271,7 @@ S18 JUDGE
 └───────────────────────┬──────────────────────┘
                         ▼
 ┌──────────────────────────────────────────────┐
-│ LAYER 5 — EXECUTION                          │
+│ LAYER 5：EXECUTION                          │
 │ implement                                    │
 │ TDD                                          │
 │ Subagents                                    │
@@ -1281,7 +1281,7 @@ S18 JUDGE
 └───────────────────────┬──────────────────────┘
                         ▼
 ┌──────────────────────────────────────────────┐
-│ LAYER 6 — INFRASTRUCTURE                     │
+│ LAYER 6：INFRASTRUCTURE                     │
 │ Tool Runtime                                 │
 │ Artifact Store                               │
 │ LLM Adapter                                  │
@@ -1572,13 +1572,13 @@ Implement
 
 我建議你把這 11 條直接寫進正式的 ADR 文件集。
 
-### ADR-001 — Workflow Sovereignty
+### ADR-001：Workflow Sovereignty
 
 **Workflow 擁有 State Transition 的最終控制權，LLM 不得自行跳過 Mandatory Stage。**
 
 ---
 
-### ADR-002 — Two-Stage Knowledge Retrieval
+### ADR-002：Two-Stage Knowledge Retrieval
 
 所有工程任務採：
 
@@ -1593,13 +1593,13 @@ Light Discovery 供 Grill 建立背景；Deep Retrieval 與 Knowledge Understand
 
 ---
 
-### ADR-003 — Mandatory Grill Gate
+### ADR-003：Mandatory Grill Gate
 
 每個 Engineering Task 必須經過 Grill。
 
 ---
 
-### ADR-004 — Human Decision Boundary
+### ADR-004：Human Decision Boundary
 
 Grill 可以提出 Recommendation，但：
 
@@ -1611,7 +1611,7 @@ Recommendation ≠ Decision
 
 ---
 
-### ADR-005 — Evidence-Driven Engineering
+### ADR-005：Evidence-Driven Engineering
 
 所有重大設計決策必須具有 Evidence。
 
@@ -1621,7 +1621,7 @@ Evidence → Context → ADR → Spec → Code
 
 ---
 
-### ADR-006 — Workflow-Native Skills
+### ADR-006：Workflow-Native Skills
 
 以下 Skill 為 Mandatory：
 
@@ -1637,19 +1637,19 @@ TDD
 
 ---
 
-### ADR-007 — TDD Enforcement
+### ADR-007：TDD Enforcement
 
 任何 Code implementation 都必須經過 TDD。
 
 ---
 
-### ADR-008 — Independent Review
+### ADR-008：Independent Review
 
 Implementation Agent 不得擔任其自身最終 Reviewer。
 
 ---
 
-### ADR-009 — Evidence-Driven Repair
+### ADR-009：Evidence-Driven Repair
 
 Validation / Review Fail 必須：
 
@@ -1663,7 +1663,7 @@ Evidence
 
 ---
 
-### ADR-010 — PI as Runtime, Forge as Workflow
+### ADR-010：PI as Runtime, Forge as Workflow
 
 Forge 不 Fork PI Core。
 
@@ -1677,7 +1677,7 @@ PI 官方目前也維持這種「core minimal、透過 extension/skills/package 
 
 ---
 
-### ADR-011 — Grill Completion Terminal Boundary
+### ADR-011：Grill Completion Terminal Boundary
 
 成功 `forge_grill_complete` 使用既有 `AgentToolResult.terminate: true` 封口當前代理回合；`NEEDS_CONFIRMATION` 使用獨立 display-only custom message 進入 `WAIT_USER`，`READY_FOR_DEEP` 進入既有深度知識分流。完整決策見 `docs/adr/ADR-0011-grill-completion-terminal-boundary.md` 與 `docs/adr/ADR-0012-display-only-custom-message.md`。
 
@@ -1793,11 +1793,17 @@ PI 官方目前也維持這種「core minimal、透過 extension/skills/package 
 
 > **v3：Knowledge First。**
 
-> **v4：Two-Stage Knowledge First — Light Discovery → Grill → Deep Knowledge。**
+> **v4：Two-Stage Knowledge First：Light Discovery → Grill → Deep Knowledge。**
 
 最重要的是，這個 v4 **非常適合從乾淨的 PI 0.83.0 開始做**：不要把 Forge 做成一堆 Prompt；預設不要修改 PI core，而是把 PI 當底層 Agent Runtime，再在其上建立一個 **Forge Workflow Runtime Extension/Package**。唯一例外是使用者核准且由 ADR-0012／Plan A 限定的 display-only 最小 core 變更，其他 core 變更仍禁止。PI 本身提供 Extension、Skill、Package、SDK 等擴充點；目前官方 coding-agent package 也就是透過這些機制來保持核心精簡。([GitHub][1])
 
 另外，PI 的官方文件目前可查到的 `coding-agent` 主線 package 版本顯示為 **0.82.1**，所以如果你手上的基線確定是 **0.83.0**，我會把「0.83.0」視為你的實際開發基線，而不是假設 GitHub 主線目前已經對應 0.83.0。([GitHub][4])
 
 **下一步最適合直接做的不是再修改架構，而是把這份 v4 轉成一份可以交給 Coding Agent 執行的 `CONTEXT.md + ADR.md + Phase 0~N Implementation Plan`，然後從乾淨 PI 0.83.0 開始逐階段實作。**
+
+### 2026-08-27 Deep stale-result loop 窄化 amendment
+
+本 amendment 只處理「過期的 Deep Retrieval 完成結果已忽略。」反覆循環，其他流程與 Deep semantic contract 維持不變。初始 Deep stage panel 使用 `displayOnly`，只讓訊息可見且可持久化，不參與 agent-loop；input handler 只預載本回合 Deep tools，不提前消費 pending identity；matching user `message_start` 才消費 identity；pending 期間 Deep tool_call fail-closed。工具預載與 delivery 授權分離，避免合法 identity 到達時工具尚未註冊。
+
+這個窄化 amendment 不改 Grill completion、WAIT_USER、cancel/retry/switch、relevance、state transition、snapshot、合法 Deep 後續、其他 Deep delivery 或 `pi-main/`。自動化已完成：正式 RED 1 fail、GREEN 1 pass、extension 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。真實 PI v0.83.0 僅完成啟動 smoke check，尚未完成原始情境人工驗收。
 

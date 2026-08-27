@@ -355,7 +355,7 @@
   <header>
     <p class="eyebrow">FORGE RUNTIME / ARCHITECTURE + DELIVERY</p>
     <h1>目前已完成的流程，從收到需求一路走到交接</h1>
-    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/26 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
+    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/27 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
   </header>
 
   <main>
@@ -449,7 +449,7 @@
               <li>使用者等待、回答、重試、取消與切換。</li>
               <li>完成後真正停止，畫面訊息不誤送回模型。</li>
               <li>不同輪次的資料分開，舊訊息不能把流程拉回去。</li>
-              <li>Deep Retrieval、Knowledge Understanding 與 Evidence Package 的最小交接；完整 <code>npm test</code> 209/209 通過，<code>npm run check</code> exit 0，並有 diff-check 記錄。</li>
+              <li>Deep Retrieval、Knowledge Understanding 與 Evidence Package 的最小交接；完整 <code>npm test</code> 212/212 通過，<code>npm run check</code> exit 0。</li>
               <li>Deep Retrieval 與 Knowledge Understanding 的輸出守門：只保留合法工具呼叫，不讓實作內容提前出現。</li>
             </ul>
           </article>
@@ -477,7 +477,7 @@
         <div class="milestone">
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
-            <p class="date">08/07–08/10</p>
+            <p class="date">08/07 至 08/10</p>
             <h3>先完成骨架、入口與基本畫面</h3>
             <p><strong>做了什麼：</strong>先把工作順序、需求分流、找資料、查證和等待人決定的規則定下來，也接上狀態、訊息和選單。</p>
             <p><strong>設計考量：</strong>先守住固定流程和人類決策邊界，讓模型只能提出建議，不能自己跳過等待。</p>
@@ -490,7 +490,7 @@
         <div class="milestone">
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
-            <p class="date">08/11–08/16</p>
+            <p class="date">08/11 至 08/16</p>
             <h3>查證與等待流程變得可靠</h3>
             <p><strong>做了什麼：</strong>完成查證工具、使用者確認、重試、取消、切換，以及完成遺漏時的復原。</p>
             <p><strong>設計考量：</strong>等待、重試和取消都可能改變流程狀態，所以必須讓流程可回復，也不能把不完整資料誤當成已確認。</p>
@@ -503,7 +503,7 @@
         <div class="milestone teal">
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
-            <p class="date">08/17–08/20</p>
+            <p class="date">08/17 至 08/20</p>
             <h3>保住送出的內容，並正確結束一輪</h3>
             <p><strong>做了什麼：</strong>讓完整查證指令原樣送出，完成後真的停止；畫面和紀錄保留需要看的訊息，但不再誤送回模型。</p>
             <p><strong>設計考量：</strong>送出的內容和畫面顯示是兩件事；既要保留完整指令，也要用明確狀態表示流程已結束。</p>
@@ -529,7 +529,7 @@
         <div class="milestone violet">
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
-            <p class="date">08/21–08/22</p>
+            <p class="date">08/21 至 08/22</p>
             <h3>入口分流與第一階段找資料完成</h3>
             <p><strong>做了什麼：</strong>把規則和使用者文字分開，完成只找檔名與基本資料的第一階段搜尋，每個來源最多列三筆並固定排序。</p>
             <p><strong>設計考量：</strong>入口分流不能被使用者文字污染；第一階段只需快速找到候選檔案，避免把尚未查證的內容當成結論。</p>
@@ -593,10 +593,21 @@
             <p><strong>驗證：</strong>先以 <code>FORBIDDEN_IMPLEMENTATION_MARKER</code> 形成紅燈，修正後 targeted 9/9；完整 <code>npm test</code> 209/209 通過，<code>npm run check</code> exit 0，production review 沒有功能問題。</p>
           </article>
         </div>
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/27</p>
+            <h3>修正過期 Deep 完成結果反覆被忽略</h3>
+            <p><strong>做了什麼：</strong>只處理 Deep Retrieval stale completion 循環，讓初始 Deep stage panel 只顯示、不參與 agent-loop，並保留 identity 到正確的使用者訊息開始時才消費。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>Deep stage panel 先成為 steer，舊 identity completion 先執行，反覆顯示「過期的 Deep Retrieval 完成結果已忽略。」。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>input 只預載工具；matching user <code>message_start</code> 才清 pending；pending 期間阻擋 Deep tool_call，避免工具預載與 delivery 授權互相干擾。</p>
+            <p><strong>驗證：</strong>正式 RED 1 fail、GREEN 1 pass；extension 117/117、PI integration 10/10、完整 <code>npm test</code> 212/212、<code>npm run check</code> exit 0。真實 PI v0.83.0 僅完成啟動 smoke check，人工情境尚未驗收。</p>
+          </article>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer>更新日期：2026/08/26。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、docs/PLAN-A.md、docs/handoff.md、agent-state/deep-stage-output-guard-20260826.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
+  <footer>更新日期：2026/08/27。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、docs/PLAN-A.md、docs/handoff.md、agent-state/deep-stale-result-loop-20260826.md、docs/tickets/deep-stale-result-loop-20260826.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
 </body>
 </html>

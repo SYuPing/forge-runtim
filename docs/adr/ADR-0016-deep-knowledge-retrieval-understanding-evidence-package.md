@@ -2,7 +2,7 @@
 title: Deep Knowledge Retrieval、Understanding 與 Evidence Package
 type: adr
 scope: Forge Runtime v4 Deep Knowledge semantic flow
-updated: 2026-08-26
+updated: 2026-08-27
 source: FORGE_RUNTIME_Arch_v4.md、ADR-0015、CONTEXT.md、docs/PLAN-A.md
 status: accepted-and-implemented
 ---
@@ -113,7 +113,7 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
 - `FORGE_RUNTIME_Arch_v4.md`：Workflow 主權與人類決策邊界。
 - `CONTEXT.md`：2026-08-24 核准的 Deep 兩階段與 Evidence Package 設計。
 - `docs/PLAN-A.md`：本 ticket 的建置範圍、測試矩陣與驗證命令。
-- 使用者於 2026-08-24 逐項確認 Q1–Q21；模型派發構想後續明確撤回，改採主 session active model。
+- 使用者於 2026-08-24 逐項確認 Q1 至 Q21；模型派發構想後續明確撤回，改採主 session active model。
 
 ### 首次 Grill→Deep identity handoff 修正（2026-08-25）
 
@@ -128,3 +128,10 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
 - 工作期間 HEAD 由外部移至並同步 `origin/main` 的 `324501a0412bbfdead9642aeb845bb26192b57cc`，不是本代理 commit；目前本 ticket 剩九檔 tracked 修改未提交。
 - 隔離 detached worktree 只套用九檔 diff 後，`npm run check` exit 0，四個關鍵測試均 4/4 exit 0；logs：`forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。主工作樹 full 仍 209/209。
 - 未解仍只有使用者尚未在真實 PI session 重跑原始情境；沒有 blocker。
+
+### Stale-result loop 同步（2026-08-27）
+
+- 本次只修正 stale completion 反覆循環，不改 Deep 的 semantic contract、identity 三元組、Evidence Package、合法後續或人類決策邊界。
+- 只有初始 Deep stage panel 使用 `displayOnly`；input 僅預載工具，matching user `message_start` 才消費 pending identity；pending 期間 Deep tool_call fail-closed。這是 delivery／時序邊界修正，不是 semantic flow 變更。
+- 自動化驗證：正式 RED 1 fail、GREEN 1 pass；extension 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。
+- 真實 PI v0.83.0 已從 repo root 以 `.\\pi-main\\pi-test.bat --approve` 啟動，啟動畫面列出 `forge-runtime.ts`；尚未捕捉原始 stale 情境輸入／結果，人工情境驗收仍未完成。

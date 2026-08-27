@@ -981,7 +981,7 @@ test("Extension_WhenReadyCompletionExitsGrill_ShouldTerminateToolTurnAndEnterDee
 		rmSync(rootDir, { force: true, recursive: true });
 	});
 
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read", "write"] });
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read", "write"], reenterFollowUps: true });
 	const startResult = await harness.sendInput("請幫我測試 ReadyCompletionNeedle ready-completion-evidence-candidate.ts");
 	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
 	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
@@ -1151,7 +1151,7 @@ test("Integration_WhenDeepSearchRoundExceedsTwoMiB_ShouldRejectWithoutMutation",
 	);
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
 
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
 	const startResult = await harness.sendInput("請幫我測試 DeepBudgetGroupOne deep-budget-seed.ts");
 	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
 	assert.ok(candidateId, "Expected the public Grill invocation to expose a snapshot candidate id");
@@ -1280,7 +1280,7 @@ test("Integration_WhenGrillEvidenceExceeds256KiB_ShouldRejectWithoutMutation", a
 	);
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
 
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
 	const startResult = await harness.sendInput(
 		"請幫我測試 GrillEvidenceLimitNeedle grill-limit-ok.ts grill-limit-over.md",
 	);
@@ -2167,6 +2167,7 @@ async function createExtensionHarness(options: {
 	newSession?: (options?: NewSessionOptions) => Promise<{ cancelled: boolean }>;
 	reenterReplacementSession?: boolean;
 	reenterFollowUps?: boolean;
+	deferFollowUpInput?: boolean;
 	withoutFollowUpBridge?: boolean;
 	withoutRegisterTool?: boolean;
 	withoutGetActiveTools?: boolean;
@@ -2195,13 +2196,22 @@ async function createExtensionHarness(options: {
 	const replacementSessionInputs: ReplacementSessionInput[] = [];
 	let releaseDeepHandoff!: () => void;
 	let markDeepHandoffEntered!: () => void;
+	let resolveFollowUpSent!: () => void;
+	let releaseFollowUpInput!: () => void;
 	const deepHandoffEntered = new Promise<void>((resolve) => {
 		markDeepHandoffEntered = resolve;
 	});
 	const deepHandoffRelease = new Promise<void>((resolve) => {
 		releaseDeepHandoff = resolve;
 	});
+	const followUpSent = new Promise<void>((resolve) => {
+		resolveFollowUpSent = resolve;
+	});
+	const followUpInputRelease = new Promise<void>((resolve) => {
+		releaseFollowUpInput = resolve;
+	});
 	const shouldReenterFollowUps = options.reenterFollowUps === true;
+	const shouldDeferFollowUpInput = options.deferFollowUpInput === true;
 	const shouldReenterReplacementSession = options.reenterReplacementSession === true;
 
 	const fakePi = {
@@ -2243,7 +2253,11 @@ async function createExtensionHarness(options: {
 							.join("\n");
 			observedUserMessages.push(normalizedContent);
 			observedUserMessageCalls.push({ content: normalizedContent, options });
-			if (shouldReenterFollowUps && options?.deliverAs === "followUp") {
+			if (options?.deliverAs === "followUp") {
+				resolveFollowUpSent();
+				if (shouldDeferFollowUpInput) await followUpInputRelease;
+			}
+			if ((shouldReenterFollowUps || shouldDeferFollowUpInput) && options?.deliverAs === "followUp") {
 				const inputHandler = eventHandlers.get("input");
 				assert.ok(inputHandler, "Expected input handler to be registered for followUp re-entry");
 				const result = await inputHandler(
@@ -2357,6 +2371,8 @@ async function createExtensionHarness(options: {
 		observedUserMessages,
 		observedModelRequests,
 		reenteredFollowUpEvents,
+		followUpSent,
+		releaseFollowUpInput,
 			replacementSessionInputs,
 		deepHandoffEntered,
 		releaseDeepHandoff,
@@ -2523,7 +2539,7 @@ test("Extension_WhenCompletionReadyForDeep_ShouldAutomaticallyEnterDeepKnowledge
 	t.after(() => {
 		rmSync(rootDir, { force: true, recursive: true });
 	});
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read", "write"] });
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read", "write"], reenterFollowUps: true });
 	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
 	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
 	const completionTool = harness.registeredTools.get("forge_grill_complete");
@@ -2595,6 +2611,89 @@ test("整合測試_Grill完成READY_FOR_DEEP_Should透過FollowUp傳遞DeepAttem
 		sourceRoundId: "grill-1",
 		phase: "DEEP_KNOWLEDGE_RETRIEVAL",
 	});
+});
+
+test("Extension_WhenGrillCompletionQueuesDeepIdentity_ShouldEnableDeepToolsOnlyAfterFollowUpStarts", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({
+		cwd: rootDir,
+		initialActiveTools: ["read"],
+		deferFollowUpInput: true,
+	});
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(evidenceTool?.execute);
+	assert.ok(completionTool?.execute);
+	await evidenceTool.execute("call-deep-activation-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const completion = completionTool.execute(
+		"call-deep-activation-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "證據足以進入 deep knowledge。", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	await harness.followUpSent;
+	assert.notDeepEqual(
+		harness.getActiveTools(),
+		["forge_deep_search", "forge_deep_retrieval_complete"],
+		"followUp 尚未進入 input 前不得啟用 Deep Retrieval tools",
+	);
+
+	harness.releaseFollowUpInput();
+	await completion;
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+});
+
+test("Extension_WhenDeepHandoffIsPending_ShouldKeepDeepToolsUnavailableAndIgnoreStaleEvent", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, deferFollowUpInput: true });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(evidenceTool?.execute);
+	assert.ok(completionTool?.execute);
+	await evidenceTool.execute("call-pending-deep-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+
+	const completion = completionTool.execute(
+		"call-pending-deep-completion",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "證據足以進入 deep knowledge。", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	await harness.followUpSent;
+
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	await harness.messageEndHandler?.(
+		{ message: { role: "assistant", content: [{ type: "text", text: "stale completion" }] } },
+		harness.buildContext(),
+	);
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.deepEqual(harness.getActiveTools(), beforeTools);
+	assert.notDeepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+
+	harness.releaseFollowUpInput();
+	await completion;
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
 });
 
 test("Integration_WhenNewRequirementAppears_ShouldRouteWorkflowToWaitUser", async (t) => {
@@ -2794,6 +2893,8 @@ test("Extension_WhenDeepHandoffAwaits_ShouldCloseGrillBoundaryBeforeAwaitAndIgno
 	const harness = await createExtensionHarness({
 		cwd: rootDir,
 		initialActiveTools: ["read", "write"],
+		reenterFollowUps: true,
+		deferFollowUpInput: true,
 		blockDeepHandoff: true,
 	});
 	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
@@ -2821,20 +2922,23 @@ test("Extension_WhenDeepHandoffAwaits_ShouldCloseGrillBoundaryBeforeAwaitAndIgno
 
 	assert.deepEqual(
 		harness.getActiveTools(),
-		["forge_deep_search", "forge_deep_retrieval_complete"],
-		"第一個 await 前必須維持 Retrieval tools",
+		["forge_grill_evidence", "forge_grill_complete"],
+		"identity-bearing followUp 進入 input 前必須維持原本 saved tools",
 	);
 	await harness.messageEndHandler?.(
 		{ message: { role: "assistant", content: [{ type: "text", text: "遲到的舊回合訊息" }] } },
 		harness.buildContext(),
 	);
 	assert.doesNotMatch(harness.observedMessages.join("\n"), /GRILL_COMPLETION_REQUIRED|RECOVERY_REQUIRED/);
-	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+	assert.deepEqual(harness.getActiveTools(), ["forge_grill_evidence", "forge_grill_complete"]);
 
 	harness.releaseDeepHandoff();
+	await harness.followUpSent;
+	harness.releaseFollowUpInput();
 	const completion = await completionPromise;
 	assert.equal(completion.details.status, "READY_FOR_DEEP");
 	assert.ok(harness.observedStatuses.some((status) => status.includes("DEEP_KNOWLEDGE_RETRIEVAL")));
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
 });
 
 test("Extension_WhenSourceChangesAfterEvidenceFetch_ShouldCompleteDeepFromSnapshotOnly", async (t) => {
@@ -3345,7 +3449,7 @@ test("Extension_WhenStructuredGrillResultProvided_ShouldRenderWaitUserFromResult
 test("Extension_WhenStructuredGrillResultIsReadyForDeep_ShouldContinueWithoutWaitUser", async (t) => {
 	const rootDir = createTempRoot();
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
-	const harness = await createExtensionHarness({ cwd: rootDir });
+	const harness = await createExtensionHarness({ cwd: rootDir, reenterFollowUps: true });
 	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
 	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
 	assert.ok(evidenceTool?.execute, "Expected forge_grill_evidence to expose execute");
@@ -4253,7 +4357,7 @@ test("Extension_WhenDeepSearchQueryIsWhitespace_ShouldRejectWithoutChangingRetri
 	const rootDir = createTempRoot();
 	writeWorkspaceFile(rootDir, "code_base/src/deep-blank-query.ts", "// DeepBlankQueryNeedle candidate.\n");
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
 	const startResult = await harness.sendInput("請幫我測試 DeepBlankQueryNeedle deep-blank-query.ts");
 	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
 	assert.ok(candidateId);
@@ -4318,7 +4422,7 @@ test("Extension_WhenDeepCompletionNeedsDecisionReferencesUnknownEvidence_ShouldR
 	const rootDir = createTempRoot();
 	writeWorkspaceFile(rootDir, "code_base/src/deep-unknown-evidence.ts", "// DeepUnknownEvidenceNeedle candidate.\n");
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
 	const startResult = await harness.sendInput("請幫我測試 DeepUnknownEvidenceNeedle deep-unknown-evidence.ts");
 	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
 	assert.ok(candidateId);
@@ -5033,7 +5137,7 @@ test("Integration_WhenGrillRoundEvidenceExceedsTwoMiB_ShouldRejectNinthFetchWith
 		writeWorkspaceFile(rootDir, relativePath, contentMarker + "X".repeat(262144 - Buffer.byteLength(contentMarker, "utf8")));
 	}
 
-	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"], reenterFollowUps: true });
 	const initialResult = await harness.sendInput(`/grill-run 請幫我測試 ${marker}`);
 	const candidateIds = [...new Set(((initialResult as { text?: string }).text ?? "").match(/\bev-[0-9a-f]{64}\b/g) ?? [])];
 	assert.equal(candidateIds.length, 9, "應公開九筆可定位的 snapshot candidate");

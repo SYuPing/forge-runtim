@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-26
+updated: 2026-08-27
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: implemented-and-verified
+status: automated-verified-awaiting-real-session
 ---
 
 # Forge Runtime v4 開發記錄
@@ -147,3 +147,23 @@ status: implemented-and-verified
 - 重大過程：確認原 assistant prose guard 只覆蓋 Grill；新增 `hasActiveDeepAttempt`，在 Deep active attempt 的 `message_update` 與 `message_end` 清空 `text`／`thinking`，final message 只保留 toolCall。未修改 `pi-main/`。
 - 驗證：先由 `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue` 以 `FORBIDDEN_IMPLEMENTATION_MARKER` 形成紅燈（exit 1），實作後 targeted 9/9；修正兩個 fixture／transition 測試契約後，`npm test` 209 passed/0 failed/0 skipped，`npm run check` exit 0；production review 零 functional findings，scope on target。
 - 狀態：ticket `deep-stage-output-guard-20260826` 已完成並驗證。未解風險與後續邊界見 [`lesson_learn.md`](./lesson_learn.md) 與 [`docs/handoff.md`](../docs/handoff.md)。
+
+## 2026-08-26 Deep identity handoff activation 修正完成
+
+- 目標：避免 Grill completion 後 Deep tools 在 identity-bearing followUp 進入 `input` 前被提前啟用，造成舊 identity 呼叫先被 stale reject。
+- 重大決策與實作：Deep Retrieval activation 已從 `continueDeepKnowledge` 延後至 exact `pendingReplayInvocation` input gate；gate 先清 marker，再啟用 Deep Retrieval tools，之後沿用 `{ action: "continue" }`。保留 identity 三元組、followUp transport、stale quiet reject、主 session 與既有 verifier，未修改 `pi-main/`。
+- 驗證：新增 2 個 timing regression；targeted 117/117、完整 `npm test` 211/211、`npm run check` exit 0。
+- 狀態：ticket `deep-followup-identity-activation-20260826` 已完成實作與驗證；本輪未發現新 bug。未解風險與證據見 [`docs/handoff.md`](../docs/handoff.md) 與 [`agent-state/deep-followup-identity-activation-20260826.md`](../agent-state/deep-followup-identity-activation-20260826.md)。
+
+## 2026-08-26 Final review medium finding 修正完成
+
+- 重大修正：`requireDeepToolBoundary` 必須同時具備 tool boundary 與 `sendUserMessage`，才能完成 Deep handoff；identity-bearing followUp 無法送出時不得形成半完成狀態。
+- 修正後驗證：targeted 117/117、`npm test` exit 0、`npm run check` exit 0；本輪未發現新 bug。
+
+## 2026-08-27 Deep stale-result loop 完成
+
+- 目標：只修正 Deep Retrieval stale completion 反覆循環，保留其他 workflow 行為。
+- 重大實作：Deep stage panel 改為 `displayOnly`；input 僅預載工具；matching user `message_start` 才消費 pending identity；pending 期間阻擋 Deep tool_call；工具預載與 delivery 授權分離。
+- 驗證：真實 AgentSession／InteractiveMode／faux provider regression 未修版 RED 1 fail、修正版 GREEN 1 pass，後續合法 Deep search accepted；extension targeted 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。logs 位於 `forge-runtime/artifacts/test-logs/`。
+- 狀態：`deep-stale-result-loop-20260826` 已完成自動驗證，等待使用者在真實 PI session 重跑原始情境；review 僅限指定 scope，未改 `pi-main/`。
+- 真實 PI v0.83.0 已從 repo root 以 `.\pi-main\pi-test.bat --approve` 啟動，啟動畫面列出 `forge-runtime.ts`；此為啟動 smoke check，尚未完成原始情境人工驗收。

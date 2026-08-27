@@ -211,7 +211,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return false;
 		};
 		const requireDeepToolBoundary = (ctx: CommandContext) => {
-			if (canEnforceToolBoundary()) {
+			if (canEnforceToolBoundary() && typeof pi.sendUserMessage === "function") {
 				return true;
 			}
 			ctx.ui?.notify?.("Forge 無法安全限制 Deep 工具面，已拒絕進入 Deep。", "warn");
@@ -1180,6 +1180,17 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		},
 	});
 
+	pi.on?.("message_start", (event: UserMessageEvent) => {
+		if (event.message?.role !== "user" || !pendingReplayInvocation) {
+			return;
+		}
+		const messageText = event.message.content?.map((block) => block.text).join("") ?? "";
+		if (messageText.trim() !== pendingReplayInvocation) {
+			return;
+		}
+		pendingReplayInvocation = undefined;
+	});
+
 		pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx?: CommandContext) => {
 			if (event.message?.role !== "assistant") {
 				return;
@@ -1238,6 +1249,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (grillToolNames.includes(event.toolName)) {
 				return hasActiveGrillAttempt() ? undefined : { block: true };
 			}
+			if (deepRetrievalToolNames.includes(event.toolName) || deepUnderstandingToolNames.includes(event.toolName)) {
+				return !pendingReplayInvocation && hasActiveDeepAttempt() ? undefined : { block: true };
+			}
 			if (!pendingGrillRun && sessionState.current().stage !== "WAIT_USER") {
 				return;
 			}
@@ -1252,7 +1266,11 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		const rawText = typeof event.text === "string" ? event.text : "";
 		const routingText = rawText.trim();
 		if (routingText === pendingReplayInvocation) {
-			pendingReplayInvocation = undefined;
+			if (sessionState.currentDeepAttempt()?.phase === "DEEP_KNOWLEDGE_RETRIEVAL") {
+				activateDeepRetrievalTools();
+			} else if (sessionState.currentDeepAttempt()?.phase === "KNOWLEDGE_UNDERSTANDING") {
+				activateDeepUnderstandingTools();
+			}
 			return { action: "continue" as const };
 		}
 			const grillRun = routingText === "/grill-run" || routingText.startsWith("/grill-run ");
@@ -1902,13 +1920,12 @@ async function continueDeepKnowledge(
 		if (!requireDeepToolBoundary(ctx)) {
 			return false;
 		}
-		onProceedToDeepKnowledge?.();
 		const nextState = sessionState.beginDeepKnowledge(decisionSummary);
 		const deepAttempt = sessionState.currentDeepAttempt();
 		if (!deepAttempt) {
 			throw new Error("Deep Knowledge attempt 未建立");
 		}
-		await publishState(pi, ctx, nextState);
+		await publishState(pi, ctx, nextState, { deliverAs: "displayOnly" });
 		const invocation = `Deep Knowledge 已開始。請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
 		setPendingReplayInvocation(invocation);
 		await pi.sendUserMessage?.(invocation, { deliverAs: "followUp" });

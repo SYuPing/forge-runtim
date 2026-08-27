@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-26
+updated: 2026-08-27
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: implemented-and-verified
+status: automated-verified-awaiting-real-session
 ---
 
 # Forge Runtime v4 Context
@@ -343,3 +343,41 @@ status: implemented-and-verified
 - 修正已完成：新增 `hasActiveDeepAttempt`；Deep Retrieval／Understanding active attempt 的串流清空 `text`／`thinking`，final message 只保留合法 `toolCall`。
 - 驗證完成：先由 `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue` 以 `FORBIDDEN_IMPLEMENTATION_MARKER` 形成紅燈（exit 1），修正後 targeted 9/9；修正 retrieval／understanding fixture schema 與過時 transition assertion 後，`npm test` 209 passed/0 failed/0 skipped，`npm run check` exit 0。production review 零 functional findings，scope on target。
 - 不新增 Plan B、不修改 `pi-main/`。Grill 的 `message_end` 含 toolCall 分支仍依賴 `message_update` 先清文字，列為未證實後續風險，不在本 ticket 擴修。
+
+## 2026-08-26 Deep identity handoff activation 修正設計核准
+
+- Runtime observation：`forge_grill_complete` 接受後已正確進入 `DEEP_KNOWLEDGE_RETRIEVAL`，但新 Deep attempt 建立後立即啟用 Deep tools；identity-bearing `followUp` 要等目前 assistant turn 結束才進入 `input`，因此空窗期間模型以舊 identity 呼叫，全部被 stale guard 安靜拒絕，followUp 到達後重試才成功。
+- 已核准最小修正：移除／延後當下的 `activateDeepRetrievalTools()`；在既有 `pi.on("input", ...)` 的 exact pending replay invocation 條件內，先清除 `pendingReplayInvocation`，再啟用 Deep Retrieval tools，之後沿用 `{ action: "continue" }`。
+- 保留 identity 三元組、stale quiet reject、followUp transport、主 session 與既有 verifier；不修改 `pi-main/`。
+- 明確不做：把 identity 放入 completion tool result、新增 custom loop／sequential 設定／新狀態機／UI、Plan B，以及 Grill `message_end` 含 toolCall 的文字清除 sibling risk。
+- 脆弱假設已由 test harness 驗證：followUp bridge 會在下一次模型推論前重入 input handler；exact marker 可作一次性 gate。
+- 本 ticket 狀態：design-approved-ready-for-red（修正前歷史狀態）。預計 production 只改 `forge-runtime/extensions/forge-runtime.ts`，測試只改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`；先紅燈，再做最小 production 修正。
+
+## 2026-08-26 Deep identity handoff activation 修正完成
+
+- 本 ticket 已完成：Deep Retrieval activation 已從 `continueDeepKnowledge` 延後至既有 `pi.on("input", ...)` 的 exact `pendingReplayInvocation` input gate；gate 先清除 marker，再啟用 Deep Retrieval tools，最後沿用 `{ action: "continue" }`。
+- 保留 identity 三元組、stale quiet reject、followUp transport、主 session 與既有 verifier；未修改 `pi-main/`，未新增 custom loop、sequential 設定、新狀態機、UI 或 Plan B。
+- 新增 2 個 timing regression；targeted 117/117、完整 `npm test` 211/211、`npm run check` exit 0。修改與測試證據見本 ticket、`docs/PLAN-A.md`、`docs/handoff.md` 與 agent-state。
+- 狀態：implemented-and-verified。本輪未發現新 bug。
+- 未解風險：Grill `message_end` 含 toolCall 的文字清除 sibling risk 仍不在本 ticket，且未由本輪驗證證實；另保留使用者尚未在真實 PI session 重跑原始情境的既有非 blocker。
+
+## 2026-08-27 Deep stale-result loop 修正完成
+
+- 唯一目標：修正「過期的 Deep Retrieval 完成結果已忽略。」反覆循環，不擴大到其他流程。
+- 根因：Deep identity followUp 在 input preflight 就清 pending；Deep stage panel streaming 可成為 steer 並先 drain，舊 identity completion 因而先執行並被 stale guard 忽略。
+- 修正：初始 Deep stage panel 使用 `displayOnly`；input 只預載本回合 Deep tools，不清 pending；matching user `message_start` 才清 pending；pending 期間 Deep tool_call block。工具預載與 delivery 授權分離，避免 `Tool forge_deep_search not found`。
+- 真實 AgentSession／InteractiveMode／faux provider regression：未修版正式 RED 1 fail；修正版正式 GREEN 1 pass，後續合法 Deep search accepted。TUI 以 `waitForScrollBuffer` 驗證 Deep stage。
+- 驗證完成：extension targeted 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0；logs 位於 `forge-runtime/artifacts/test-logs/`。
+- review 僅針對指定 scope；未修改 `pi-main/`，無暫時 debug probe。殘餘風險：blocked tool result `terminate=false` 可能延遲 followUp；其他 Deep `/continue` panel 預設 sendMessage 仍可能形成 steer；尚待使用者在真實 PI session 重跑原始情境。
+
+### Final review medium finding 修正
+
+- `requireDeepToolBoundary` 現在必須同時確認 tool boundary 與 `sendUserMessage` 可送出 identity-bearing followUp，兩者缺一不可；若 followUp 無法送出，不宣稱 handoff 已完成，避免半完成狀態。
+- 修正後驗證：targeted 117/117、`npm test` exit 0、`npm run check` exit 0；本輪未發現新 bug。
+
+## 2026-08-26 Deep stale-result loop 修正前狀態
+
+- Ticket：`deep-stale-result-loop-20260826`；目前狀態為 `plan-approved-ready-for-red`，只處理「過期的 Deep Retrieval 完成結果已忽略」反覆循環。
+- 目前不變量：Deep identity 仍為 `attemptId + sourceRoundId + phase`；stale outcome 維持 quiet reject；不改 Grill completion、WAIT_USER、cancel/retry/switch、relevance、state transition、snapshot、合法 Deep 後續或 `pi-main/`。
+- 已核准最小方向：Deep stage panel 使用 `displayOnly`；pending identity 保留到 matching user message 進入 `message_start` 才 consume；pending 期間 Deep tool-call gate 維持不可用。
+- 尚未修改 production 或 tests；先由測試代理建立真實 PI agent-loop queue priority／followUp drain regression 並打紅燈，再進行最小 production 修正。

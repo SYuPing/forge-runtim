@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-26
+updated: 2026-08-27
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
-status: completed
+status: automated-verified-awaiting-real-session
 ---
 
 # Forge Runtime v4 開發教訓
@@ -99,3 +99,21 @@ status: completed
 
 - **Deep 階段誤輸出實作內容**：觀察到 Deep Retrieval 完成並轉 Understanding 的流程出現 RTL；可驗證根因是 `forge-runtime/extensions/forge-runtime.ts` 的 assistant prose guard 只覆蓋 Grill，Deep active 後只更換 active tools，`message_update`／`message_end` 未同時攔 `text`／`thinking`。修復為新增 `hasActiveDeepAttempt`，串流清空兩類文字、final message 只保留合法 toolCall；證據：同一 production 檔、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`，以及 `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue` 紅燈 exit 1 後 targeted 9/9、完整 209 passed/0 failed/0 skipped、`npm run check` exit 0。
 - **可重用教訓**：active tools 排除 write/edit 不能代替輸出邊界；階段契約必須同時覆蓋串流更新與終局事件，並以保留合法 toolCall 的測試固定。Grill `message_end` 含 toolCall 分支仍依賴 `message_update` 先清文字，現列為未證實後續風險，不把它寫成已確認 bug。
+
+## 2026-08-26 Deep identity handoff activation 教訓
+
+- **Deep tools 啟用時序過早**：根因是 `continueDeepKnowledge` 建立新 attempt 後立即啟用 Deep Retrieval tools，但 identity-bearing followUp 尚未進入 `input`；修復為將 activation 延後至 exact `pendingReplayInvocation` input gate，先清 marker 再啟用工具。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、targeted 117/117、完整 `npm test` 211/211、`npm run check` exit 0。
+- **可重用教訓**：內部 followUp 的 lifecycle marker 必須同時作為能力啟用 gate；工具可用性不得早於 identity 正式抵達。新增 2 個 timing regression 固定此順序。本輪未發現新 bug；Grill `message_end` 含 toolCall sibling risk 仍只是未證實的另案風險。
+
+## 2026-08-26 Final review medium finding
+
+- **半完成 handoff**：final review 發現 `requireDeepToolBoundary` 若只確認 tool boundary，可能在 `sendUserMessage` 無法送出 identity-bearing followUp 時誤報 handoff 完成。修復為兩個條件必須同時成立；證據：本 ticket 相關文件、targeted 117/117、`npm test` exit 0、`npm run check` exit 0。
+- **可重用教訓**：跨 lifecycle 的完成條件要涵蓋能力邊界與實際 transport；任一必要步驟失敗都不得回報完成。本輪未發現新 bug。
+
+## 2026-08-27 Deep stale-result loop
+
+- **根因**：Deep identity followUp 在 input preflight 被提前消費；streaming stage panel 仍可成為 steer 並先於 followUp drain，舊 identity completion 因而反覆 stale reject。證據：真實 AgentSession／InteractiveMode／faux provider regression 與 `forge-runtime/artifacts/test-logs/deep-final-formal-red-20260827.log`。
+- **修法教訓**：delivery 與 capability 要分離；工具可預載但 pending identity 必須保留到 matching `message_start`，pending 期間以 tool-call gate fail-closed。stage panel 使用 `displayOnly`，避免參與 agent-loop 排程。證據：`forge-runtime/extensions/forge-runtime.ts`、`deep-final-formal-green-20260827.log`、targeted 117/117、PI integration 10/10。
+- **測試 fixture 教訓**：Grill 必須先 fetch evidence；成功 Deep search 契約是 `details.status=accepted`，不是 `candidateId`；TUI stage 應查 scrollback，避免 30 行 viewport 捲出造成假陰性。證據：`deep-target-extension-suite-20260827.log`、`deep-target-pi-integration-rerun-20260827.log`。
+- **未解風險**：blocked tool result `terminate=false` 可能延遲 followUp；其他 Deep `/continue` panel 預設 sendMessage 仍可能形成 steer。這些是殘餘風險，本輪未擴修；本輪未發現新 bug。
+- **可重用驗收教訓**：真實 PI 啟動成功不等於原始情境驗收完成。人工驗收必須保留原始輸入、關鍵輸出，以及指定錯誤字串是否出現的證據；本次只有 PI v0.83.0 啟動畫面列出 `forge-runtime.ts` 的 smoke check，沒有捕捉 stale 情境輸入／結果，因此仍標記為待人工驗收。證據：`docs/handoff.md`、`docs/tickets/deep-stale-result-loop-20260826.md`、本次啟動 smoke check 記錄。

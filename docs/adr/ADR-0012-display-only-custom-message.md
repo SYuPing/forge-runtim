@@ -49,3 +49,9 @@ Grill 成功完成後，`NEEDS_CONFIRMATION` 必須讓使用者看到 WAIT_USER 
 - 只改 coding-agent ExtensionAPI／session 路徑；`packages/agent/src/harness/*` 不改，跨 package 共用 JSONL 不保證。
 - 不改 Forge 其他 command、retry、cancel、switch、deep knowledge 或一般 state message 的 delivery。
 - 不 fork PI、不提供降版相容層、不回填舊 session、不新增視覺 UI polish。
+
+## 窄化例外同步（2026-08-27）
+
+本 ADR 的 `displayOnly` 契約仍只描述 delivery 語意。Forge 本輪新增的窄化例外是：只有初始 Deep stage panel 使用 `displayOnly`，避免它成為 steer；input handler 僅預載本回合 Deep tools，不消費 pending identity，必須等 matching user `message_start` 才消費。pending identity 存在期間，Deep tool_call fail-closed。其他 Deep delivery 與 semantic contract 不變；此例外不改動 WAIT_USER 或一般 state message。
+
+本輪自動化驗證為 extension 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。真實 PI 目前僅完成啟動 smoke check，尚未捕捉原始 stale 情境的輸入與結果。

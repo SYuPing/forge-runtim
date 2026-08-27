@@ -1,10 +1,10 @@
 ---
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
-scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824
-updated: 2026-08-26
+scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826
+updated: 2026-08-27
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、scoped validation logs
-status: implemented-and-verified
+status: automated-verified-awaiting-real-session
 ---
 
 # Intent route-only LLM 交接
@@ -185,3 +185,106 @@ Grill 只準備決策所需的最小證據。Deep 直接接手 Grill 實際引�
 - 隔離 detached worktree 只套用九檔 diff 後，`npm run check` exit 0，四個關鍵測試均 4/4 exit 0；logs：`forge-runtime/.tmp/deep-isolated4-check-20260825.log`、`forge-runtime/.tmp/deep-isolated4-targeted-20260825.log`。主工作樹 full 仍 209/209。
 - isolated3 不列為通過：正式結果為 209/197/12，12 項皆在 assertion 前因 `ERR_MODULE_NOT_FOUND typebox`，根因是隔離 package-resolution setup 失敗；證據：`forge-runtime/.tmp/deep-isolated3-check-20260825.log`、`forge-runtime/.tmp/deep-isolated3-test-20260825.log`。
 - 未解仍只有使用者尚未在真實 PI session 重跑原始情境；isolated3 caveat 不構成 production blocker。
+
+## Deep identity handoff activation 修正交接（2026-08-26）
+
+### 狀態
+
+implemented-and-verified；已完成實作與驗證。使用者核准的「在 identity followUp 到達前不啟用 Deep tools」修正已落地。
+
+### 根因與核准方案
+
+`forge_grill_complete` 建立新 Deep attempt 後立即啟用 Deep tools，但 identity-bearing followUp 要等目前 assistant turn 結束才進入 `input`。空窗期間模型以舊 identity 呼叫，先被 stale guard 安靜拒絕；followUp 到達後重試才成功。
+
+移除／延後當下的 `activateDeepRetrievalTools()`；在既有 `pi.on("input", ...)` exact pending replay invocation 條件內，先清除 `pendingReplayInvocation`，再啟用 Deep Retrieval tools，之後沿用 `{ action: "continue" }`。
+
+保留 identity 三元組、stale quiet reject、followUp transport、主 session 與既有 verifier；不修改 `pi-main/`。不採 completion tool result 注入 identity，也不新增 custom loop、sequential 設定、新狀態機、UI 或 Plan B。Grill `message_end` 含 toolCall 的文字清除 sibling risk 不在本 ticket。
+
+### 修改檔案與測試
+
+- Production：`forge-runtime/extensions/forge-runtime.ts`。
+- Tests：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。
+- `Extension_WhenGrillCompletionQueuesDeepIdentity_ShouldEnableDeepToolsOnlyAfterFollowUpStarts`
+- `Extension_WhenDeepHandoffIsPending_ShouldKeepDeepToolsUnavailableAndIgnoreStaleEvent`
+
+### 驗證與收尾
+
+Deep Retrieval activation 已從 `continueDeepKnowledge` 延後至 exact `pendingReplayInvocation` input gate；gate 先清 marker，再啟用 Deep Retrieval tools，之後沿用 `{ action: "continue" }`。新增加的 2 個 timing regression 已通過，targeted 117/117、完整 `npm test` 211/211、`npm run check` exit 0。本輪未發現新 bug。
+
+未解風險：Grill `message_end` 含 toolCall 的文字清除 sibling risk 未由本輪證實，仍留待另案；使用者尚未在真實 PI session 重跑原始情境仍是既有非 blocker。未修改 `pi-main/`，不做 Plan B。
+
+### Final review medium finding 修正（2026-08-26）
+
+`requireDeepToolBoundary` 已修正為必須同時具備 tool boundary 與 `sendUserMessage`，才可完成 handoff。若無法送出 identity-bearing followUp，不能只完成工具邊界而宣稱成功，避免半完成狀態。修正後 targeted 117/117、`npm test` exit 0、`npm run check` exit 0；本輪未發現新 bug。
+
+## Deep identity handoff recurring bug 診斷（2026-08-26）
+
+### 真實 runtime 現象
+
+使用者在 Deep stage panel 後，會連續看到多次 stale；直到 identity-bearing followUp 顯示後，流程才恢復正常。這不是單次 stale，而是 identity handoff 與實際 agent loop 排程不同步造成的 recurring bug。
+
+### 根因
+
+- 先前誤把 input event 當成 followUp 已交付；實際上，input 會在 enqueue 前觸發，不能代表 followUp 已經進入 PI agent loop 的可處理佇列（`forge-runtime.ts:1254`、`1914`、`1974`）。
+- `publishState` 未指定 delivery；streaming 時 Deep stage panel 被轉成 `steer`。PI 會優先處理 `steer`，identity-bearing followUp 只有在工具／steering 停止後才 drain（`agent-session.ts:1142`、`1176`、`1456`；`agent-loop.ts:259`、`262`）。
+- 因此 input gate 提前開啟 Deep tools；此時模型仍可能使用舊 identity 呼叫 Deep tools，stale guard 會安靜拒絕，形成下一輪重試的起點。
+
+### stale loop 為何持續
+
+stage panel 的 streaming `steer` 不斷搶在 identity-bearing followUp 前被 PI 處理；每次 gate 提前開啟 Deep tools 後，舊 identity 呼叫都先抵達並被 stale guard 拒絕。由於 followUp 尚未 drain，新的 Deep 回合無法取得 matching identity，於是「舊 identity → stale reject → stage panel／steer → 再次舊 identity」反覆循環；只有 followUp 真正 drain 並顯示後，identity 才匹配，流程才會停止 stale。
+
+### 現有 harness 缺口
+
+現有 fake harness 直接 execute，並把 input 當成 delivery；它沒有模擬真實 PI agent-loop 的 queue priority，因此未覆蓋 `steer` 優先於 followUp、以及 followUp 延後 drain 的時序（`tests/extensions/forge-runtime-extension.test.ts:2616`）。目前測試綠燈不能證明真實 runtime 已覆蓋此 recurring bug。
+
+### 下個 session 建議修正範圍
+
+- Deep stage panel 改為 `displayOnly`，不再以會參與 agent-loop 排程的 `steer` 傳遞。
+- pending identity 保留到 matching user message 實際進入 `message_start`，不可在 input event 階段提前消費。
+- pending identity 期間由 tool-call gate 阻擋 Deep tools。
+- 補上真實 PI agent-loop integration regression，覆蓋 queue priority 與 followUp 實際 drain 時序。
+
+### 本 session 狀態與邊界
+
+本 session 僅完成診斷，尚未修改程式、尚未執行修正後測試；狀態為 `diagnosed-ready-for-red`。仍保留不修改 `pi-main/` 的邊界。若實作時發現 extension surface 無法建立 delivery gate，依 `FORGE_RUNTIME_Arch_v4.md` 停下來回報衝突，不自行跨越該邊界。
+
+## Deep stale-result loop 修正交接（2026-08-26）
+
+### 狀態
+
+Ticket `deep-stale-result-loop-20260826` 已完成規劃核准，狀態為 `plan-approved-ready-for-red`（修正前歷史狀態）；尚未修改程式或執行修正後驗證。
+
+### 唯一目標
+
+只修正「過期的 Deep Retrieval 完成結果已忽略」反覆循環：stage panel 的 `steer` 搶先於 identity-bearing followUp，且 input preflight 太早消費 pending identity／啟用 Deep，導致舊 identity 持續 stale reject。
+
+### Plan A（修正前歷史狀態）
+
+執行 `docs/PLAN-A.md` 的 `Deep stale-result loop` addendum。先由測試代理補真實 PI agent-loop queue priority／followUp drain regression 並打紅燈，再由主代理做最小 production 修正，最後由獨立驗證代理執行 targeted、完整 suite 與 check。無 Plan B。
+
+### 不變量與禁止範圍
+
+- stage panel 改為 `displayOnly`；pending identity 僅在 matching user message 進入 `message_start` 才 consume；pending 期間 Deep tools 不可用。
+- 不改 Grill completion、WAIT_USER、cancel/retry/switch、relevance、state transition、snapshot、合法 Deep 後續、Grill `message_end` sibling risk 或 `pi-main/`。
+
+### 下一步（修正前歷史狀態）
+
+測試代理先建立並執行 RED regression；若 extension surface 無法建立 delivery gate，依 `FORGE_RUNTIME_Arch_v4.md` 停下並回報，不跨越架構邊界。
+
+## Deep stale-result loop 修正完成（2026-08-27）
+
+### 狀態與結論
+
+Ticket `deep-stale-result-loop-20260826` 已 implemented-and-automated-verified-awaiting-real-session。只修正「過期的 Deep Retrieval 完成結果已忽略。」反覆循環；尚待使用者在真實 PI session 重跑原始情境。
+
+### 根因、修正與驗證
+
+- 根因：Deep identity followUp 在 input preflight 就清 pending；Deep stage panel streaming 可成為 steer 並先 drain，舊 identity completion 因而先執行並被 stale guard 忽略。
+- 修正：初始 Deep stage panel 使用 `displayOnly`；input 只預載本回合 Deep tools，不清 pending；matching user `message_start` 才清 pending；pending 期間 Deep tool_call block。工具預載與 delivery 授權分離，避免 `Tool forge_deep_search not found`。
+- 真實 AgentSession／InteractiveMode／faux provider：未修版正式 RED 1 fail；修正版正式 GREEN 1 pass，後續合法 Deep search accepted。TUI 以 `waitForScrollBuffer` 驗證 Deep stage。
+- extension targeted 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0；logs 位於 `forge-runtime/artifacts/test-logs/`。
+- 真實 PI v0.83.0 已從 repo root 以 `.\pi-main\pi-test.bat --approve` 啟動，啟動畫面列出 `forge-runtime.ts`；這只是 smoke check，尚未捕捉原始 stale 情境輸入／結果，人工情境驗收仍未完成。
+
+### 邊界與未解風險
+
+review 僅針對 target scope；未修改 `pi-main/`，無暫時 debug probe。blocked tool result `terminate=false` 可能延遲 followUp；其他 Deep `/continue` panel 預設 sendMessage 仍可能形成 steer；Grill `message_end` sibling risk 不在本 ticket。上述均未宣稱已修，未擴大本輪範圍。
