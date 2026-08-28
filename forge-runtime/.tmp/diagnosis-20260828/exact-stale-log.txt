@@ -1,0 +1,7 @@
+命令：npm test -- --test-name-pattern=Diagnostic_WhenAcceptedUnderstandingDecisionInvalidatesSiblingCompletion_ShouldTerminateStaleSibling_20260828
+結果：217 passed / 1 failed / 0 skipped
+測試：Diagnostic_WhenAcceptedUnderstandingDecisionInvalidatesSiblingCompletion_ShouldTerminateStaleSibling_20260828
+實際：staleSibling.details.status=stale；staleSibling.terminate=undefined
+預期：staleSibling.terminate=true
+失敗位置：forge-runtime/tests/extensions/forge-runtime-extension.test.ts:5686
+production branch：forge-runtime/extensions/forge-runtime.ts 的 stale Understanding outcome 回傳區段（需由主代理以 CodeGraph 精確定位）

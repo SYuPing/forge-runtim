@@ -2,9 +2,9 @@
 title: Deep Knowledge Retrieval、Understanding 與 Evidence Package
 type: adr
 scope: Forge Runtime v4 Deep Knowledge semantic flow
-updated: 2026-08-27
+updated: 2026-08-28
 source: FORGE_RUNTIME_Arch_v4.md、ADR-0015、CONTEXT.md、docs/PLAN-A.md
-status: accepted-and-implemented
+status: implemented-verified-reviewed
 ---
 
 # ADR-0016：Deep Knowledge Retrieval、Understanding 與 Evidence Package
@@ -97,6 +97,12 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
 - 不把 Context／ADR／SPEC／Ticket 生成塞進 Deep；這些是後續 Context Builder 與規劃階段責任。
 - 不把 Pattern Card、持久化或第二 verifier 放入本 ticket；目前沒有必要的驗收契約。
 
+## 2026-08-28 Attempt 決策順序補充
+
+- 每個 active Deep attempt 最多接受一個 `needs_decision`。接受後 Workflow 建立 `WAIT_USER`、清除該 attempt；同 identity 的後續 completion 必須 stale、不得改 state，並以 `terminate: true` 結束當前 agent-loop 循環。
+- 使用者回答只保留原 `sourceRoundId` 與 `phase`，建立新的 `attemptId`；新的 attempt 可再次產生並接受一個 `needs_decision`。因此「第一次有效」只適用於同一 attempt，不限制後續 fresh attempts。
+- 本補充只規範 attempt／decision 順序；`CONTEXT_BUILD` 的啟動仍是另一個未實作範圍。
+
 ## Evidence
 
 ## 實作與驗證收尾（2026-08-25）
@@ -135,3 +141,10 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
 - 只有初始 Deep stage panel 使用 `displayOnly`；input 僅預載工具，matching user `message_start` 才消費 pending identity；pending 期間 Deep tool_call fail-closed。這是 delivery／時序邊界修正，不是 semantic flow 變更。
 - 自動化驗證：正式 RED 1 fail、GREEN 1 pass；extension 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。
 - 真實 PI v0.83.0 已從 repo root 以 `.\\pi-main\\pi-test.bat --approve` 啟動，啟動畫面列出 `forge-runtime.ts`；尚未捕捉原始 stale 情境輸入／結果，人工情境驗收仍未完成。
+
+### Deep completion stale termination 同步（2026-08-28）
+
+- Plan A 已核准並完成：兩個 Deep completion 工具六個 stale return 均回傳 `terminate: true`；不改 semantic contract、state machine 或合法後續。
+- 兩個 public fresh-attempt regression 先紅 `terminate undefined` 後綠；四個 inner branch 因無公開 deterministic seam，不新增私有 mock／test hook。
+- 驗證：focused 124/124、full 219/219、`npm run check` pass。logs：`forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`。PI smoke：`\.\pi-main\pi-test.bat --approve` 成功啟動，真實模型回 `smoke ok`、exit 0；log：`forge-runtime/.tmp/pi-smoke.log`。
+- 未修改 `session-state.ts`、scheduler、UI、schema/API、`pi-main/`；mixed tool batch 的 `every(terminate)` 風險不在 scope。

@@ -1,0 +1,5 @@
+2026-08-28 diagnosis
+Command: npx tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 --test-name-pattern="^(Extension_DeepSearchStaleSibling_ShouldTerminate|Integration_WhenDeepAttemptIsStale_ShouldRejectCompletion|Integration_WhenPackageIsValid_ShouldTransferToContextBuild)$" tests/extensions/forge-runtime-extension.test.ts
+Result: GREEN; 3 tests passed, 0 failed, duration 1041.6637ms.
+Assertions: stale Deep sibling returns terminate=true; stale completion is rejected; valid Evidence Package transfers to CONTEXT_BUILD.
+Warnings: Node DEP0190 only; no production failure.

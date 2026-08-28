@@ -941,11 +941,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					sourceRoundId: params.sourceRoundId,
 					phase: params.phase,
 				} as const;
-					if (!isCurrentDeepAttempt(identity)) {
-					return {
-						content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
-						details: { status: "stale", lockedEvidenceIds: [] },
-					};
+						if (!isCurrentDeepAttempt(identity)) {
+						return {
+							content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
+							details: { status: "stale", lockedEvidenceIds: [] },
+							terminate: true,
+						};
 				}
 				if (!activeWorkflow) {
 					return { block: true };
@@ -970,12 +971,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					}
 				}
 				const completion = sessionState.handleDeepResult(identity, params.outcome);
-				if (completion.kind === "stale") {
-					return {
-						content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
-						details: { status: "stale", lockedEvidenceIds: [] },
-					};
-				}
+					if (completion.kind === "stale") {
+						return {
+							content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
+							details: { status: "stale", lockedEvidenceIds: [] },
+							terminate: true,
+						};
+					}
 				restoreActiveTools();
 				await publishState(pi, ctx as CommandContext, completion.state);
 				return {
@@ -996,12 +998,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					title: candidate.title,
 				}));
 			const completion = sessionState.completeDeepRetrieval(inheritedEvidence, undefined, identity);
-			if (completion.kind === "stale") {
-				return {
-					content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
-					details: { status: "stale", lockedEvidenceIds: [] },
-				};
-			}
+				if (completion.kind === "stale") {
+					return {
+						content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
+						details: { status: "stale", lockedEvidenceIds: [] },
+						terminate: true,
+					};
+				}
 
 			activateDeepUnderstandingTools();
 			await publishState(pi, ctx as CommandContext, completion.state);
@@ -1117,11 +1120,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				sourceRoundId: params.sourceRoundId,
 				phase: params.phase,
 			} as const;
-			if (!isCurrentDeepAttempt(identity)) {
-				return {
-					content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
-					details: { status: "stale" },
-				};
+				if (!isCurrentDeepAttempt(identity)) {
+					return {
+						content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
+						details: { status: "stale" },
+						terminate: true,
+					};
 			}
 			if (!requireDeepToolBoundary(ctx as CommandContext)) {
 				return {
@@ -1143,12 +1147,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					}
 				}
 				const completion = sessionState.handleDeepResult(identity, params.outcome);
-				if (completion.kind === "stale") {
-					return {
-						content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
-						details: { status: "stale" },
-					};
-				}
+					if (completion.kind === "stale") {
+						return {
+							content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
+							details: { status: "stale" },
+							terminate: true,
+						};
+					}
 				restoreActiveTools();
 				await publishState(pi, ctx as CommandContext, completion.state);
 				return {
@@ -1185,12 +1190,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				kind: "completed",
 				evidenceIds: evidencePackage.evidence.map((evidence) => evidence.evidenceId),
 			});
-			if (completion.kind === "stale") {
-				return {
-					content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
-					details: { status: "stale", evidencePackage },
-				};
-			}
+				if (completion.kind === "stale") {
+					return {
+						content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
+						details: { status: "stale", evidencePackage },
+						terminate: true,
+					};
+				}
 
 			restoreActiveTools();
 			await publishState(pi, ctx as CommandContext, completion.state);

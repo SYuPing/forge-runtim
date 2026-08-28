@@ -2,9 +2,9 @@
 
 日期：2026-08-21
 
-本段狀態：Approved，供 `intent-route-only-llm-20260821` 獨立實作與驗證。
+本段狀態：Approved；`deep-completion-stale-termination-20260828` 狀態為 `implemented-verified-reviewed`。
 
-各 ticket 狀態以各自章節為準；Grill→Deep 與 2026-08-24 的 Deep Knowledge ticket 均已完成，Deep ticket 狀態為 `implemented-and-verified`；identity handoff follow-up 最終驗證為完整 209/209、`npm run check` exit 0。
+各 ticket 狀態以各自章節為準；Grill→Deep 與 2026-08-24 的 Deep Knowledge ticket 均已完成，`deep-completion-stale-termination-20260828` 狀態為 `implemented-verified-reviewed`；identity handoff follow-up 最終驗證為完整 209/209、`npm run check` exit 0。
 
 本文件下方的 Grill Completion Recovery 內容是已完成的歷史 Plan A 基線，不屬本 ticket 的執行範圍。
 
@@ -1634,3 +1634,70 @@ npm run check
 ```
 
 實際驗證：五個指定情境測試均通過；完整 `npm test` `217/217`（`forge-runtime/.tmp/post-schema-test.log`）；`npm run check` exit 0（`forge-runtime/.tmp/post-schema-check.log`）；Standards／Spec re-review PASS。僅有 Node `DEP0190` 非阻塞警告。下一步為使用者檢閱與決定提交；本文件不捏造 commit。
+
+## Plan A：Deep completion stale termination（deep-completion-stale-termination-20260828）
+
+日期：2026-08-28；狀態：`implemented-verified-reviewed`；路徑：direct Plan A；不建立 Plan B。
+
+### 建置範圍
+
+- 在 `forge-runtime/extensions/forge-runtime.ts` 補齊 `forge_deep_retrieval_complete` 與 `forge_deep_complete` 共六個 stale return 的 `terminate: true`。
+- 保持每個 active Deep attempt 最多接受一個 `needs_decision`；接受後進 `WAIT_USER` 並清 attempt。同 identity 後續 completion stale、不改 state、立即 terminate。
+- 使用者回答保留 `sourceRoundId`／`phase`、建立 fresh attempt；fresh attempt 可再次成功進入 `needs_decision`。
+
+### 不建置範圍
+
+- 不修改 `session-state.ts`、`pi-main/`、Grill、`CONTEXT_BUILD`、UI、schema/API、scheduler 或其他 helper；不新增依賴、不做 Plan B。
+
+### 檔案
+
+- Production：`forge-runtime/extensions/forge-runtime.ts`。
+- Tests：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。
+- 文件：`CONTEXT.md`、本檔、兩份 Deep ADR、`docs/handoff.md`、ticket、agent-state、Memory 兩檔。
+
+### 測試
+
+先由獨立測試子代理新增／擴充測試並打紅燈，主代理確認 RED 後才做最小 production 修改；驗證由不同子代理執行。既有 stale Retrieval／Understanding 測試與新增測試共同鎖定下列六個 production 分支：
+
+| 階段 | stale 分支 | Production file:line | 預期結果 | 測試方式 |
+| --- | --- | --- | --- | --- |
+| Retrieval | 入口 identity guard | `forge-runtime/extensions/forge-runtime.ts:944` | `status=stale`、`terminate=true`；不改 state/tool | 既有 stale Retrieval contract 測試，補斷言 `terminate=true` |
+| Retrieval | `handleDeepResult` dispatch 後 | `forge-runtime/extensions/forge-runtime.ts:974` | `status=stale`、`terminate=true`；不改 state/tool | production inventory/review + 既有可觀測 stale contract 測試 |
+| Retrieval | `completeDeepRetrieval` state commit 後 | `forge-runtime/extensions/forge-runtime.ts:1001` | `status=stale`、`terminate=true`；不改 state/tool | production inventory/review + 既有可觀測 stale contract 測試 |
+| Understanding | 入口 identity guard | `forge-runtime/extensions/forge-runtime.ts:1123` | `status=stale`、`terminate=true`；不改 state/tool | 既有 stale Understanding contract 測試，補斷言 `terminate=true` |
+| Understanding | `handleDeepResult` dispatch 後 | `forge-runtime/extensions/forge-runtime.ts:1150` | `status=stale`、`terminate=true`；不改 state/tool | production inventory/review + 既有可觀測 stale contract 測試 |
+| Understanding | `handleDeepResult` completed state commit 後 | `forge-runtime/extensions/forge-runtime.ts:1193` | `status=stale`、`terminate=true`；不改 state/tool | production inventory/review + 既有可觀測 stale contract 測試 |
+
+同步 harness 無法穩定製造 dispatch／commit 中途 race；上述兩個新增測試驗證 fresh attempt 的可觀測 contract，六分支則以 production inventory／review 鎖定，不新增 artificial seam，也不宣稱逐分支動態命中。
+
+新增：
+
+- `Extension_WhenRetrievalNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`
+- `Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`
+
+每個新測試覆蓋第一次 decision→`WAIT_USER`→清 attempt、舊 identity stale+terminate、使用者回答建立 fresh attempt、fresh attempt 再 `needs_decision` 成功；沿用既有 valid completion positive tests。基線 217，預期新增 2 後為 219。
+
+### 驗證
+
+Focused：
+
+```text
+cd forge-runtime
+npx tsx --test tests/extensions/forge-runtime-extension.test.ts
+```
+
+完整：
+
+```text
+cd forge-runtime
+npm test
+npm run check
+```
+
+真實 PI smoke：第一個 decision 後不再連續 stale；使用者回答後下一個 decision 仍正常。Fragile assumption：若同批混有其他非 terminate 工具結果，PI 的 `every(terminate)` 仍可能繼續；本 ticket 不修改 scheduler。Rollback 為撤回本 ticket code／test／docs，無 migration。
+
+### 2026-08-28 實作與驗證結果
+
+Plan A 已獲核准並完成。兩個 public fresh-attempt regression 先紅 `terminate undefined` 後綠；六個 completion stale return 均補上 `terminate: true`。四個 inner branch 因同步防禦路徑無公開 deterministic seam，不新增私有 mock／test hook。
+
+驗證：focused 124/124、full 219/219、`npm run check` pass。證據：`forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`。PI smoke：`.\pi-main\pi-test.bat --approve` 成功啟動，真實模型回 `smoke ok`、exit 0；log：`forge-runtime/.tmp/pi-smoke.log`。未改 `session-state.ts`、scheduler、UI、schema/API、`pi-main/`；mixed tool batch `every(terminate)` 風險仍不在 scope。Review 已完成，可交付／提交。
