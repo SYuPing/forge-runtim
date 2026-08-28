@@ -147,4 +147,10 @@ status: implemented-verified-reviewed
 
 ## 2026-08-28 Review correction
 
+## 2026-08-28 Deep retryable recovery contract 設計教訓
+
+- **target loop 觀察**：`manifest=[]` 時仍要求 `source=target` 的精確 target，造成反覆 `WAIT_USER`；source trace 與 deterministic replay 支持此 target loop 觀察。策略已固定為同 identity retryable invalid，要求模型改用明確 `wiki`／`code_base`。證據：使用者實際輸出、`forge-runtime/extensions/forge-runtime.ts` 的 target manifest／handler 路徑、`docs/adr/ADR-0017-deep-target-source-contract.md`。
+- **duplicate decision 觀察**：`q-spi-role` 出現 duplicate decisionId 並被拒絕；目前只能標為觀察，尚未由完整 tool payload 確認是模型重送或 runtime merge 重複。策略保留拒絕，同 identity 修正重送唯一 IDs。證據：使用者實際輸出、`forge-runtime/src/evidence/evidence-engine.ts` duplicate guard、`docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md`。
+- **可重用教訓**：輸入 invalid 與人類需要選擇的 ambiguity 必須分開；沒有候選清單時不應製造 `WAIT_USER` 選擇題。修復完成前先以 RED 測試證明 extension seam 是否足夠，避免預先擴大到 state layer。策略與測試契約見 [`ADR-0018`](../docs/adr/ADR-0018-deep-retryable-recovery-contract.md) 與 [`docs/PLAN-A.md`](../docs/PLAN-A.md)。
+
 - **測試契約**：兩個 public regression 使用規格名稱並完整覆蓋 fresh-attempt lifecycle；既有三個 stale tests 補上 `terminate` assertion。最終 focused/full/check 與 PI smoke 證據分別為 `forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`、`forge-runtime/.tmp/pi-smoke.log`。

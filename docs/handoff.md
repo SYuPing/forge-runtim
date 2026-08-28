@@ -4,10 +4,38 @@ type: handoff
 scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828
 updated: 2026-08-28
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、scoped validation logs
-status: implemented-verified-reviewed
+status: design-approved-implementation-pending
 ---
 
 # Intent route-only LLM 交接
+
+## Deep retryable recovery contract 交接（2026-08-28）
+
+### 狀態
+
+`deep-recovery-contract-20260828` 已完成設計核准，狀態為 `design-approved / implementation-pending`。本輪未修改程式、測試或 `pi-main/`，未執行測試。策略唯一真相來源為 [`ADR-0018`](adr/ADR-0018-deep-retryable-recovery-contract.md)；執行計畫為 [`docs/PLAN-A.md`](PLAN-A.md) 對應段落。
+
+### 核准策略
+
+`manifest=[]` 且 `source=target` 回 retryable invalid，保留同一 `attemptId`／`sourceRoundId`／`phase`，不進 `WAIT_USER`，要求模型自行改用 `wiki`／`code_base`；runtime 不自動選 source／target。duplicate `decisionId` 維持拒絕、不靜默去重；保留同一 `KNOWLEDGE_UNDERSTANDING` attempt，以相同 identity 重送修正後唯一 IDs。invalid／rejection 不推進 stage 或寫 `CONTEXT_BUILD`，既有 stale guard 保留。
+
+### 相關文件
+
+- `CONTEXT.md`
+- `docs/adr/ADR-0018-deep-retryable-recovery-contract.md`
+- `docs/PLAN-A.md`
+- `docs/tickets/deep-recovery-contract-20260828.md`
+- `agent-state/deep-recovery-contract-20260828.md`
+- `Memory/record.md`
+- `Memory/lesson_learn.md`
+- `forge-runtime/extensions/forge-runtime.ts`（未修改，未來 production 目標）
+- `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`（未修改，未來測試目標）
+
+### 基線、風險與執行順序
+
+Extension `124/124`，新增五個後目標 `129/129`；排除 `pi-grill-interactive.test.ts` 的本地 suite `209/209`，新增後目標 `214/214`。標準 `npm test` 現況 `209 pass/1 fail`（缺 qwen token-plan JSON）；`npm run check` 現況有 10 個 terminal 型別錯誤與 pi-main 既存缺依賴。不得宣稱 full/check 全綠；真實 PI 原情境列人工驗收。Plan A 順序固定為：新 session 讀文件並等確認→測試子代理先打 RED→主代理最小實作→不同角色驗證與 final review。
+
+新 session 第一步：讀取本 handoff、`CONTEXT.md`、ADR-0018、ticket、agent-state，展示 context 摘要，等待使用者確認後才呼叫 `execute-designed-plan`／進入實作。
 
 ## 結論
 

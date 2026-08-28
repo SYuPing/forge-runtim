@@ -397,3 +397,10 @@ status: implemented-verified-reviewed
 - 兩個 public fresh-attempt regression 先紅 `terminate undefined` 後綠；四個 inner branch 因無公開 deterministic seam，不新增私有 mock／test hook。focused 124/124、full 219/219、`npm run check` pass；mixed tool batch `every(terminate)` 風險不在 scope。
 
 - 正式測試名稱為 `Extension_WhenRetrievalNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt` 與 `Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`，完整覆蓋 needs_decision→WAIT_USER/clear→舊 identity stale+terminate/state-tools 不變→fresh identity preserved→再次 needs_decision；既有三個 stale tests 補上 terminate assertion。PI smoke 成功啟動，真實模型回 `smoke ok`、exit 0（`forge-runtime/.tmp/pi-smoke.log`）。
+
+## 2026-08-28 Deep retryable recovery contract 設計核准
+
+- Ticket `deep-recovery-contract-20260828` 只完成設計文件，尚未實作；唯一契約見 [`ADR-0018`](docs/adr/ADR-0018-deep-retryable-recovery-contract.md)，執行計畫見 [`docs/PLAN-A.md`](docs/PLAN-A.md) 對應段落。
+- `manifest=[]` 且 `source=target` 時回 retryable invalid，保留相同 `attemptId`／`sourceRoundId`／`phase`，不進 `WAIT_USER`；明確要求模型自行改用 `wiki`／`code_base`，runtime 不自動選 source／target。
+- duplicate `decisionId` 維持拒絕、不靜默去重；保留同一 `KNOWLEDGE_UNDERSTANDING` attempt，以相同 identity 重送修正後唯一 IDs。invalid／rejection 不推進 stage，也不寫入 `CONTEXT_BUILD`；既有 stale guard 保留。
+- production 預設只改 `forge-runtime/extensions/forge-runtime.ts`；只有 RED 證明 extension seam 不足時才回報 `session-state.ts` blocker。文件不新增 API／schema／UI／scheduler、不擴充 snapshot、不自動 fallback、不接受 basename 模糊匹配，且只有 Plan A。

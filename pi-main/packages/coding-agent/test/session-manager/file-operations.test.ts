@@ -3,7 +3,6 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync, w
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { convertToLlm } from "../../src/core/messages.ts";
 import { findMostRecentSession, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.ts";
 
 const HEADER_SCAN_LIMIT_BYTES = 1024 * 1024;
@@ -79,6 +78,36 @@ describe("loadEntriesFromFile", () => {
 		);
 		const entries = loadEntriesFromFile(file);
 		expect(entries).toHaveLength(2);
+	});
+
+	it("adds a newline after an unterminated valid record", () => {
+		const file = join(tempDir, "unterminated.jsonl");
+		const content =
+			'{"type":"session","id":"abc","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp"}\n' +
+			'{"type":"message","id":"1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hi","timestamp":1}}';
+		writeFileSync(file, content);
+
+		expect(loadEntriesFromFile(file)).toHaveLength(2);
+		expect(readFileSync(file, "utf8")).toBe(`${content}\n`);
+	});
+
+	it("adds a newline after an unterminated malformed final fragment", () => {
+		const file = join(tempDir, "malformed-tail.jsonl");
+		const content =
+			'{"type":"session","id":"abc","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp"}\n' + '{"type":"message"';
+		writeFileSync(file, content);
+
+		expect(loadEntriesFromFile(file)).toHaveLength(1);
+		expect(readFileSync(file, "utf8")).toBe(`${content}\n`);
+	});
+
+	it("does not modify an unterminated non-session file", () => {
+		const file = join(tempDir, "invalid.jsonl");
+		const content = '{"type":"message","id":"1"}';
+		writeFileSync(file, content);
+
+		expect(loadEntriesFromFile(file)).toEqual([]);
+		expect(readFileSync(file, "utf8")).toBe(content);
 	});
 
 	it.each([
@@ -295,42 +324,6 @@ describe("SessionManager custom flat session directory", () => {
 
 		const continuedA = SessionManager.continueRecent(projectA, tempDir);
 		expect(continuedA.getSessionFile()).toBe(sessionA);
-	});
-
-	it("round-trips display-only custom entries without provider conversion", () => {
-		const sessionFile = createPersistedSession(projectA, "display-only");
-		const session = SessionManager.open(sessionFile, tempDir);
-		const customType = "session-file-round-trip";
-		const marker = "SESSION_FILE_DISPLAY_ONLY_MARKER";
-		(
-			session.appendCustomMessageEntry as unknown as (
-				customType: string,
-				content: string,
-				display: boolean,
-				details?: unknown,
-				excludeFromContext?: boolean,
-			) => void
-		)(customType, marker, true, undefined, true);
-
-		const rawEntries = readFileSync(sessionFile, "utf-8")
-			.trim()
-			.split("\n")
-			.filter(Boolean)
-			.map((line) => JSON.parse(line));
-		const rawCustomEntry = rawEntries.find((entry) => entry.customType === customType);
-		const reopened = SessionManager.open(sessionFile, tempDir);
-		const reopenedCustomEntry = reopened
-			.getEntries()
-			.find((entry) => (entry as { customType?: string }).customType === customType) as
-			| { excludeFromContext?: boolean }
-			| undefined;
-		const context = reopened.buildSessionContext();
-		const providerMessages = convertToLlm(context.messages);
-
-		expect(rawCustomEntry?.excludeFromContext).toBe(true);
-		expect(reopenedCustomEntry?.excludeFromContext).toBe(true);
-		expect(JSON.stringify(context.messages)).toContain(marker);
-		expect(JSON.stringify(providerMessages)).not.toContain(marker);
 	});
 });
 

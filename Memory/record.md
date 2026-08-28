@@ -197,5 +197,11 @@ status: implemented-verified-reviewed
 
 ## 2026-08-28 Deep completion stale termination review correction
 
+## 2026-08-28 Deep retryable recovery contract 設計核准
+
+- 目標：定義空 target manifest 與 duplicate decision invalid 後的可重試復原，避免 Deep 在 `WAIT_USER` 反覆詢問無候選 target，並確保 invalid 不誤進 `CONTEXT_BUILD`。
+- 重大決策：`manifest=[]` 且 `source=target` 保留同一 identity 回 retryable invalid，要求模型自行改用 `wiki`／`code_base`；duplicate `decisionId` 拒絕並保留同一 Understanding attempt，要求同 identity 重送唯一 IDs。完整契約見 [`ADR-0018`](../docs/adr/ADR-0018-deep-retryable-recovery-contract.md)。
+- 狀態：只完成設計文件，尚未實作；Plan A 已列出五個測試、baseline 與新 session 執行順序。
+
 - 兩個 public regression 正式名稱為 `Extension_WhenRetrievalNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt` 與 `Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`；完整覆蓋 needs_decision、WAIT_USER/clear、舊 identity stale+terminate/state-tools 不變、fresh identity 保留與再次 needs_decision。既有三個 stale tests 補上 `terminate` assertion。
 - 最終驗證：focused 124/124、full 219/219、check pass；logs 為 `forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`。PI smoke 成功啟動，真實模型回 `smoke ok`、exit 0（`forge-runtime/.tmp/pi-smoke.log`）。獨立 review 已完成，可交付／提交。

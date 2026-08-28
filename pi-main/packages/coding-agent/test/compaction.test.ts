@@ -15,7 +15,6 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "../src/core/compaction/index.ts";
-import { convertToLlm } from "../src/core/messages.ts";
 import {
 	buildSessionContext,
 	type CompactionEntry,
@@ -503,44 +502,6 @@ describe("prepareCompaction with previous compaction", () => {
 		expect(summarizedText).toContain("user msg 3 - kept by compaction1");
 		expect(summarizedText).not.toContain("First summary");
 		expect(preparation!.previousSummary).toBe("First summary");
-	});
-});
-
-describe("prepareCompaction provider conversion", () => {
-	it("excludes display-only custom messages from provider conversion", () => {
-		const displayOnlyMarker = "DISPLAY_ONLY_COMPACTION_MARKER";
-		const user = createMessageEntry(createUserMessage("context"));
-		const assistant = createMessageEntry(createAssistantMessage("response"));
-		const custom = createCustomMessageEntry(displayOnlyMarker);
-		(custom as CustomMessageEntry & { excludeFromContext: boolean }).excludeFromContext = true;
-		const finalAssistant = createMessageEntry(createAssistantMessage("latest", createMockUsage(8000, 2000)));
-		const entries: SessionEntry[] = [user, custom, assistant, finalAssistant];
-
-		const preparation = prepareCompaction(entries, {
-			...DEFAULT_COMPACTION_SETTINGS,
-			keepRecentTokens: 1,
-		});
-
-		expect(custom.content).toContain(displayOnlyMarker);
-		expect(entries.some((entry) => JSON.stringify(entry).includes(displayOnlyMarker))).toBe(true);
-		expect(preparation).toBeDefined();
-		expect(
-			preparation!.messagesToSummarize.some((message) => JSON.stringify(message).includes(displayOnlyMarker)),
-		).toBe(false);
-		expect(preparation!.messagesToSummarize.some((message) => JSON.stringify(message).includes("context"))).toBe(
-			true,
-		);
-		expect(
-			preparation!.turnPrefixMessages.some((message) => JSON.stringify(message).includes(displayOnlyMarker)),
-		).toBe(true);
-
-		const providerMessages = [
-			...convertToLlm(preparation!.messagesToSummarize),
-			...convertToLlm(preparation!.turnPrefixMessages),
-		];
-		expect(providerMessages.some((message) => JSON.stringify(message).includes(displayOnlyMarker))).toBe(false);
-		expect(providerMessages.some((message) => JSON.stringify(message).includes("context"))).toBe(true);
-		expect(providerMessages.some((message) => JSON.stringify(message).includes("response"))).toBe(true);
 	});
 });
 

@@ -1,85 +1,114 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import {
+	type AssistantMessage,
+	createAssistantMessageEventStream,
+	fauxAssistantMessage,
+	type Model,
+	type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { generateBranchSummary } from "../src/core/compaction/branch-summarization.ts";
+import { generateBranchSummary } from "../src/core/compaction/index.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
 
-const DISPLAY_ONLY_SENTINEL = "DISPLAY_ONLY_SENTINEL";
-const NORMAL_SENTINEL = "NORMAL_SENTINEL";
+const model: Model<"anthropic-messages"> = {
+	id: "test-model",
+	name: "Test Model",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 200000,
+	maxTokens: 8192,
+};
 
-describe("generateBranchSummary", () => {
-	it("does not send excluded custom messages to the provider", async () => {
-		let providerMessages: unknown;
-		const streamFn: StreamFn = (_model, context) => {
-			providerMessages = context.messages;
+const entries: SessionEntry[] = [
+	{
+		type: "message",
+		id: "branch-user",
+		parentId: null,
+		timestamp: new Date(1).toISOString(),
+		message: { role: "user", content: "Abandoned request", timestamp: 1 },
+	},
+];
+
+function response(content: AssistantMessage["content"]): AssistantMessage {
+	return {
+		...fauxAssistantMessage(""),
+		content,
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+	};
+}
+
+describe("branch summarization", () => {
+	it("does not override tool choice for branch summaries", async () => {
+		let requestOptions: SimpleStreamOptions | undefined;
+		const streamFn: StreamFn = (_model, _context, options) => {
+			requestOptions = options;
 			const stream = createAssistantMessageEventStream();
-			stream.push({
-				type: "done",
-				reason: "stop",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "summary" }],
-					api: "openai-completions",
-					provider: "test",
-					model: "test-model",
-					stopReason: "stop",
-					timestamp: Date.now(),
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-				},
-			});
+			queueMicrotask(() =>
+				stream.push({ type: "done", reason: "stop", message: response([{ type: "text", text: "summary" }]) }),
+			);
 			return stream;
 		};
 
-		const entries = [
-			{
-				type: "custom_message",
-				id: "display-only",
-				parentId: null,
-				timestamp: "2026-08-20T00:00:00.000Z",
-				customType: "sentinel",
-				content: DISPLAY_ONLY_SENTINEL,
-				display: true,
-				excludeFromContext: true,
-			},
-			{
-				type: "custom_message",
-				id: "normal",
-				parentId: "display-only",
-				timestamp: "2026-08-20T00:00:01.000Z",
-				customType: "sentinel",
-				content: NORMAL_SENTINEL,
-				display: true,
-				excludeFromContext: false,
-			},
-		] satisfies SessionEntry[];
-
 		await generateBranchSummary(entries, {
-			model: {
-				id: "test-model",
-				name: "Test model",
-				api: "openai-completions",
-				provider: "test",
-				baseUrl: "https://example.test",
-				reasoning: false,
-				input: ["text"],
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 128000,
-				maxTokens: 2048,
-			} satisfies Model<"openai-completions">,
+			model,
 			signal: new AbortController().signal,
 			streamFn,
 		});
 
-		const payload = JSON.stringify(providerMessages);
-		expect(payload).not.toContain(DISPLAY_ONLY_SENTINEL);
-		expect(payload).toContain(NORMAL_SENTINEL);
+		expect(requestOptions?.toolChoice).toBeUndefined();
+	});
+
+	it("rejects tool calls from branch summaries", async () => {
+		const streamFn: StreamFn = () => {
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() =>
+				stream.push({
+					type: "done",
+					reason: "toolUse",
+					message: response([
+						{ type: "toolCall", id: "tool-call-1", name: "read", arguments: { path: "README.md" } },
+					]),
+				}),
+			);
+			return stream;
+		};
+
+		const result = await generateBranchSummary(entries, {
+			model,
+			signal: new AbortController().signal,
+			streamFn,
+		});
+
+		expect(result.error).toBe("Branch summarization attempted to call a tool");
+	});
+
+	it("rejects length-limited branch summaries", async () => {
+		const streamFn: StreamFn = () => {
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() =>
+				stream.push({
+					type: "done",
+					reason: "length",
+					message: { ...response([{ type: "text", text: "partial" }]), stopReason: "length" },
+				}),
+			);
+			return stream;
+		};
+
+		const result = await generateBranchSummary(entries, {
+			model,
+			signal: new AbortController().signal,
+			streamFn,
+		});
+
+		expect(result.error).toBe(
+			"Branch summarization failed: generation hit the token cap and the summary is incomplete",
+		);
 	});
 });

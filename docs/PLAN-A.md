@@ -1701,3 +1701,61 @@ npm run check
 Plan A 已獲核准並完成。兩個 public fresh-attempt regression 先紅 `terminate undefined` 後綠；六個 completion stale return 均補上 `terminate: true`。四個 inner branch 因同步防禦路徑無公開 deterministic seam，不新增私有 mock／test hook。
 
 驗證：focused 124/124、full 219/219、`npm run check` pass。證據：`forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`。PI smoke：`.\pi-main\pi-test.bat --approve` 成功啟動，真實模型回 `smoke ok`、exit 0；log：`forge-runtime/.tmp/pi-smoke.log`。未改 `session-state.ts`、scheduler、UI、schema/API、`pi-main/`；mixed tool batch `every(terminate)` 風險仍不在 scope。Review 已完成，可交付／提交。
+
+## Plan A：Deep retryable recovery contract（deep-recovery-contract-20260828）
+
+日期：2026-08-28；狀態：`design-approved-implementation-pending`；只有 Plan A，沒有 Plan B。
+
+### Building
+
+- 空 target manifest（`manifest=[]` 且 `source=target`）回 retryable invalid，保留相同 `attemptId`／`sourceRoundId`／`phase`，不進 `WAIT_USER`，要求模型自行改用 `wiki`／`code_base`。
+- duplicate `decisionId` 維持拒絕、不靜默去重；保留同一 `KNOWLEDGE_UNDERSTANDING` attempt，以相同 identity 重送修正後唯一 IDs。
+- invalid／rejection 不推進 stage、不寫 Evidence Package、不進 `CONTEXT_BUILD`；既有 stale guard 保留。
+
+### Not Building
+
+- 不自動選 source／target、不自動 fallback、不接受 basename 模糊匹配。
+- 不修改 `session-state.ts`，除非 RED 證明 extension seam 不足並回報 blocker；不改 `pi-main/`。
+- 不新增 API／schema／UI／scheduler、snapshot 欄位、custom loop、依賴或 Plan B。
+
+### Approach
+
+以 [`ADR-0018`](adr/ADR-0018-deep-retryable-recovery-contract.md) 為 recovery 契約唯一真相來源，在既有 extension handler seam 加上最小 guard／retryable response；attempt identity 與 target allowlist 沿用 ADR-0016／0017。只要 invalid 路徑能被 extension seam 完整表達，就不擴大到 state layer。
+
+### Files
+
+| 類別 | 檔案 | 預計變動 |
+| --- | --- | --- |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | 空 manifest target recovery、duplicate decision recovery |
+| Tests | `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | 五個指定回歸測試 |
+
+### Tests
+
+- `Extension_DeepSearchEmptyTargetManifest_ReturnsRetryableInvalidWithoutWaitUser`：斷言 retryable invalid、相同 identity 保留、stage 仍為 `DEEP_KNOWLEDGE_RETRIEVAL`、未建立 `WAIT_USER`、未扣 target budget。
+- `Extension_DeepSearchAfterEmptyTargetManifest_UsesExplicitWikiOnSameAttempt`：以同一 identity 呼叫明確 `source=wiki`，斷言搜尋成功、未建立新的 attempt／WAIT_USER，且結果可供 retrieval complete。
+- `Extension_DeepCompleteDuplicateDecision_ReturnsRetryableInvalidWithoutStateAdvance`：斷言 retryable invalid、同一 understanding attempt 保留、既有 decisions 不變、stage 不變、未寫 `CONTEXT_BUILD`。
+- `Extension_DeepCompleteCorrectedDecision_ReusesAttemptAndEntersContextBuild`：以同一 identity 重送唯一修正 IDs，斷言 Evidence Package 驗證成功並進入 `CONTEXT_BUILD`。
+- `Extension_DeepRecoverySequence_ReachesContextBuildWithoutWaitUserLoop`：串起空 target invalid→同 attempt 明確 wiki→duplicate invalid→同 attempt 唯一修正，斷言沒有 `WAIT_USER` loop，最後進入 `CONTEXT_BUILD`。
+
+基線與目標：extension file 現況 `124/124`，新增 5 後目標 `129/129`；排除 `pi-grill-interactive.test.ts` 的本地 suite 現況 `209/209`，新增後目標 `214/214`。標準 `npm test` 現況 `209 pass/1 fail`，唯一既存失敗為缺 `pi-main/packages/ai/src/providers/data/qwen-token-plan-individual.json`；`npm run check` 現況因 10 個 `InteractiveModeOptions` terminal 型別錯誤與 pi-main 既存缺依賴失敗。不得宣稱 full/check 全綠；本 ticket 只要求不新增新失敗並保留 baseline。
+
+### Execution Order
+
+1. 新 session 第一步讀取 `docs/handoff.md`、`CONTEXT.md`、ADR-0018、ticket 與 agent-state，展示摘要並等待使用者確認。
+2. 獨立測試子代理先新增五個測試並執行 targeted test，確認舊程式碼有效 RED；測試角色不得兼任 implementation 或 final review。
+3. 主代理確認 RED 後，才對 `forge-runtime/extensions/forge-runtime.ts` 做最小 production 實作；若 extension seam 不足，停止並回報 blocker，不預先改 `session-state.ts`。
+4. 另一個獨立驗證／review 角色執行 targeted suite、baseline-aware checks 與 final review；不得由 implementation 角色兼任。
+
+### Verification
+
+- 以五個指定測試確認 recovery contract、identity 保留、state 不前進、無 `WAIT_USER` loop 與最終 `CONTEXT_BUILD`。
+- 保留並報告 baseline：extension `124/124`→目標 `129/129`；本地排除 interactive suite `209/209`→目標 `214/214`；標準 `npm test` 與 `npm run check` 的既存失敗不得被誤報為本 ticket 新失敗。
+- 真實 PI 原情境列人工驗收：重現空 manifest、wiki retry、duplicate decision、最終進入 `CONTEXT_BUILD`。
+
+### Fragile assumption
+
+假設 extension handler 能在不改 `session-state.ts` 的情況下保留 attempt、回傳 retryable invalid 並接受同 identity 重送；若 RED 證明不成立，回報具體 seam blocker，停止擴大修改。
+
+### Rollback
+
+撤回本 ticket 的 `forge-runtime/extensions/forge-runtime.ts` 與 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 變更；不涉及 migration、snapshot 回填或其他外部狀態。
