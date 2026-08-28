@@ -1,10 +1,10 @@
 ---
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
-scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827
-updated: 2026-08-27
+scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828
+updated: 2026-08-28
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、scoped validation logs
-status: implemented-and-verified
+status: implemented-verified-reviewed
 ---
 
 # Intent route-only LLM 交接
@@ -288,6 +288,26 @@ Ticket `deep-stale-result-loop-20260826` 已 implemented-and-automated-verified-
 ### 邊界與未解風險
 
 review 僅針對 target scope；未修改 `pi-main/`，無暫時 debug probe。blocked tool result `terminate=false` 可能延遲 followUp；其他 Deep `/continue` panel 預設 sendMessage 仍可能形成 steer；Grill `message_end` sibling risk 不在本 ticket。上述均未宣稱已修，未擴大本輪範圍。
+
+## Deep completion stale termination 交付交接（2026-08-28）
+
+### 最新目標與狀態
+
+Ticket `deep-completion-stale-termination-20260828` 已完成 direct Plan A，狀態為 `implemented-verified-reviewed`。目標是補齊 `forge_deep_retrieval_complete` 與 `forge_deep_complete` 共六個 completion stale return 的 `terminate: true`。
+
+### 實作與驗證完成
+
+Plan A 已獲核准。Retrieval／Understanding fresh-attempt 兩個 public regression（`Extension_WhenRetrievalNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`、`Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`）先紅 `terminate undefined` 後綠；完整覆蓋 needs_decision→WAIT_USER/clear→舊 identity stale+terminate/state-tools 不變→回答後 fresh attempt identity preserved→再次 needs_decision；既有三個 stale tests 補上 `terminate` assertion。六個 stale return 均補上 `terminate: true`。四個 inner branch 因同步防禦路徑無公開 deterministic seam，不新增私有 mock／test hook。focused 124/124、full 219/219、`npm run check` pass；證據：`forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`。PI smoke：`.\pi-main\pi-test.bat --approve` 成功啟動，真實模型回 `smoke ok`、exit 0；log：`forge-runtime/.tmp/pi-smoke.log`。未改 `session-state.ts`、scheduler、UI、schema/API、`pi-main/`；mixed tool batch `every(terminate)` 風險仍不在 scope。Review 已完成，可交付／提交。
+
+### 契約、範圍與風險
+
+每個 active Deep attempt 最多接受一個 `needs_decision`；接受後進 `WAIT_USER` 並清除當前 attempt。同 identity 後續 completion stale、不改 state、terminate。使用者回答保留 `sourceRoundId`／`phase` 並建立新 attempt，新 attempt 可再次 decision。只改 `forge-runtime/extensions/forge-runtime.ts` 與 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`；不改 `session-state.ts`、Grill、`CONTEXT_BUILD`、UI、schema/API、scheduler、`pi-main/`，不做 Plan B。
+
+脆弱假設：同批混有非 terminate 工具結果時，PI 的 `every(terminate)` 仍可能繼續；本 ticket 不修改 scheduler。
+
+### 相關檔案與下一步
+
+相關檔案為 `docs/PLAN-A.md`、`CONTEXT.md`、兩份 Deep ADR、ticket、agent-state 與 Memory 兩檔。Plan A、RED→GREEN、focused/full/check 與真實 PI smoke 均已完成；獨立 review 已完成，可交付／提交。
 
 ## Deep target source contract 設計交接（2026-08-27）
 

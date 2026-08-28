@@ -355,7 +355,7 @@
   <header>
     <p class="eyebrow">FORGE RUNTIME / ARCHITECTURE + DELIVERY</p>
     <h1>目前已完成的流程，從收到需求一路走到交接</h1>
-    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/27 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
+    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/28 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
   </header>
 
   <main>
@@ -451,6 +451,7 @@
               <li>不同輪次的資料分開，舊訊息不能把流程拉回去。</li>
               <li>Deep Retrieval、Knowledge Understanding 與 Evidence Package 的最小交接；完整 <code>npm test</code> 212/212 通過，<code>npm run check</code> exit 0。</li>
               <li>Deep Retrieval 與 Knowledge Understanding 的輸出守門：只保留合法工具呼叫，不讓實作內容提前出現。</li>
+              <li>Deep target source 契約與 completion stale termination：缺少 target 時保留重試額度，六個過期 completion 分支都會終止當次流程。</li>
             </ul>
           </article>
           <article class="future">
@@ -460,6 +461,7 @@
               <li>完整控制面板與固定畫面配置（widget tree、dashboard）。</li>
               <li>從多個來源整理摘要、知識卡（Pattern Card）與長期保存。</li>
               <li>第二次查核，以及架構文件後面的完整工作，包括外部來源。</li>
+              <li>mixed tool batch 的整批終止行為，以及真實 PI session 的原始情境人工驗收。</li>
               <li>不把未完成項目畫成目前已交付。</li>
             </ul>
           </article>
@@ -604,10 +606,24 @@
             <p><strong>驗證：</strong>正式 RED 1 fail、GREEN 1 pass；extension 117/117、PI integration 10/10、完整 <code>npm test</code> 212/212、<code>npm run check</code> exit 0。真實 PI v0.83.0 僅完成啟動 smoke check，人工情境尚未驗收。</p>
           </article>
         </div>
+
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/28</p>
+            <h3>讓過期的 Deep 完成結果真正停止</h3>
+            <p><strong>做了什麼：</strong>補齊兩個 Deep completion 工具的六個過期回傳，讓同一批已失效的結果被忽略後，不再繼續把 agent loop 往下推。</p>
+            <p><strong>設計考量：</strong>過期結果只應結束當次處理，不應改動目前狀態或工具；新的有效嘗試仍要能重新進入需要人決定的流程。</p>
+            <p><strong>實作細節：</strong>六個 stale branch 都加入 <code>terminate: true</code>；以公開流程測試確認 WAIT_USER／清理、舊 identity 的狀態與工具不變，以及新 identity 可再次提出決定。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>過期 completion 只回報 stale，沒有終止訊號，可能讓 agent loop 繼續處理同一批無效結果。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>六個 stale branch 補上終止訊號，並用 fresh-attempt regression 固定過期結果的終止與新嘗試的可恢復性。</p>
+            <p><strong>驗證：</strong>focused 124/124、full 219/219、<code>npm run check</code> pass；PI smoke 成功啟動並回傳 <code>smoke ok</code>。真實原始情境仍未完成人工驗收。</p>
+          </article>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer>更新日期：2026/08/27。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、docs/PLAN-A.md、docs/handoff.md、agent-state/deep-stale-result-loop-20260826.md、docs/tickets/deep-stale-result-loop-20260826.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
+  <footer>更新日期：2026/08/28。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、docs/PLAN-A.md、docs/handoff.md、agent-state/deep-completion-stale-termination-20260828.md、docs/tickets/deep-completion-stale-termination-20260828.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
 </body>
 </html>

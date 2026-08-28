@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-27
+updated: 2026-08-28
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: implemented-and-verified
+status: implemented-verified-reviewed
 ---
 
 # Forge Runtime v4 Context
@@ -388,3 +388,12 @@ status: implemented-and-verified
 - 契約唯一真相來源為 [`ADR-0017`](docs/adr/ADR-0017-deep-target-source-contract.md)：follow-up 列出既有 `workflow.snapshot.candidates`，target 分支要求 `targetSource`；缺少時 retryable invalid 且保留 attempt，非唯一匹配才進 `WAIT_USER`；stale sibling 回 `terminate: true`。
 - production schema 已使用 discriminated union；handler 在預算扣除前拒絕缺少 `targetSource`，保留 attempt／budget；follow-up 明確帶 target manifest（含空清單），四個 stale outcomes 均終止 sibling。
 - 五個指定情境測試均通過；完整 `npm test` `217/217`（`forge-runtime/.tmp/post-schema-test.log`）；`npm run check` exit 0（`forge-runtime/.tmp/post-schema-check.log`）；Standards／Spec re-review PASS。未修改 `pi-main/`、`session-state.ts` 或 snapshot 契約，不自動選 target、不加 sequential。僅有 Node `DEP0190` 非阻塞警告；下一步為使用者檢閱／提交。
+
+## 2026-08-28 Deep completion stale termination 實作與驗證
+
+- Ticket `deep-completion-stale-termination-20260828` 狀態為 `implemented-verified-reviewed`；只補齊 `forge_deep_retrieval_complete` 與 `forge_deep_complete` 的六個 stale return，使每個 stale 結果回傳 `terminate: true`。
+- 不變量：每個 active Deep attempt 最多接受一個 `needs_decision`；接受後進入 `WAIT_USER` 並清除當前 attempt。舊 identity 後續 completion 只回 stale、不得改 state，且必須 terminate。使用者回答保留 `sourceRoundId`／`phase` 並建立新 attempt；新 attempt 可再次 `needs_decision`。
+- Building 只涵蓋上述 production branches 與 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 測試；不改 `session-state.ts`、Grill、`CONTEXT_BUILD`、UI、schema/API、`pi-main/`，不做 Plan B。
+- 兩個 public fresh-attempt regression 先紅 `terminate undefined` 後綠；四個 inner branch 因無公開 deterministic seam，不新增私有 mock／test hook。focused 124/124、full 219/219、`npm run check` pass；mixed tool batch `every(terminate)` 風險不在 scope。
+
+- 正式測試名稱為 `Extension_WhenRetrievalNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt` 與 `Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`，完整覆蓋 needs_decision→WAIT_USER/clear→舊 identity stale+terminate/state-tools 不變→fresh identity preserved→再次 needs_decision；既有三個 stale tests 補上 terminate assertion。PI smoke 成功啟動，真實模型回 `smoke ok`、exit 0（`forge-runtime/.tmp/pi-smoke.log`）。

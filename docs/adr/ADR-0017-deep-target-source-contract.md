@@ -1,13 +1,13 @@
 ---
-title: Deep target source contract
+title: ADR-0017：Deep 目標來源契約
 type: adr
 scope: Forge Runtime v4 Deep Retrieval target source conversion and validation
-updated: 2026-08-27
+updated: 2026-08-28
 source: FORGE_RUNTIME_Arch_v4.md、ADR-0015、ADR-0016、CONTEXT.md、docs/tickets/deep-target-source-contract-20260827.md
 status: implemented-and-verified
 ---
 
-# ADR-0017：Deep target source contract
+# ADR-0017：Deep 目標來源契約
 
 日期：2026-08-27
 
@@ -47,3 +47,7 @@ ADR-0015 定義 Grill snapshot 與人類決策邊界，ADR-0016 定義 Deep Retr
 - 不自動選唯一看似合理的 target，避免越過人類決策邊界。
 - 不只補 prompt，因為 schema 與 handler 必須共同守住契約。
 - 不新增 sequential、custom loop、migration 或依賴，因為它們不能取消已排 sibling，且超出本 ticket。
+
+## 2026-08-28 Stale 範圍勘誤
+
+本 ADR 與上一張 ticket 所稱的 stale sibling termination 只涵蓋已完成的 Deep search 分支；不等於所有 Deep stale 結果。`forge_deep_retrieval_complete` 與 `forge_deep_complete` 仍有共六個 completion stale return 尚待本 ticket 補上 `terminate: true`。本勘誤不改寫歷史 ticket，也不擴大 target source 契約。

@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-27
+updated: 2026-08-28
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
-status: completed
+status: implemented-verified-reviewed
 ---
 
 # Forge Runtime v4 開發教訓
@@ -124,6 +124,19 @@ status: completed
 - **教訓**：跨 source 的輸入契約應同時由 discriminated union 與 handler guard 固定；需要人類選擇時保留 `WAIT_USER` 邊界，不自動猜 target。正式契約見 [`ADR-0017`](../docs/adr/ADR-0017-deep-target-source-contract.md)。
 - **狀態**：本輪未有自動測試、修復或新 GREEN 證據；不得宣稱已修復。
 
+## 2026-08-28 Deep completion stale termination
+
+- **根因**：已觀察到 completion stale return 缺少 `terminate: true`，造成過期結果被忽略後 agent loop 仍可能繼續；證據為 `forge-runtime/.tmp/diagnosis-20260828/exact-stale-log.txt` 與 production `forge-runtime/extensions/forge-runtime.ts` 的 completion stale branches（實作前須重新核對行號）。
+- **修復方向**：只補 `forge_deep_retrieval_complete`／`forge_deep_complete` 共六個 stale return 的 termination，並以測試固定 status、terminate、state／工具不變，以及 fresh attempt 可再次 decision；不改 state machine 或 `CONTEXT_BUILD`。
+- **狀態（規劃紀錄已由下方修復紀錄取代）**：本輪已完成實作與驗證；最新證據與 review-pending 狀態見下方修復教訓。
+
+## 2026-08-28 Deep completion stale termination 修復教訓
+
+- **根因**：六個 completion stale return 只回報 `status=stale`，缺少 `terminate: true`，過期結果被忽略後 agent loop 仍可能繼續。證據：`forge-runtime/extensions/forge-runtime.ts:941-1006,1120-1198`、`forge-runtime/.tmp/diagnosis-20260828/exact-stale-log.txt`。
+- **修復**：六個 stale branch 補上 `terminate: true`；以 Retrieval／Understanding fresh-attempt public regression 固定 termination、state／工具不變與 fresh attempt 可再次 decision。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:5619` 起及三個 ticket 驗證 logs。
+- **可重用教訓**：同步防禦分支若沒有公開 deterministic seam，不應新增私有 mock／test hook；以 public contract regression 加 production inventory 覆蓋。mixed tool batch 的 `every(terminate)` 行為仍是未處理風險。
+- **測試契約**：兩個 public regression 使用規格名稱並完整覆蓋 fresh-attempt lifecycle；既有三個 stale tests 補上 `terminate` assertion。PI smoke 回 `smoke ok`、exit 0；證據：`forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/pi-smoke.log`。
+
 ## 2026-08-27 Deep target source contract 修復教訓
 
 - **缺少 `targetSource` 誤進 `WAIT_USER`**：觀察到缺少檔名時被當成一般歧義；已驗證根因是 handler 未將 target source 契約視為可重試的輸入錯誤；修復為缺欄位回傳 retryable invalid 並保留 attempt。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/targeted-regression-20260827.log`。
@@ -131,3 +144,7 @@ status: completed
 - **stale sibling 未 terminate**：觀察到同批過期呼叫只被忽略；已驗證根因是 stale 分支缺少終止訊號；修復為 stale sibling 回傳 `terminate: true`，避免持續循環。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/targeted-regression-20260827.log`。
 - **manifest 位置造成 parser 回歸**：觀察到首次把 manifest 接在 identity JSON 後使既有 parser 測試失敗；已驗證根因是 parser 仍假設固定 identity JSON shape；修復為同步 parser 與測試契約，並由 post-schema 驗證確認。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/post-schema-test.log`、`forge-runtime/.tmp/post-schema-check.log`。
 - **schema 與舊測試契約漂移**：觀察到 `targetSource` 一度仍為 optional，且舊測試以缺欄位表示歧義、只讀 top-level `properties`；已驗證根因是 schema、測試 fixture 與新巢狀 shape 未同時更新，Spec review 捕捉到 optional 缺口；修復為將 `targetSource` 設為 required、更新測試至新 shape，並以完整 217/217 與雙軸 re-review PASS 固定契約。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/post-schema-test.log`、`forge-runtime/.tmp/post-schema-check.log`。
+
+## 2026-08-28 Review correction
+
+- **測試契約**：兩個 public regression 使用規格名稱並完整覆蓋 fresh-attempt lifecycle；既有三個 stale tests 補上 `terminate` assertion。最終 focused/full/check 與 PI smoke 證據分別為 `forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`、`forge-runtime/.tmp/pi-smoke.log`。

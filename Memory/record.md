@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-27
+updated: 2026-08-28
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: completed
+status: implemented-verified-reviewed
 ---
 
 # Forge Runtime v4 開發記錄
@@ -168,6 +168,20 @@ status: completed
 - 狀態：`deep-stale-result-loop-20260826` 已完成自動驗證，等待使用者在真實 PI session 重跑原始情境；review 僅限指定 scope，未改 `pi-main/`。
 - 真實 PI v0.83.0 已從 repo root 以 `.\pi-main\pi-test.bat --approve` 啟動，啟動畫面列出 `forge-runtime.ts`；此為啟動 smoke check，尚未完成原始情境人工驗收。
 
+## 2026-08-28 Deep completion stale termination 規劃
+
+- 目標：補齊兩個 Deep completion 工具共六個 stale return 的 `terminate: true`，避免同批過期 completion 反覆進入 agent loop。
+- 重大規劃：同一 active attempt 最多接受一個 `needs_decision`；接受後進 `WAIT_USER` 並清 attempt。使用者回答保留 `sourceRoundId`／`phase` 建立新 attempt，fresh attempt 可再次 decision。
+- 交付範圍：production 只預計修改 `forge-runtime/extensions/forge-runtime.ts`，測試只預計修改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`；不處理 `CONTEXT_BUILD` 或 scheduler。
+- 狀態：Plan A 已產出但等待使用者核准；本輪無程式／測試修改，無測試結果。
+
+## 2026-08-28 Deep completion stale termination 實作與驗證完成
+
+- 目標：補齊兩個 Deep completion 工具六個 stale return 的 `terminate: true`。
+- 重大實作：Plan A 經核准；兩個 public fresh-attempt regression 先紅 `terminate undefined` 後綠；六個 stale return 全部補上 termination。四個 inner branch 不新增私有 mock／test hook。
+- 驗證：focused 124/124、full 219/219、`npm run check` pass。證據：`forge-runtime/.tmp/deep-completion-stale-termination-focused-20260828.log`、`forge-runtime/.tmp/deep-completion-stale-termination-full-20260828.log`、`forge-runtime/.tmp/deep-completion-stale-termination-check-20260828.log`。
+- 未改 `session-state.ts`、scheduler、UI、schema/API、`pi-main/`；mixed tool batch `every(terminate)` 風險保留在 scope 外；獨立 review 已完成，可交付／提交。
+
 ## 2026-08-27 Deep target source contract 設計核准
 
 - 目標：修正 Grill→Deep Retrieval 的 target manifest 轉換與 `targetSource` 輸入契約，避免缺少檔名時誤耗用 Deep attempt，並封住同批 stale sibling。
@@ -180,3 +194,8 @@ status: completed
 - 重大實作：follow-up invocation 先提供由 `workflow.snapshot.candidates` 建立的 manifest；target 要求 `targetSource`；缺欄位保留 retry 額度；非唯一匹配才建立 `WAIT_USER`；stale sibling 回傳 `terminate: true`。
 - TDD 與驗證：完成 RED→GREEN；targeted regression、schema phase 與完整套件驗證通過，完整 `npm test` 為 217/217，`npm run check` exit 0。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/schema-phase-targeted-20260827.log`、`forge-runtime/.tmp/targeted-regression-20260827.log`、`forge-runtime/.tmp/post-schema-test.log`、`forge-runtime/.tmp/post-schema-check.log`。
 - 審查與狀態：Standards／Spec 雙軸 re-review 均 PASS；ticket `deep-target-source-contract-20260827` 已完成，未修改 `pi-main/`。
+
+## 2026-08-28 Deep completion stale termination review correction
+
+- 兩個 public regression 正式名稱為 `Extension_WhenRetrievalNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt` 與 `Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`；完整覆蓋 needs_decision、WAIT_USER/clear、舊 identity stale+terminate/state-tools 不變、fresh identity 保留與再次 needs_decision。既有三個 stale tests 補上 `terminate` assertion。
+- 最終驗證：focused 124/124、full 219/219、check pass；logs 為 `forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`。PI smoke 成功啟動，真實模型回 `smoke ok`、exit 0（`forge-runtime/.tmp/pi-smoke.log`）。獨立 review 已完成，可交付／提交。
