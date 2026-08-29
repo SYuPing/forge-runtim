@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-28
+updated: 2026-08-29
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: implemented-verified-reviewed
+status: implemented/verified-with-existing-workspace-caveats
 ---
 
 # Forge Runtime v4 Context
@@ -404,3 +404,45 @@ status: implemented-verified-reviewed
 - `manifest=[]` 且 `source=target` 時回 retryable invalid，保留相同 `attemptId`／`sourceRoundId`／`phase`，不進 `WAIT_USER`；明確要求模型自行改用 `wiki`／`code_base`，runtime 不自動選 source／target。
 - duplicate `decisionId` 維持拒絕、不靜默去重；保留同一 `KNOWLEDGE_UNDERSTANDING` attempt，以相同 identity 重送修正後唯一 IDs。invalid／rejection 不推進 stage，也不寫入 `CONTEXT_BUILD`；既有 stale guard 保留。
 - production 預設只改 `forge-runtime/extensions/forge-runtime.ts`；只有 RED 證明 extension seam 不足時才回報 `session-state.ts` blocker。文件不新增 API／schema／UI／scheduler、不擴充 snapshot、不自動 fallback、不接受 basename 模糊匹配，且只有 Plan A。
+
+### 2026-08-28 Deep retryable recovery contract 實作與驗證
+
+Ticket 已完成實作、驗證、初次 review fix 與最終雙軸 re-review，狀態為 `implemented-verified-reviewed`。空 target snapshot manifest 在共用 target ambiguity branch 前回 retryable invalid，要求模型改用 `wiki`／`code_base`，不呼叫 `handleDeepResult`，因此 identity／stage／budget 不變；Evidence Package validator 只有 rejection 錯誤包含 `決策 ID 重複` 時增加 `retryable:true`，可用同一 identity 修正重送，其他 validation failure 不因本 ticket 自動標 retryable。既有 validator、stale guard、state advance 保留。Production 僅為 `forge-runtime/extensions/forge-runtime.ts`，tests 僅為 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。
+
+初次 review findings 均已修正並保留為歷史：durable state、setup 重複、budget coverage、retryable 過寬、stale state 與 Plan A baseline 標示。Final test refactor 後 extension 129/129；本地排除 `pi-grill-interactive` suite 214/214；標準 `npm test` 214 pass/1 fail，唯一既存失敗是缺少 qwen token-plan JSON；final `npm run check` 38 個既存 baseline errors，沒有錯誤指向本 ticket 修改的 `forge-runtime.ts` 或 `forge-runtime-extension.test.ts`。`pi-grill-interactive.test.ts` 不是本 ticket 修改檔。最終 re-review：Standards P0/P1/P2=0；Spec P0/P1/P2=0。真實 PI 原情境人工驗收尚待完成；Node `DEP0190` 為非阻塞 warning。詳情與 logs 見 ticket、ADR-0018、Plan A。
+
+## 2026-08-29 Deep mixed-tool batch termination barrier 設計核准
+
+- 本 ticket 狀態為 `design-approved-ready-for-red`；本 session 只完成文件更新，尚未實作、測試或 commit。mixed-batch contract 唯一真相來源為 [`ADR-0019`](docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md)。
+- 核准以 extension-local ephemeral `DeepRetrievalBatch` 按 call ID 管理 mixed batch；completion deterministic retryable reject 且 `terminate=true`、保留 identity、不轉 stage；current-identity searches 全部 `terminate=true`，全 settle 後只 queue 一個同 identity follow-up；下一個 completion-only batch 才接受並 transition。
+- prompt guidance 區分 `needs_decision`（需人類選擇）與 `needs_discovery`（缺來源／證據）；kind 是唯一正式 route。Forge-only，不改 `pi-main/`、telemetry、scheduler、`session-state.ts`、public schema/API 或依賴。
+- 新 session 先讀 handoff、CONTEXT、ADR-0019、ticket、agent-state、Memory 兩檔，檢查 `git status`／`git diff`，展示摘要並等待確認；確認後用 `execute-designed-plan` 從 RED 開始。預期新增 6 測試，baseline 219 + 6 = 225 pass；PI 原生完整測試不是 gate。
+
+## 2026-08-29 自動進入 Deep 的階段面板刪除決策
+
+- 使用者已核准：不修改 `pi-main`，刪除 `continueDeepKnowledge` 在自動進入 Deep 前的單次 `await publishState(..., { deliverAs: "displayOnly" })`。這是純 UI side effect；目前 PI 不認得 `displayOnly` 時，可能把它當成會觸發模型回合的訊息，干擾 identity-bearing followUp 與 Deep 工具時序。
+- 只移除自動進入 Deep 的階段面板發布；保留 `WAIT_USER`、recovery、confirmation panel、session state、active tools、pending fail-closed gate、status 與其他既有 UI。需要人類決策的流程仍必須顯示面板。
+- 本決策取代「自動 Deep 階段面板使用 `displayOnly`」的未完成方案；不新增替代 UI 或新的 delivery contract。歷史上的「尚未修改、待 RED」描述保留於本段作為決策快照；目前完成狀態見下段。
+
+## 2026-08-29 Deep mixed-tool batch barrier 與自動 Deep 面板修正完成
+
+- Ticket `deep-mixed-tool-batch-termination-20260829` 已完成實作與驗證，狀態為 `implemented/verified-with-existing-workspace-caveats`。Extension 已建立以 call ID 管理的 ephemeral mixed batch barrier；mixed completion 會 retryable reject 且 `terminate=true`，current-identity search 全部 terminate，全部 search settle 後只 queue 一個同 identity follow-up，completion-only replay 才接受；prompt guidance 區分 `needs_decision` 與 `needs_discovery`。
+- 自動進入 Deep 的階段面板已先以 RED→GREEN 回歸驗證，再移除 `sendMessage`／`publishState(...displayOnly...)` 的多餘 UI side effect；正式流程保留 `ctx.ui.setStatus(buildWorkflowStatusText(nextState))` 更新狀態。`WAIT_USER`、recovery、confirmation panel 與 pending fail-closed gate 保留。
+- 修改範圍維持 Forge extension 與指定測試；`pi-main/` 無 tracked 改動。
+- 驗證證據：auto-panel unit 1/1、AgentSession after-status 1/1、三個受影響 tests 3/3、extension isolated `tsconfig.json` 67/67。較早的 pi-config 134/134 是 status 修正前結果，不作最終證據；最後 pi-config log 只有逐項 ✔，沒有 summary。`npm run check` exit 2，但 production 0 錯誤、本 ticket test 1199 後 0 錯；既有 TUI terminal 10 錯與 pi-main highlight.js 21 錯屬 workspace baseline。完整 pi-grill 受既有 TUI 兩個失敗阻斷，但本 ticket targeted 測試通過。
+
+## 2026-08-29 WAIT_USER UI-only state publication 設計待實作
+
+- Ticket `wait-user-ui-only-state-publication-20260829` 只完成設計與交接，狀態為 `planned`／`approved-awaiting-user-session-confirmation`；本輪未修改 production、tests、`pi-main`、全域 PI 或 project `.pi`。
+- 目前 `WAIT_USER` 的 `publishState()` 仍會呼叫 `pi.sendMessage`，並傳送 `deliverAs: "displayOnly"`。PI current 與官方 0.84.3 的 delivery contract 只支援 `steer`、`followUp`、`nextTurn`；未知值在 streaming 會落入 `steer`，因此純顯示訊息可能干擾 agent loop。
+- 下輪唯一 Plan A：移除 WAIT_USER `forge-stage` custom message 投遞，保留 workflow state、`setStatus`、WAIT_USER selector／custom editor、使用者回答與 followUp；不新增替代 UI、persistence 或 core delivery contract。實作前先由測試代理建立 RED，再做最小 production 刪除。
+- 這是不同於已完成的「自動 Deep 階段面板移除」ticket；後者只處理不需人類決策的自動 Deep UI side effect，已完成並保留 `setStatus`。
+
+## 2026-08-29 WAIT_USER UI-only state publication 實作與驗證完成
+
+- Ticket `wait-user-ui-only-state-publication-20260829` 狀態為 `implemented/verified-with-existing-workspace-caveats`。`publishState` 先更新 `setStatus`，`displayOnly` 直接返回，不呼叫 `sendMessage`；omission branch state 使用 display-only，recovery panel 保持 `triggerTurn: false`。
+- state／status／selector／custom editor、answer followUp、retry／recovery 均保留；未修改 `pi-main`。Interactive harness 依目前僅有 `tuiMode` 的 `InteractiveModeOptions`，10 個 tests 使用 test-local `attachVirtualTerminal`、`init`、`run`、`waitForRender`。
+- 驗證：extension targeted 2/2；PI targeted 3/3（含 no-auto-replay 與 explicit retry callCount 2→3）；static touched errors 0，剩餘 pi-main highlight.js 21 個 baseline errors；`git diff --check` 0、`pi-main` diff 0。
+- 真實 PI 0.84.3 no-session smoke 的合法 `/grill-run` WAIT_USER `display-only smoke` 通過並完成 confirm；observed normal active `forge-stage` 皆在 WAIT_USER 前，沒有 WAIT_USER-specific stage 證據。cancel 因在 streaming 送入而 inconclusive；第一次 forged roundId fail-closed 拒絕，不算產品失敗。
+- Full PI file 10/11，唯一 Deep dirty-scope failure `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue`（single search terminate true／no followup）非本 ticket；完整 npm suite 於既有 integration hang（85 pass／0 fail）後中止並保留 log。
+- 核心規範／安全 review PASS；manual retry gap 已補。private renderer terminal cast 是 upstream 無 public injection seam 的測試 caveat，未新增抽象。未解僅剩 Deep dirty-scope failure、完整 suite hang、可選真實 cancel smoke；本 ticket 不需下一 session 實作。

@@ -702,11 +702,15 @@ test("Extension_WhenCompletionNeedsConfirmation_ShouldTerminateToolTurnAndEnterW
 		harness.buildContext(),
 	);
 	assert.equal(completionResult.terminate, true);
-	const waitUserPanel = harness.observedMessagePayloads.at(-1);
-	assert.equal(waitUserPanel?.options?.deliverAs, "displayOnly");
+	assert.equal(
+		harness.observedMessagePayloads.some(
+			(payload) => payload.customType === "forge-stage" && payload.options?.deliverAs === "displayOnly",
+		),
+		false,
+		"WAIT_USER 不得送出 displayOnly forge-stage 訊息",
+	);
 
 	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
-	assert.match(harness.observedMessages.join("\n"), /WAIT_USER/);
 	assert.deepEqual(harness.getActiveTools(), ["forge_grill_evidence", "forge_grill_complete"]);
 
 });
@@ -1555,6 +1559,231 @@ test("Extension_DeepSearchTargetWithoutTargetSource_ShouldRejectBeforeBudgetAndK
 	assert.deepEqual(retryResult.details.evidence, []);
 	assert.deepEqual(retryResult.details.reusedEvidenceIds, [targetCandidateId]);
 });
+
+async function prepareDeepRetrieval(rootDir: string, name: string, marker: string, withWiki = false) {
+	writeWorkspaceFile(rootDir, `code_base/src/${name}.ts`, `// ${marker} code base evidence.\n`);
+	if (withWiki) writeWorkspaceFile(rootDir, `wiki/${name}.md`, `${marker} wiki evidence.\n`);
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const startResult = await harness.sendInput(`請幫我測試 ${marker} ${name}.ts`);
+	const invocation = (startResult as { text?: string }).text ?? "";
+	const candidateId = invocation.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute(`call-${name}-evidence`, { candidateId }, undefined, undefined, harness.buildContext());
+	const completionTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(completionTool?.execute);
+	await completionTool.execute(`call-${name}-complete`, {
+		roundId: "grill-1", status: "READY_FOR_DEEP", questions: [],
+		recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+		evidence: [candidateId], requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	const searchTool = harness.registeredTools.get("forge_deep_search")?.execute;
+	assert.ok(searchTool);
+	return {
+		harness,
+		invocation,
+		candidateId,
+		searchTool,
+		identity: { attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const },
+	};
+}
+
+test("Extension_DeepSearchEmptyTargetManifest_ReturnsRetryableInvalidWithoutWaitUser", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, invocation, searchTool, identity } = await prepareDeepRetrieval(
+		rootDir,
+		"empty-target-manifest",
+		"EmptyTargetManifestNeedle",
+	);
+	assert.doesNotMatch(invocation, /\[target\]/, "snapshot target manifest must be empty");
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const emptyTargetSearch = {
+		...identity,
+		query: "EmptyTargetManifestNeedle",
+		source: "target",
+		targetSource: "src/not-in-manifest.ts",
+	};
+	const invalidResult = await searchTool(
+		"call-empty-target-manifest-search",
+		emptyTargetSearch,
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(invalidResult.details.status, "invalid");
+	assert.equal(invalidResult.details.retryable, true);
+	assert.equal(invalidResult.details.reason, "target_manifest_empty");
+	for (let index = 1; index <= 9; index += 1) {
+		const repeatedInvalid = await searchTool(
+			`call-empty-target-manifest-budget-${index}`,
+			emptyTargetSearch,
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(repeatedInvalid.details.status, "invalid", `第 ${index} 次重試不得耗盡 search budget`);
+		assert.equal(repeatedInvalid.details.reason, "target_manifest_empty");
+	}
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.doesNotMatch(harness.observedStatuses.join("\n"), /WAIT_USER/);
+
+	const retryResult = await searchTool(
+		"call-empty-target-manifest-retry",
+		{
+			...identity,
+			query: "EmptyTargetManifestNeedle",
+			source: "code_base",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(retryResult.details.status, "accepted");
+});
+
+test("Extension_DeepSearchAfterEmptyTargetManifest_UsesExplicitWikiOnSameAttempt", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, searchTool, identity } = await prepareDeepRetrieval(
+		rootDir,
+		"empty-target-wiki-retry",
+		"EmptyTargetWikiRetryNeedle",
+		true,
+	);
+	const invalid = await searchTool("call-empty-target-wiki-retry-target", {
+		...identity, query: "EmptyTargetWikiRetryNeedle", source: "target", targetSource: "src/not-in-manifest.ts",
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(invalid.details.status, "invalid");
+	assert.equal(invalid.details.retryable, true);
+
+	const accepted = await searchTool("call-empty-target-wiki-retry-wiki", {
+		...identity, query: "EmptyTargetWikiRetryNeedle", source: "wiki",
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(accepted.details.status, "accepted");
+	assert.equal(accepted.details.attemptId, "deep-1");
+	assert.equal(accepted.details.phase, "DEEP_KNOWLEDGE_RETRIEVAL");
+	assert.doesNotMatch(harness.observedStatuses.join("\n"), /WAIT_USER/);
+});
+
+test("Extension_DeepCompleteDuplicateDecision_ReturnsRetryableInvalidWithoutStateAdvance", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(rootDir, "duplicate-decision");
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	const unknownEvidence = await understandingTool("call-unknown-evidence-decision", {
+		...identity,
+		outcome: {
+			kind: "completed",
+			decisions: [{ decisionId: "decision-unknown-evidence", statement: "未知證據決策", evidenceIds: ["ev-unknown"] }],
+			findings: [], limitations: [],
+		},
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(unknownEvidence.details.status, "invalid");
+	assert.equal(unknownEvidence.details.retryable, undefined);
+
+	const duplicate = await understandingTool("call-duplicate-decision", {
+		...identity,
+		outcome: {
+			kind: "completed",
+			decisions: [
+				{ decisionId: "decision-duplicate", statement: "原始決策", evidenceIds: [candidateId] },
+				{ decisionId: "decision-duplicate", statement: "覆寫決策", evidenceIds: [candidateId] },
+			],
+			findings: [], limitations: [],
+		},
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(duplicate.details.status, "invalid");
+	assert.equal(duplicate.details.retryable, true);
+	assert.deepEqual(harness.getActiveTools(), beforeTools);
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.doesNotMatch(harness.observedStatuses.join("\n"), /CONTEXT_BUILD/);
+	assert.equal((duplicate.details.evidencePackage as { decisions: Array<{ statement: string }> }).decisions[0]?.statement, "原始決策");
+});
+
+test("Extension_DeepCompleteCorrectedDecision_ReusesAttemptAndEntersContextBuild", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(rootDir, "corrected-decision");
+	const duplicate = {
+		...identity,
+		outcome: {
+			kind: "completed" as const,
+			decisions: [
+				{ decisionId: "decision-corrected-duplicate", statement: "原始決策", evidenceIds: [candidateId] },
+				{ decisionId: "decision-corrected-duplicate", statement: "重複決策", evidenceIds: [candidateId] },
+			],
+			findings: [], limitations: [],
+		},
+	};
+	const invalid = await understandingTool("call-corrected-decision-invalid", duplicate, undefined, undefined, harness.buildContext());
+	assert.equal(invalid.details.status, "invalid");
+
+	const corrected = await understandingTool("call-corrected-decision-valid", {
+		...identity,
+		outcome: {
+			kind: "completed",
+			decisions: [{ decisionId: "decision-corrected-unique", statement: "修正後唯一決策", evidenceIds: [candidateId] }],
+			findings: [], limitations: [],
+		},
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(corrected.details.status, "accepted");
+	assert.deepEqual(
+		(corrected.details.evidencePackage as { decisions: Array<{ decisionId: string }> }).decisions.map(
+			(decision) => decision.decisionId,
+		),
+		["decision-corrected-unique"],
+	);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /CONTEXT_BUILD/);
+});
+
+test("Extension_DeepRecoverySequence_ReachesContextBuildWithoutWaitUserLoop", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, searchTool, identity } = await prepareDeepRetrieval(
+		rootDir,
+		"recovery-sequence",
+		"RecoverySequenceNeedle",
+		true,
+	);
+	const targetInvalid = await searchTool("call-recovery-sequence-target", { ...identity, query: "RecoverySequenceNeedle", source: "target", targetSource: "src/missing.ts" }, undefined, undefined, harness.buildContext());
+	assert.equal(targetInvalid.details.status, "invalid");
+	const wikiAccepted = await searchTool("call-recovery-sequence-wiki", { ...identity, query: "RecoverySequenceNeedle", source: "wiki" }, undefined, undefined, harness.buildContext());
+	assert.equal(wikiAccepted.details.status, "accepted");
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	const retrieval = await retrievalTool.execute("call-recovery-sequence-retrieval", { ...identity, outcome: { kind: "completed" } }, undefined, undefined, harness.buildContext());
+	assert.equal(retrieval.details.status, "accepted");
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingTool?.execute);
+	const understandingIdentity = { attemptId: "deep-1", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING" as const };
+	const duplicate = await understandingTool.execute("call-recovery-sequence-duplicate", { ...understandingIdentity, outcome: { kind: "completed", decisions: [{ decisionId: "recovery-duplicate", statement: "A", evidenceIds: [candidateId] }, { decisionId: "recovery-duplicate", statement: "B", evidenceIds: [candidateId] }], findings: [], limitations: [] } }, undefined, undefined, harness.buildContext());
+	assert.equal(duplicate.details.status, "invalid");
+	const corrected = await understandingTool.execute("call-recovery-sequence-corrected", { ...understandingIdentity, outcome: { kind: "completed", decisions: [{ decisionId: "recovery-unique", statement: "修正後決策", evidenceIds: [candidateId] }], findings: [], limitations: [] } }, undefined, undefined, harness.buildContext());
+	assert.equal(corrected.details.status, "accepted");
+	assert.match(harness.observedStatuses.at(-1) ?? "", /CONTEXT_BUILD/);
+	assert.doesNotMatch(harness.observedStatuses.join("\n"), /WAIT_USER/);
+});
+
+async function prepareKnowledgeUnderstanding(rootDir: string, name: string) {
+	const marker = `KnowledgeUnderstanding${name}Needle`;
+	const { harness, candidateId, identity: retrievalIdentity } = await prepareDeepRetrieval(rootDir, name, marker);
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await retrievalTool.execute(`call-${name}-retrieval`, { ...retrievalIdentity, outcome: { kind: "completed" } }, undefined, undefined, harness.buildContext());
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	const understandingExecute = understandingTool?.execute;
+	assert.ok(understandingExecute);
+	return {
+		harness,
+		candidateId,
+		understandingTool: understandingExecute,
+		identity: { attemptId: "deep-1", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING" as const },
+	};
+}
 
 test("Extension_DeepSearchWikiAndCodeBase_ShouldRemainUnaffected", async (t) => {
 	for (const source of ["wiki", "code_base"] as const) {
@@ -2896,6 +3125,15 @@ test("整合測試_Grill完成READY_FOR_DEEP_Should透過FollowUp傳遞DeepAttem
 	const handoff = harness.observedUserMessageCalls.at(-1);
 	assert.ok(handoff, "READY_FOR_DEEP 應排入下一個模型回合");
 	assert.equal(handoff.options?.deliverAs, "followUp");
+	assert.equal(
+		harness.observedMessagePayloads.some(
+			(payload) =>
+				payload.customType === "forge-stage" &&
+				JSON.stringify(payload.content ?? "").includes("DEEP_KNOWLEDGE_RETRIEVAL"),
+		),
+		false,
+		"自動 Deep 不應發布 stage panel",
+	);
 	const identityStart = handoff.content.indexOf("{");
 	assert.notEqual(identityStart, -1, "followUp 應包含結構化 Deep identity");
 	assert.deepEqual(JSON.parse(handoff.content.slice(identityStart)), {
@@ -2986,6 +3224,655 @@ test("Extension_WhenDeepHandoffIsPending_ShouldKeepDeepToolsUnavailableAndIgnore
 	harness.releaseFollowUpInput();
 	await completion;
 	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+});
+
+test("Extension_WhenSearchAndCompletionShareBatch_ShouldRejectCompletionWithoutTransition", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, identity } = await prepareDeepRetrieval(rootDir, "mixed-tool-batch", "MixedToolBatchNeedle");
+	assert.ok(harness.messageEndHandler, "Expected message_end handler for Deep batch enforcement");
+
+	const beforeStatus = harness.observedStatuses.at(-1);
+	const beforeTools = harness.getActiveTools();
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-mixed-search",
+						name: "forge_deep_search",
+						arguments: { ...identity, query: "MixedToolBatchNeedle", source: "code_base" },
+					},
+					{
+						type: "toolCall",
+						id: "call-mixed-completion",
+						name: "forge_deep_retrieval_complete",
+						arguments: { ...identity, outcome: { kind: "completed" } },
+					},
+				],
+			},
+		},
+		harness.buildContext(),
+	);
+
+	const completionTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(completionTool?.execute);
+	const result = await completionTool.execute(
+		"call-mixed-completion",
+		{ ...identity, outcome: { kind: "completed" } },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(result.details.status, "rejected");
+	assert.equal(result.details.retryable, true);
+	assert.equal(result.terminate, true);
+	assert.equal(harness.observedStatuses.at(-1), beforeStatus);
+	assert.deepEqual(harness.getActiveTools(), beforeTools);
+});
+
+test("Extension_WhenMultipleCurrentIdentitySearchesSettle_ShouldTerminateAllAndQueueOneFollowUp", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, identity, searchTool } = await prepareDeepRetrieval(rootDir, "mixed-search-settle", "MixedSearchSettleNeedle");
+	assert.ok(harness.messageEndHandler, "Expected message_end handler for Deep batch enforcement");
+
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-mixed-search-success",
+						name: "forge_deep_search",
+						arguments: { ...identity, query: "MixedSearchSettleNeedle", source: "code_base" },
+					},
+					{
+						type: "toolCall",
+						id: "call-mixed-search-failure",
+						name: "forge_deep_search",
+						arguments: {
+							...identity,
+							query: "MixedSearchSettleNeedle",
+							source: "target",
+							targetSource: "src/not-in-manifest.ts",
+						},
+					},
+					{
+						type: "toolCall",
+						id: "call-mixed-search-completion",
+						name: "forge_deep_retrieval_complete",
+						arguments: { ...identity, outcome: { kind: "completed" } },
+					},
+				],
+			},
+		},
+		harness.buildContext(),
+	);
+
+	const beforeFollowUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length;
+	const success = await searchTool(
+		"call-mixed-search-success",
+		{ ...identity, query: "MixedSearchSettleNeedle", source: "code_base" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(success.details.status, "accepted");
+	assert.equal(success.terminate, true);
+	assert.equal(
+		harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+		beforeFollowUps,
+		"followUp must wait for every current-identity search to settle",
+	);
+
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "toolResult",
+				toolCallId: "call-mixed-search-success",
+				toolName: "forge_deep_search",
+				content: [{ type: "text", text: JSON.stringify(success.details) }],
+				details: success.details,
+				isError: false,
+			},
+		},
+		harness.buildContext(),
+	);
+	assert.equal(
+		harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+		beforeFollowUps,
+		"one settled search must not queue the followUp",
+	);
+
+	const failure = await searchTool(
+		"call-mixed-search-failure",
+		{
+			...identity,
+			query: "MixedSearchSettleNeedle",
+			source: "target",
+			targetSource: "src/not-in-manifest.ts",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(failure.details.status, "invalid");
+	assert.equal(failure.terminate, true);
+
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "toolResult",
+				toolCallId: "call-mixed-search-failure",
+				toolName: "forge_deep_search",
+				content: [{ type: "text", text: JSON.stringify(failure.details) }],
+				details: failure.details,
+				isError: true,
+			},
+		},
+		harness.buildContext(),
+	);
+
+	const followUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp");
+	assert.equal(followUps.length, beforeFollowUps + 1);
+	assert.match(followUps.at(-1)?.content ?? "", /deep-1/);
+	assert.match(followUps.at(-1)?.content ?? "", /grill-1/);
+	assert.match(followUps.at(-1)?.content ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+
+	const completionTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(completionTool?.execute);
+	const completion = await completionTool.execute(
+		"call-mixed-search-completion",
+		{ ...identity, outcome: { kind: "completed" } },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(completion.details.status, "rejected");
+	assert.equal(completion.terminate, true);
+	assert.equal(
+		harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+		beforeFollowUps + 1,
+		"mixed completion must not transition or queue a duplicate followUp",
+	);
+});
+
+test("Extension_WhenStaleOrRouteChangedBatchSettles_ShouldNotQueueDuplicateFollowUp", async (t) => {
+	{
+		const rootDir = createTempRoot();
+		t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+		const { harness, identity, searchTool } = await prepareDeepRetrieval(rootDir, "stale-mixed-batch", "StaleMixedBatchNeedle");
+		assert.ok(harness.messageEndHandler, "Expected message_end handler for Deep batch enforcement");
+		const baselineFollowUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length;
+
+		await harness.messageEndHandler(
+			{
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-stale-mixed-search-success",
+							name: "forge_deep_search",
+							arguments: { ...identity, query: "StaleMixedBatchNeedle", source: "code_base" },
+						},
+						{
+							type: "toolCall",
+							id: "call-stale-mixed-search-pending",
+							name: "forge_deep_search",
+							arguments: {
+								...identity,
+								query: "StaleMixedBatchNeedle",
+								source: "target",
+								targetSource: "src/not-in-manifest.ts",
+							},
+						},
+						{
+							type: "toolCall",
+							id: "call-stale-mixed-completion",
+							name: "forge_deep_retrieval_complete",
+							arguments: { ...identity, outcome: { kind: "completed" } },
+						},
+					],
+				},
+			},
+			harness.buildContext(),
+		);
+
+		const first = await searchTool(
+			"call-stale-mixed-search-success",
+			{ ...identity, query: "StaleMixedBatchNeedle", source: "code_base" },
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(first.details.status, "accepted");
+		await harness.messageEndHandler(
+			{
+				message: {
+					role: "toolResult",
+					toolCallId: "call-stale-mixed-search-success",
+					toolName: "forge_deep_search",
+					content: [{ type: "text", text: JSON.stringify(first.details) }],
+					details: first.details,
+					isError: false,
+				},
+			},
+			harness.buildContext(),
+		);
+
+		await harness.runCommand("cancel");
+		await harness.runCommand("continue");
+		const routeStatus = harness.observedStatuses.at(-1);
+		const routeFollowUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length;
+		assert.ok(routeFollowUps >= baselineFollowUps);
+
+		const stale = await searchTool(
+			"call-stale-mixed-search-pending",
+			{
+				...identity,
+				query: "StaleMixedBatchNeedle",
+				source: "target",
+				targetSource: "src/not-in-manifest.ts",
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(stale.details.status, "stale");
+		assert.equal(stale.terminate, true);
+		await harness.messageEndHandler(
+			{
+				message: {
+					role: "toolResult",
+					toolCallId: "call-stale-mixed-search-pending",
+					toolName: "forge_deep_search",
+					content: [{ type: "text", text: JSON.stringify(stale.details) }],
+					details: stale.details,
+					isError: true,
+				},
+			},
+			harness.buildContext(),
+		);
+		assert.equal(
+			harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+			routeFollowUps,
+			"stale remaining result must not queue a followUp",
+		);
+		assert.equal(harness.observedStatuses.at(-1), routeStatus, "stale result must not route back to the old stage");
+	}
+
+	{
+		const rootDir = createTempRoot();
+		t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+		const { harness, identity, searchTool } = await prepareDeepRetrieval(rootDir, "duplicate-mixed-result", "DuplicateMixedResultNeedle");
+		assert.ok(harness.messageEndHandler, "Expected message_end handler for Deep batch enforcement");
+		const baselineFollowUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length;
+		await harness.messageEndHandler(
+			{
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-duplicate-mixed-search-success",
+							name: "forge_deep_search",
+							arguments: { ...identity, query: "DuplicateMixedResultNeedle", source: "code_base" },
+						},
+						{
+							type: "toolCall",
+							id: "call-duplicate-mixed-search-failure",
+							name: "forge_deep_search",
+							arguments: {
+								...identity,
+								query: "DuplicateMixedResultNeedle",
+								source: "target",
+								targetSource: "src/not-in-manifest.ts",
+							},
+						},
+						{
+							type: "toolCall",
+							id: "call-duplicate-mixed-completion",
+							name: "forge_deep_retrieval_complete",
+							arguments: { ...identity, outcome: { kind: "completed" } },
+						},
+					],
+				},
+			},
+			harness.buildContext(),
+		);
+		const first = await searchTool(
+			"call-duplicate-mixed-search-success",
+			{ ...identity, query: "DuplicateMixedResultNeedle", source: "code_base" },
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		const failure = await searchTool(
+			"call-duplicate-mixed-search-failure",
+			{
+				...identity,
+				query: "DuplicateMixedResultNeedle",
+				source: "target",
+				targetSource: "src/not-in-manifest.ts",
+			},
+			undefined,
+			undefined,
+			harness.buildContext(),
+		);
+		assert.equal(first.details.status, "accepted");
+		assert.equal(failure.details.status, "invalid");
+		await harness.messageEndHandler(
+			{
+				message: {
+					role: "toolResult",
+					toolCallId: "call-duplicate-mixed-search-success",
+					toolName: "forge_deep_search",
+					content: [{ type: "text", text: JSON.stringify(first.details) }],
+					details: first.details,
+					isError: false,
+				},
+			},
+			harness.buildContext(),
+		);
+		const failureMessage = {
+			message: {
+				role: "toolResult",
+				toolCallId: "call-duplicate-mixed-search-failure",
+				toolName: "forge_deep_search",
+				content: [{ type: "text", text: JSON.stringify(failure.details) }],
+				details: failure.details,
+				isError: true,
+			},
+		};
+		await harness.messageEndHandler(
+			failureMessage,
+			harness.buildContext(),
+		);
+		assert.equal(
+			harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+			baselineFollowUps + 1,
+		);
+		await harness.messageEndHandler(failureMessage, harness.buildContext());
+		assert.equal(
+			harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+			baselineFollowUps + 1,
+			"duplicate tool-result must not queue a second followUp",
+		);
+	}
+});
+
+test("Extension_WhenCompletionOnlyBatchReplays_ShouldAcceptOnce", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, identity, searchTool } = await prepareDeepRetrieval(rootDir, "completion-only-replay", "CompletionOnlyReplayNeedle");
+	assert.ok(harness.inputHandler, "Expected public input handler for followUp replay");
+	assert.ok(harness.messageEndHandler, "Expected public message_end handler for Deep batch enforcement");
+	const baselineFollowUpCount = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length;
+
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-completion-only-search-success",
+						name: "forge_deep_search",
+						arguments: { ...identity, query: "CompletionOnlyReplayNeedle", source: "code_base" },
+					},
+					{
+						type: "toolCall",
+						id: "call-completion-only-search-failure",
+						name: "forge_deep_search",
+						arguments: {
+							...identity,
+							query: "CompletionOnlyReplayNeedle",
+							source: "target",
+							targetSource: "src/not-in-manifest.ts",
+						},
+					},
+					{
+						type: "toolCall",
+						id: "call-completion-only-batch-completion",
+						name: "forge_deep_retrieval_complete",
+						arguments: { ...identity, outcome: { kind: "completed" } },
+					},
+				],
+			},
+		},
+		harness.buildContext(),
+	);
+
+	const success = await searchTool(
+		"call-completion-only-search-success",
+		{ ...identity, query: "CompletionOnlyReplayNeedle", source: "code_base" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(success.details.status, "accepted");
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "toolResult",
+				toolCallId: "call-completion-only-search-success",
+				toolName: "forge_deep_search",
+				content: [{ type: "text", text: JSON.stringify(success.details) }],
+				details: success.details,
+				isError: false,
+			},
+		},
+		harness.buildContext(),
+	);
+
+	const failure = await searchTool(
+		"call-completion-only-search-failure",
+		{
+			...identity,
+			query: "CompletionOnlyReplayNeedle",
+			source: "target",
+			targetSource: "src/not-in-manifest.ts",
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(failure.details.status, "invalid");
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "toolResult",
+				toolCallId: "call-completion-only-search-failure",
+				toolName: "forge_deep_search",
+				content: [{ type: "text", text: JSON.stringify(failure.details) }],
+				details: failure.details,
+				isError: true,
+			},
+		},
+		harness.buildContext(),
+	);
+
+	const followUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp");
+	assert.equal(followUps.length, baselineFollowUpCount + 1, "all search results should produce one identity-bearing followUp");
+	const followUpContent = followUps.at(-1)?.content;
+	assert.ok(followUpContent);
+	const inputResult = await harness.inputHandler({ text: followUpContent }, harness.buildContext());
+	assert.equal((inputResult as { action?: string }).action, "continue");
+
+	const replayCall = {
+		type: "toolCall" as const,
+		id: "call-completion-only-replay-completion",
+		name: "forge_deep_retrieval_complete",
+		arguments: { ...identity, outcome: { kind: "completed" as const } },
+	};
+	await harness.messageEndHandler({ message: { role: "assistant", content: [replayCall] } }, harness.buildContext());
+
+	const completionTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(completionTool?.execute);
+	const beforeFollowUpCount = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length;
+	const accepted = await completionTool.execute(
+		"call-completion-only-replay-completion",
+		{ ...identity, outcome: { kind: "completed" } },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(accepted.details.status, "accepted");
+	assert.equal(accepted.terminate, true);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /KNOWLEDGE_UNDERSTANDING/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_complete"]);
+	assert.equal(
+		harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+		beforeFollowUpCount,
+		"completion replay must not add another followUp",
+	);
+
+	const statusAfterAccept = harness.observedStatuses.at(-1);
+	const replayed = await completionTool.execute(
+		"call-completion-only-replay-completion",
+		{ ...identity, outcome: { kind: "completed" } },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(replayed.details.status, "stale");
+	assert.equal(replayed.terminate, true);
+	assert.equal(harness.observedStatuses.at(-1), statusAfterAccept);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_complete"]);
+	assert.equal(
+		harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length,
+		beforeFollowUpCount,
+		"same completion call ID replay must remain quiet",
+	);
+});
+
+test("Extension_PromptGuidance_ShouldDistinguishDecisionFromDiscovery", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const marker = "PromptGuidanceNeedle";
+	writeWorkspaceFile(rootDir, "code_base/src/prompt-guidance.ts", `// ${marker} candidate.\n`);
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const baselineFollowUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp").length;
+	const startResult = await harness.sendInput(`請幫我測試 ${marker} prompt-guidance.ts`);
+	const candidateId = (startResult as { text?: string }).text?.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+	assert.ok(candidateId);
+
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(evidenceTool?.execute);
+	await evidenceTool.execute("call-prompt-guidance-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-prompt-guidance-complete",
+		{
+			roundId: "grill-1",
+			status: "READY_FOR_DEEP",
+			questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [candidateId],
+			requiresUserConfirmation: false,
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const initialFollowUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp");
+	assert.equal(initialFollowUps.length, baselineFollowUps + 1);
+	const guidance = [
+		/needs_decision[^\n]*僅用於[^\n]*人類[^\n]*選擇/,
+		/needs_discovery[^\n]*僅用於[^\n]*來源[^\n]*證據不足/,
+		/正式 route[^\n]*kind/,
+		/decisionSummary[^\n]*route/,
+	];
+	for (const pattern of guidance) assert.match(initialFollowUps.at(-1)?.content ?? "", pattern);
+
+	assert.ok(harness.messageEndHandler);
+	const identity = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" as const,
+	};
+	await harness.messageEndHandler(
+		{
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-prompt-guidance-search-success",
+						name: "forge_deep_search",
+						arguments: { ...identity, query: marker, source: "code_base" },
+					},
+					{
+						type: "toolCall",
+						id: "call-prompt-guidance-search-failure",
+						name: "forge_deep_search",
+						arguments: { ...identity, query: marker, source: "target", targetSource: "src/missing.ts" },
+					},
+					{
+						type: "toolCall",
+						id: "call-prompt-guidance-completion",
+						name: "forge_deep_retrieval_complete",
+						arguments: { ...identity, outcome: { kind: "completed" } },
+					},
+				],
+			},
+		},
+		harness.buildContext(),
+	);
+
+	const searchTool = harness.registeredTools.get("forge_deep_search");
+	assert.ok(searchTool?.execute);
+	const success = await searchTool.execute(
+		"call-prompt-guidance-search-success",
+		{ ...identity, query: marker, source: "code_base" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	const failure = await searchTool.execute(
+		"call-prompt-guidance-search-failure",
+		{ ...identity, query: marker, source: "target", targetSource: "src/missing.ts" },
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	for (const [callId, result, isError] of [
+		["call-prompt-guidance-search-success", success, false],
+		["call-prompt-guidance-search-failure", failure, true],
+	] as const) {
+		await harness.messageEndHandler(
+			{
+				message: {
+					role: "toolResult",
+					toolCallId: callId,
+					toolName: "forge_deep_search",
+					content: [{ type: "text", text: JSON.stringify(result.details) }],
+					details: result.details,
+					isError,
+				},
+			},
+			harness.buildContext(),
+		);
+	}
+
+	const settledFollowUps = harness.observedUserMessageCalls.filter((call) => call.options?.deliverAs === "followUp");
+	assert.equal(settledFollowUps.length, baselineFollowUps + 2);
+	for (const pattern of guidance) assert.match(settledFollowUps.at(-1)?.content ?? "", pattern);
+	for (const pattern of guidance) {
+		assert.equal(
+			initialFollowUps.at(-1)?.content?.match(pattern)?.[0],
+			settledFollowUps.at(-1)?.content?.match(pattern)?.[0],
+			"initial Deep handoff 與 barrier settle follow-up 必須帶同一 guidance",
+		);
+	}
 });
 
 test("Integration_WhenNewRequirementAppears_ShouldRouteWorkflowToWaitUser", async (t) => {
@@ -3754,6 +4641,59 @@ test("Extension_WhenWaitUser_ShouldPublishPanelAndStatus", async (t) => {
 	assert.match(renderedPanel, /recommendation/i);
 	assert.match(renderedPanel, /evidence/i);
 	assert.match(renderedPanel, /confirm/i);
+});
+
+test("ForgeStage_WhenPublishingWaitUserState_ShouldNotQueueUnsupportedDelivery", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const candidateId = await startFormalGrillRound(rootDir, harness.sendInput);
+	const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(evidenceTool?.execute);
+	assert.ok(grillCompleteTool?.execute);
+	await evidenceTool.execute("call-wait-user-publish-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+	let selectorCalls = 0;
+	let resolveSelectorCalled!: () => void;
+	const selectorCalled = new Promise<void>((resolve) => {
+		resolveSelectorCalled = resolve;
+	});
+	const context = harness.buildContext({
+		ui: {
+			async select() {
+				selectorCalls += 1;
+				resolveSelectorCalled();
+				return undefined;
+			},
+		},
+	});
+
+	await grillCompleteTool.execute(
+		"call-wait-user-publish-complete",
+		{
+			roundId: "grill-1",
+			status: "NEEDS_CONFIRMATION",
+			questions: [{ id: "wait-user-publish-decision", question: "是否繼續？", options: ["繼續", "停止"] }],
+			recommendation: { value: "繼續", reason: "等待人類決策。", confidence: 0.8 },
+			evidence: [candidateId],
+			requiresUserConfirmation: true,
+		},
+		undefined,
+		undefined,
+		context,
+	);
+	await selectorCalled;
+
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
+	assert.equal(
+		harness.observedMessagePayloads.some(
+			(payload) => payload.customType === "forge-stage" && payload.options?.deliverAs === "displayOnly",
+		),
+		false,
+		"WAIT_USER 不得送出 displayOnly forge-stage 訊息",
+	);
+
+	assert.equal(selectorCalls, 1, "WAIT_USER selector 流程仍應存在");
 });
 
 test("Extension_WhenWaitUserPayloadProvided_ShouldRenderPayloadValues", async (t) => {

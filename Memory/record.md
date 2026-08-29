@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-28
+updated: 2026-08-29
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: implemented-verified-reviewed
+status: implemented-targeted-verified-with-caveats
 ---
 
 # Forge Runtime v4 開發記錄
@@ -205,3 +205,48 @@ status: implemented-verified-reviewed
 
 - 兩個 public regression 正式名稱為 `Extension_WhenRetrievalNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt` 與 `Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldIssueFreshAttempt`；完整覆蓋 needs_decision、WAIT_USER/clear、舊 identity stale+terminate/state-tools 不變、fresh identity 保留與再次 needs_decision。既有三個 stale tests 補上 `terminate` assertion。
 - 最終驗證：focused 124/124、full 219/219、check pass；logs 為 `forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`。PI smoke 成功啟動，真實模型回 `smoke ok`、exit 0（`forge-runtime/.tmp/pi-smoke.log`）。獨立 review 已完成，可交付／提交。
+
+## 2026-08-28 Deep retryable recovery contract 實作與驗證
+
+- 目標：讓空 target manifest 與 duplicate decision invalid 可在同一 Deep attempt 修正重送，避免 `WAIT_USER` loop，且只有驗證成功的 Evidence Package 才進入 `CONTEXT_BUILD`。
+- 重大實作：production 僅修改 `forge-runtime/extensions/forge-runtime.ts`；空 manifest 回 retryable invalid、要求改用 `wiki`／`code_base` 且不呼叫 `handleDeepResult`；Evidence Package validator 只有錯誤包含 `決策 ID 重複` 時增加 `retryable:true`，其他 validation failure 維持原契約。tests 僅修改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`，完成五個指定測試。
+- 驗證：TDD RED 兩階段、focused 129/129、本地排除 interactive suite 214/214；標準 `npm test` 214 pass/1 fail（既存 qwen token-plan JSON 缺失）；`npm run check` exit 2、38 errors（既存 terminal 與 pi-main 依賴／型別問題）；測試型別修正後 `tsc` exit 0。證據見 ticket、ADR-0018、Plan A 所列 logs。
+- 邊界與狀態：未改 `session-state.ts`、`pi-main`、API/schema/UI/scheduler/snapshot，未新增依賴、Plan B、自動 fallback 或模糊 matching。狀態為 `implemented-verified-reviewed`；真實 PI 原情境人工驗收尚待完成，Node `DEP0190` 為非阻塞 warning。
+
+### 初次 review 修正里程碑（已修）
+
+- Standards P1 durable state 已補齊；P2 重複 setup 已抽為單一 `prepareDeepRetrieval` helper。Spec P1 已補至少 9 次 empty target 仍回 `target_manifest_empty` 的 budget assertion，並將 retryable 從通用 validation branch 縮到 duplicate error；Spec P2 stale state 已修；Plan A 已將 209 pass/1 fail 標為實作前基線。
+- Review-fix 驗證：focused 129/129、本地 214/214；標準 `npm test` 214 pass/1 fail，唯一為既存 qwen 缺檔；`npm run check` 38 個 baseline errors且未指向本 ticket 兩檔。證據：`forge-runtime/.tmp/deep-recovery-review-focused.log`、`deep-recovery-review-local.log`、`deep-recovery-review-npm-test.log`、`deep-recovery-review-check.log`。
+
+### 最終雙軸 re-review 里程碑
+
+- Final test refactor 後 extension 129/129（`forge-runtime/.tmp/deep-recovery-final-refactor-focused.log`）；本地排除 interactive suite 214/214（`forge-runtime/.tmp/deep-recovery-review-local.log`）；標準 `npm test` 214 pass/1 fail，唯一為既存 qwen 缺檔（`forge-runtime/.tmp/deep-recovery-review-npm-test.log`）；final check 為 38 個既存 baseline errors，沒有錯誤指向本 ticket 修改的 `forge-runtime.ts` 或 `forge-runtime-extension.test.ts`（`forge-runtime/.tmp/deep-recovery-final-check.log`）。`pi-grill-interactive.test.ts` 不是本 ticket 修改檔。
+- 最終 re-review 結果：Standards P0/P1/P2=0；Spec P0/P1/P2=0。Ticket 已可交付；剩餘工作只有真實 PI 原情境人工驗收與使用者決定是否提交。
+
+## 2026-08-29 Deep mixed-tool batch termination barrier 設計里程碑
+
+- 使用者已核准 Forge-only 修補方向；本 session 只完成設計文件，狀態為 `design-approved-ready-for-red`，未實作、未測試、未 commit。
+- 核准以 extension-local ephemeral `DeepRetrievalBatch` 按 tool-call ID 建立 transport barrier，mixed completion retryable reject，search 全部 terminate，settle 後只 queue 一個同 identity follow-up；完整決策見 [`ADR-0019`](../docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md)。
+- Plan A 預定先由獨立測試角色新增 6 個 regression 並跑 RED，再由 implementation／驗證／final review 角色分工完成；不改 PI、telemetry、scheduler、session-state、public schema/API 或依賴。Ticket 與新 session 起點見 [`deep-mixed-tool-batch-termination-20260829`](../docs/tickets/deep-mixed-tool-batch-termination-20260829.md) 與 [`docs/handoff.md`](../docs/handoff.md)。
+
+## 2026-08-29 Deep mixed-tool batch termination barrier 收尾
+
+- 目標：在不修改 `pi-main`、不放寬正式 fail-closed gate 的前提下，完成 Deep mixed-tool batch barrier，並移除不需要人類決策的自動 stage panel 訊息副作用。
+- 重大實作：Forge extension 以 call ID 維護 mixed batch、search settle 與單一同 identity follow-up；自動 stage panel 移除 `sendMessage`，保留 `setStatus`；`WAIT_USER` 等需要人類決策的面板維持原流程。
+- 安全邊界：曾嘗試的 pending-gate 放寬已撤回；以 string content 判斷 replay／route 的假設已由 RED 證偽並撤回；沒有把 workaround 放進正式流程，也未修改 `pi-main`。
+- 驗證：AgentSession targeted 1/1（`C:\Users\User\AppData\Local\Temp\forge-agent-session-after-panel-deletion-20260829.log`）、extension isolated 67/67（`C:\Users\User\AppData\Local\Temp\forge-final-extension-isolated-20260829.log`）；自動 stage panel RED/GREEN 分別見 `C:\Users\User\AppData\Local\Temp\forge-auto-deep-panel-red-20260829.log` 與 `C:\Users\User\AppData\Local\Temp\forge-auto-deep-panel-green-20260829.log`。check／回歸仍有既有 TUI terminal／highlight.js caveats（`C:\Users\User\AppData\Local\Temp\forge-final-check-isolated-20260829.log`），因此不宣稱全域 green。可核對實作與測試：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。
+- 狀態：本 ticket `completed-with-caveats`；後續另開 TUI terminal／highlight.js ticket。若仍需正式 `displayOnly` contract，另案設計與授權，不在本 ticket 擴大範圍。
+
+## 2026-08-29 WAIT_USER UI-only state publication 設計
+
+- 目標：在不修改 `pi-main`、全域 PI 或 project `.pi` 的前提下，移除 WAIT_USER `publishState()` 對不受支援 `displayOnly` `forge-stage` custom message 的投遞副作用。
+- 決策：下一 session 採單一 Plan A，保留 state、`setStatus`、WAIT_USER selector／custom editor、回答 followUp 與 recovery；不新增替代 UI、persistence 或 core delivery contract。
+- 狀態：文件已更新，實作與測試均尚未開始；等待使用者更換 session 後確認。全域 PI 0.84.3 固定安裝與設定歸屬評估延後至手動 PI TUI 測試通過後。
+
+## 2026-08-29 WAIT_USER UI-only state publication 實作與驗證
+
+- 目標：在不修改 `pi-main`、不放寬正式 fail-closed gate 的前提下，修正 WAIT_USER `forge-stage` 投遞與 PI interactive harness，保留 state、status、selector、custom editor、followUp、retry 與 recovery。
+- 重大實作：`publishState()` 對 `deliverAs: "displayOnly"` 直接停止 `pi.sendMessage`，仍更新 state/status；omission recovery 的純顯示訊息使用 `triggerTurn: false`；PI TUI 測試改用現行 `InteractiveMode` API 的 test-only VirtualTerminal attach/init/render barrier，並修正 retry fixture 使用目前 `grill-1` round。
+- 驗證：WAIT_USER strict RED 先觀察實際 call count `4`、預期 `2`，修正後 GREEN；PI interactive 3/3、extension focused 2/2；static check 對本輪 touched files 為 0 errors；`git diff --check` 與 `pi-main` hygiene 通過。證據：`C:\Users\User\AppData\Local\Temp\run_wait_user_red_test_20260829.log`、`C:\Users\User\AppData\Local\Temp\verify_wait_user_extension_contracts_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_first_virtual_terminal_harness_retry_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_second_virtual_terminal_harness_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_third_virtual_terminal_harness_20260829.log`。
+- 完整套件與邊界：完整 package／Deep suite 仍受既有 Deep 測試與 TUI terminal／highlight.js baseline caveats 影響，不能宣稱全域 green；真實 PI smoke 僅證明啟動與 extension 載入，未取代原始情境人工驗收。未修改 `pi-main/`。
+- 狀態：`implemented-targeted-verified-with-caveats`；本輪 ticket 已完成指定 Forge/UI-only 修正與 targeted 驗證，剩餘 caveats 另見 [`docs/handoff.md`](../docs/handoff.md)、[`docs/PLAN-A.md`](../docs/PLAN-A.md)、[`ADR-0020`](../docs/adr/ADR-0020-wait-user-ui-only-state-publication.md) 與 [`agent-state/wait-user-ui-only-state-publication-20260829.md`](../agent-state/wait-user-ui-only-state-publication-20260829.md)。

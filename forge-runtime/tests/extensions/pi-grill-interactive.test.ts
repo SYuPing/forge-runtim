@@ -23,6 +23,9 @@ type ForgeExtensionApi = Parameters<typeof forgeRuntimeExtension>[0];
 // PI 的 on overload 集合與 Forge runtime contract 結構不同；真實 TUI tests 覆蓋 runtime contract。
 // 這是僅限測試的 overload-set bridge；四個真實 TUI lifecycle tests 驗證 runtime contract。
 const installForgeRuntimeExtension = (pi: ExtensionAPI): void => forgeRuntimeExtension(pi as unknown as ForgeExtensionApi);
+function attachVirtualTerminal(mode: InteractiveMode, terminal: VirtualTerminal): void {
+	(mode as unknown as { renderer: { terminal: VirtualTerminal } }).renderer.terminal = terminal;
+}
 const routerStartForgeResponse = () => fauxAssistantMessage('{"route":"start_forge"}');
 
 function extractCandidateId(context: unknown): string {
@@ -148,9 +151,11 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 				return sentinelResponse;
 			},
 		]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 Forge");
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "是否進入 deep knowledge？");
@@ -293,9 +298,11 @@ test("DeepHandoff_WhenSteerPrecedesIdentityFollowUp_ShouldKeepStagePanelOutOfPro
 				return fauxAssistantMessage("合法 Deep 後續已完成");
 			},
 		]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 BoundaryToken");
 		terminal.sendInput("\r");
 		for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -400,9 +407,11 @@ test("SuccessfulReadyForDeepCompletion_ReturnsTerminatingResultWithoutConfirmati
 				}, { id: "call-complete-ready-regression" })]),
 			() => fauxAssistantMessage("已完成 deep knowledge。"),
 		]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 test");
 		terminal.sendInput("\r");
 		const completionResult = await completion as { terminate?: unknown; details?: { status?: unknown } };
@@ -498,9 +507,11 @@ test("PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnsw
 			),
 			fauxAssistantMessage("已收到確認。"),
 		]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 Forge");
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "是否進入 deep knowledge？");
@@ -654,9 +665,11 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 			]),
 			fauxAssistantMessage("Deep knowledge 已完成。"),
 		]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 test");
 		terminal.sendInput("\r");
 		await waitForScrollBuffer(terminal, "DEEP_KNOWLEDGE_RETRIEVAL");
@@ -683,7 +696,7 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 	}
 });
 
-test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndSettle", async () => {
+test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndResumeOnlyAfterExplicitRetry", async () => {
 	const tempDir = join(tmpdir(), `pi-grill-tui-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempDir, { recursive: true });
 	mkdirSync(join(tempDir, "wiki"), { recursive: true });
@@ -746,10 +759,12 @@ test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndSettle", async () => {
 		});
 		await runtime.session.bindExtensions({});
 
-		faux.setResponses([routerStartForgeResponse(), fauxAssistantMessage("模型回覆未完成。"), fauxAssistantMessage("retry-attempt-completed")]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		faux.setResponses([routerStartForgeResponse(), fauxAssistantMessage("模型回覆未完成。")]);
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 Forge");
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "GRILL_COMPLETION_REQUIRED");
@@ -760,15 +775,39 @@ test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndSettle", async () => {
 		const recoveryPanels = runtime.session.messages.filter((message) => JSON.stringify(message).includes("GRILL_COMPLETION_REQUIRED"));
 		assert.equal(recoveryPanels.length, 1);
 		const assistantMessagesAtRecovery = runtime.session.messages.filter((message) => message.role === "assistant").length;
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await runtime.session.waitForIdle();
 		assert.equal(runtime.session.messages.filter((message) => message.role === "user").length, 1);
 		assert.equal(runtime.session.messages.filter((message) => message.role === "assistant").length, assistantMessagesAtRecovery);
 		assert.equal(faux.getPendingResponseCount(), 0);
+		assert.equal(faux.state.callCount, 2);
+		assert.equal(runtime.session.isIdle, true);
+		assert.doesNotMatch(JSON.stringify(runtime.session.messages), /retry-attempt-completed/);
 
+		faux.appendResponses([
+			fauxAssistantMessage([
+				fauxToolCall("forge_grill_complete", {
+					evidence: [],
+					questions: [{ id: "q-retry", question: "retry-attempt-completed", options: ["是", "否"] }],
+					recommendation: { reason: "重試完成。", value: "是" },
+					requiresUserConfirmation: true,
+					roundId: "grill-1",
+					status: "NEEDS_CONFIRMATION",
+				}, { id: "call-complete-retry-1" }),
+			]),
+		]);
 		terminal.sendInput("/forge-runtime retry");
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "retry-attempt-completed");
+		await runtime.session.waitForIdle();
+		assert.equal(faux.state.callCount, 3);
+		assert.equal(faux.getPendingResponseCount(), 0);
 		assert.equal(runtime.session.messages.filter((message) => message.role === "user").length, 2);
+		assert.equal(runtime.session.isIdle, true);
+		assert.equal(
+			runtime.session.messages.filter((message) => JSON.stringify(message).includes("GRILL_COMPLETION_REQUIRED")).length,
+			1,
+		);
+		assert.match((await terminal.flushAndGetViewport()).join("\n"), /retry-attempt-completed/);
 	} finally {
 		mode?.stop();
 		await runtime?.dispose();
@@ -841,9 +880,11 @@ test("PiTui_WhenSingleInputRuns_ShouldBoundAssistantTurns", async () => {
 		await runtime.session.bindExtensions({});
 
 		faux.setResponses([routerStartForgeResponse(), fauxAssistantMessage("模型回覆未完成。")]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 Forge");
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "GRILL_COMPLETION_REQUIRED");
@@ -955,9 +996,11 @@ test("PiProvider_WhenWaitUserAnswerStartsNextRound_ShouldReceiveStructuredInvoca
 					return fauxAssistantMessage("headroom");
 				}),
 			]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput(request); terminal.sendInput("\r");
 		await waitForViewport(terminal, "是否進入 deep knowledge？");
 		terminal.sendInput("\r");
@@ -1075,9 +1118,11 @@ test("PiIngress_WhenInitialGrillIngress_ShouldPreserveFullGrillInvocationInProvi
 				return fauxAssistantMessage("模型回覆未完成。");
 			},
 		]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput(request);
 		terminal.sendInput("\r");
 		for (let attempt = 0; attempt < 100 && providerUserMessage === undefined; attempt += 1) {
@@ -1171,9 +1216,11 @@ test("PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInv
 				return fauxAssistantMessage("模型回覆未完成。");
 			},
 		]);
-		mode = new InteractiveMode(runtime, { terminal, uiMode: "regular" });
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
 		void mode.run();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await terminal.waitForRender();
 		terminal.sendInput(request);
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "請明確回覆同意");
@@ -1190,6 +1237,160 @@ test("PiProvider_WhenKnowledgeBaseApprovalStartsGrill_ShouldReceiveStructuredInv
 		assert.notEqual(providerUserMessage, "同意");
 	} finally {
 		mode?.stop();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("AgentSession_WhenParallelMixedDeepBatchRuns_ShouldApplyBarrierEndToEnd", async () => {
+	const originalPiOffline = process.env.PI_OFFLINE;
+	process.env.PI_OFFLINE = "1";
+	const tempDir = join(tmpdir(), `pi-deep-mixed-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(join(tempDir, "wiki", "mixed.md"), "mixed barrier evidence\n", "utf8");
+	writeFileSync(join(tempDir, "code_base", "mixed-barrier.ts"), "// mixed barrier\nexport const mixedBarrier = true;\n", "utf8");
+	writeFileSync(join(tempDir, "mixed-barrier.ts"), "// mixed barrier\nexport const mixedBarrier = true;\n", "utf8");
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let unsubscribe: (() => void) | undefined;
+	const toolEnds: Array<{ toolCallId: string; toolName: string; result: unknown }> = [];
+	const deepIdentity = { attemptId: "deep-1", sourceRoundId: "grill-1" } as const;
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id, name: model.name, api: model.api, reasoning: model.reasoning,
+								input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
+							})),
+						});
+						installForgeRuntimeExtension(pi);
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: runtimeOptions.model })),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+		});
+		await runtime.session.bindExtensions({});
+		unsubscribe = runtime.session.subscribe((event) => {
+			if (event.type === "tool_execution_end" && ["forge_deep_search", "forge_deep_retrieval_complete", "forge_deep_complete"].includes(event.toolName)) {
+				toolEnds.push({ toolCallId: event.toolCallId, toolName: event.toolName, result: event.result });
+			}
+		});
+		faux.setResponses([
+			routerStartForgeResponse(),
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
+				candidateId: extractCandidateId(context),
+			}, { id: "mixed-batch-grill-evidence" })]),
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+				evidence: [extractCandidateId(context)],
+				questions: [],
+				recommendation: { reason: "ready", value: "進入 deep knowledge" },
+				requiresUserConfirmation: false,
+				roundId: "grill-1",
+				status: "READY_FOR_DEEP",
+			}, { id: "mixed-batch-grill-complete" })]),
+			() => {
+				return fauxAssistantMessage([
+					fauxToolCall("forge_deep_search", {
+						...deepIdentity, phase: "DEEP_KNOWLEDGE_RETRIEVAL", query: "mixed barrier", source: "wiki",
+					}, { id: "mixed-batch-search-wiki" }),
+					fauxToolCall("forge_deep_search", {
+						...deepIdentity, phase: "DEEP_KNOWLEDGE_RETRIEVAL", query: "mixedBarrier", source: "code_base",
+					}, { id: "mixed-batch-search-code" }),
+					fauxToolCall("forge_deep_retrieval_complete", {
+						...deepIdentity, phase: "DEEP_KNOWLEDGE_RETRIEVAL", outcome: { kind: "completed" },
+					}, { id: "mixed-batch-completion" }),
+				]);
+			},
+			() => {
+				return fauxAssistantMessage([fauxToolCall("forge_deep_retrieval_complete", {
+					attemptId: deepIdentity.attemptId,
+					sourceRoundId: deepIdentity.sourceRoundId,
+					phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+					outcome: { kind: "completed" },
+				}, { id: "mixed-batch-retrieval-completion-only" })]);
+			},
+		]);
+		const baselineUserMessages = runtime.session.messages.filter((message) => message.role === "user").length;
+		await runtime.session.prompt("請幫我測試 mixed barrier");
+		await runtime.session.waitForIdle();
+
+		const sessionMessages = JSON.stringify(runtime.session.messages);
+		assert.match(sessionMessages, /"attemptId":"deep-1"/);
+		assert.match(sessionMessages, /"sourceRoundId":"grill-1"/);
+		assert.match(sessionMessages, /DEEP_KNOWLEDGE_RETRIEVAL/);
+		const completionResults = toolEnds.filter((entry) => entry.toolName === "forge_deep_retrieval_complete");
+		assert.equal(completionResults.length, 2, "retrieval completion must execute once per batch");
+		const mixedCompletion = completionResults.find((entry) => entry.toolCallId === "mixed-batch-completion");
+		assert.ok(mixedCompletion, "mixed completion event must be present");
+		const mixedCompletionResult = mixedCompletion.result as { details?: Record<string, unknown>; terminate?: boolean };
+		assert.equal(mixedCompletionResult.details?.status, "rejected");
+		assert.equal(mixedCompletionResult.details?.reason, "mixed_search_completion_batch");
+		assert.equal(mixedCompletionResult.details?.retryable, true);
+		assert.equal(mixedCompletionResult.terminate, true, `mixed completion must terminate: ${JSON.stringify(mixedCompletionResult)}`);
+		const completionOnly = completionResults.find((entry) => entry.toolCallId === "mixed-batch-retrieval-completion-only");
+		assert.ok(completionOnly, "completion-only event must be present");
+		const completionOnlyResult = completionOnly.result as { details?: Record<string, unknown>; terminate?: boolean };
+		assert.equal(completionOnlyResult.terminate, true);
+		assert.equal(completionOnlyResult.details?.status, "accepted");
+		const wikiSearch = toolEnds.find((entry) => entry.toolCallId === "mixed-batch-search-wiki");
+		assert.ok(wikiSearch, "wiki search event must be present");
+		assert.equal((wikiSearch.result as { terminate?: boolean }).terminate, true);
+		assert.equal((wikiSearch.result as { details?: { status?: string } }).details?.status, "accepted");
+		const codeSearch = toolEnds.find((entry) => entry.toolCallId === "mixed-batch-search-code");
+		assert.ok(codeSearch, "code search event must be present");
+		assert.equal((codeSearch.result as { terminate?: boolean }).terminate, true);
+		assert.equal((codeSearch.result as { details?: { status?: string } }).details?.status, "accepted");
+		const userMessages = runtime.session.messages.filter((message) => message.role === "user");
+		const userMessageDelta = userMessages.slice(baselineUserMessages);
+		const barrierUserMessages = userMessageDelta.filter((message) =>
+			JSON.stringify(message).includes("Deep Search 批次已完成。"),
+		);
+		assert.equal(
+			barrierUserMessages.length,
+			1,
+			"barrier follow-up should be emitted exactly once",
+		);
+		const barrierUserMessageJson = JSON.stringify(barrierUserMessages[0]);
+		assert.ok(barrierUserMessageJson.includes("deep-1"));
+		assert.ok(barrierUserMessageJson.includes("grill-1"));
+		assert.equal(
+			runtime.session.messages.filter((message) => JSON.stringify(message).includes("forge-stage") && JSON.stringify(message).includes("KNOWLEDGE_UNDERSTANDING")).length,
+			1,
+			"Deep retrieval must transition to Knowledge Understanding once",
+		);
+		assert.deepEqual(await runtime.session.agent.state.tools.map((tool) => tool.name), ["forge_deep_complete"]);
+	} finally {
+		if (originalPiOffline === undefined) delete process.env.PI_OFFLINE;
+		else process.env.PI_OFFLINE = originalPiOffline;
+		unsubscribe?.();
 		await runtime?.dispose();
 		faux.unregister();
 		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });

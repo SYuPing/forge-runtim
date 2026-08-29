@@ -4,7 +4,7 @@ type: adr
 scope: Forge Runtime v4 Deep Retrieval／Knowledge Understanding recovery
 updated: 2026-08-28
 source: FORGE_RUNTIME_Arch_v4.md、ADR-0016、ADR-0017、CONTEXT.md、docs/PLAN-A.md、docs/tickets/deep-recovery-contract-20260828.md
-status: design-approved-implementation-pending
+status: implemented-verified-reviewed
 ---
 
 # ADR-0018：Deep retryable recovery contract
@@ -13,7 +13,7 @@ status: design-approved-implementation-pending
 
 ## 狀態
 
-Design approved；本 ticket 只完成策略文件，尚未修改 production code、tests 或 `pi-main/`。
+已完成實作、驗證、初次 review fix 與最終雙軸 re-review；狀態為 `implemented-verified-reviewed`。Standards P0/P1/P2=0，Spec P0/P1/P2=0。
 
 ## Context
 
@@ -22,7 +22,7 @@ ADR-0016 定義 Deep Retrieval／Knowledge Understanding、attempt identity、Ev
 ## Decision
 
 1. `manifest=[]` 且 `source=target` 時，`forge_deep_search` 回傳 retryable invalid。保留同一 `attemptId`、`sourceRoundId` 與 `phase`，不建立或進入 `WAIT_USER`；回應明確要求模型自行改用 `wiki` 或 `code_base`。runtime 不自動選 source／target、不自動 fallback。
-2. `duplicate decisionId` 維持拒絕，不靜默去重或覆寫既有 decision。保留同一 `KNOWLEDGE_UNDERSTANDING` attempt，要求模型以相同 identity 重送修正後、每個 decisionId 唯一的 payload。
+2. `duplicate decisionId` 維持拒絕，不靜默去重或覆寫既有 decision。Evidence Package validator 只有錯誤包含 `決策 ID 重複` 時回 `retryable:true`，保留同一 `KNOWLEDGE_UNDERSTANDING` attempt，要求模型以相同 identity 重送修正後、每個 decisionId 唯一的 payload；其他 validation failure 不因本 ticket 自動標 retryable。
 3. retryable invalid、duplicate rejection 與 stale rejection 都不得推進 stage、清除有效 attempt、寫入 Evidence Package 或進入 `CONTEXT_BUILD`。既有 stale guard 保留。
 4. 不接受 basename 模糊匹配；target allowlist、identity 三元組、snapshot 不變。既有 `session-state.ts` seam 先不改；只有 RED 證明 extension seam 不足時，才停止並回報 blocker。
 5. production 預設只改 `forge-runtime/extensions/forge-runtime.ts`；測試只改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。不新增 API、schema、UI、scheduler、snapshot 欄位、依賴或 Plan B。
@@ -48,7 +48,7 @@ ADR-0016 定義 Deep Retrieval／Knowledge Understanding、attempt identity、Ev
 
 ## Verification
 
-Plan A 定義五個新測試與具體斷言。extension file 基線為 `124/124`，新增後目標為 `129/129`；排除 `pi-grill-interactive.test.ts` 的本地 suite 基線為 `209/209`，新增後目標為 `214/214`。標準 `npm test` 基線為 `209 pass/1 fail`，唯一既存失敗是缺少 `pi-main/packages/ai/src/providers/data/qwen-token-plan-individual.json`；`npm run check` 基線因 10 個 `InteractiveModeOptions` terminal 型別錯誤與 pi-main 既存缺依賴失敗。本 ticket 要求不新增新失敗並保留 baseline，不宣稱 full/check 全綠；真實 PI 原情境列人工驗收。
+五個指定測試已加入 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。初次 review findings 均已修正並保留為歷史：Standards P1 durable state、P2 重複 setup；Spec P1 budget coverage、P1 retryable 過寬、P2 stale state；另已將 Plan A 的 209 pass/1 fail 標為實作前基線。Final test refactor 後 extension 129/129（`forge-runtime/.tmp/deep-recovery-final-refactor-focused.log`）；排除 `pi-grill-interactive` 的本地 suite 214/214（`forge-runtime/.tmp/deep-recovery-review-local.log`）；標準 `npm test` 214 pass/1 fail，唯一既存失敗是缺少 `pi-main/packages/ai/src/providers/data/qwen-token-plan-individual.json`（`forge-runtime/.tmp/deep-recovery-review-npm-test.log`）；final `npm run check` 為 38 個既存 baseline errors，沒有錯誤指向本 ticket 修改的 `forge-runtime.ts` 或 `forge-runtime-extension.test.ts`（`forge-runtime/.tmp/deep-recovery-final-check.log`）。`pi-grill-interactive.test.ts` 不是本 ticket 修改檔。最終 re-review：Standards P0/P1/P2=0；Spec P0/P1/P2=0。真實 PI 原情境仍列人工驗收；Node `DEP0190` 為非阻塞 warning。
 
 ## Supersession
 

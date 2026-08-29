@@ -55,3 +55,7 @@ Grill 成功完成後，`NEEDS_CONFIRMATION` 必須讓使用者看到 WAIT_USER 
 本 ADR 的 `displayOnly` 契約仍只描述 delivery 語意。Forge 本輪新增的窄化例外是：只有初始 Deep stage panel 使用 `displayOnly`，避免它成為 steer；input handler 僅預載本回合 Deep tools，不消費 pending identity，必須等 matching user `message_start` 才消費。pending identity 存在期間，Deep tool_call fail-closed。其他 Deep delivery 與 semantic contract 不變；此例外不改動 WAIT_USER 或一般 state message。
 
 本輪自動化驗證為 extension 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。真實 PI 目前僅完成啟動 smoke check，尚未捕捉原始 stale 情境的輸入與結果。
+
+## 歷史決策被取代（2026-08-29）
+
+本 ADR 原先要求 WAIT_USER `displayOnly` 訊息進入 transcript、session persistence 與 reload panel；該要求由 [`ADR-0020`](ADR-0020-wait-user-ui-only-state-publication.md) 取代。原決策與其實作歷史保留供追溯；目前 WAIT_USER 不再以本 ADR 的 persistence 要求作為下一 ticket 的實作目標。

@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-28
+updated: 2026-08-29
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
-status: implemented-verified-reviewed
+status: implemented-targeted-verified-with-caveats
 ---
 
 # Forge Runtime v4 開發教訓
@@ -153,4 +153,54 @@ status: implemented-verified-reviewed
 - **duplicate decision 觀察**：`q-spi-role` 出現 duplicate decisionId 並被拒絕；目前只能標為觀察，尚未由完整 tool payload 確認是模型重送或 runtime merge 重複。策略保留拒絕，同 identity 修正重送唯一 IDs。證據：使用者實際輸出、`forge-runtime/src/evidence/evidence-engine.ts` duplicate guard、`docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md`。
 - **可重用教訓**：輸入 invalid 與人類需要選擇的 ambiguity 必須分開；沒有候選清單時不應製造 `WAIT_USER` 選擇題。修復完成前先以 RED 測試證明 extension seam 是否足夠，避免預先擴大到 state layer。策略與測試契約見 [`ADR-0018`](../docs/adr/ADR-0018-deep-retryable-recovery-contract.md) 與 [`docs/PLAN-A.md`](../docs/PLAN-A.md)。
 
+## 2026-08-28 Deep retryable recovery contract 修復教訓
+
+- **空 manifest 誤走 ambiguity**：根因是空 target snapshot manifest 在共用 target ambiguity branch 被當成需要人類選擇；修復為在該 branch 前回 retryable invalid，要求模型改用 `wiki`／`code_base`，不呼叫 `handleDeepResult`。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/deep-recovery-red-1.log`、`forge-runtime/.tmp/deep-recovery-focused-green.log`。
+- **Duplicate decision invalid 缺 retryable 欄位**：根因是包含 `決策 ID 重複` 的 validator rejection 未標示可用同 identity 修正；最終修復只對該錯誤增加 `retryable:true`，其他 validation failure 維持原契約。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/.tmp/deep-recovery-red-2.log`、`forge-runtime/.tmp/deep-recovery-review-focused.log`。
+- **測試型別 `evidencePackage` 為 unknown**：根因是測試 assertion 直接存取未收窄的 unknown；修復為 assertion 局部 cast，`tsc` exit 0。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/.tmp/deep-recovery-test-type-green.log`。
+- **可重用教訓**：沒有候選的輸入錯誤應保留同一 attempt 讓模型修正；只有人類需要選擇時才建立 `WAIT_USER`。測試型別修正應局部收窄，不放寬 production contract。標準 suite/check 的既存失敗維持原樣，不可誤報為全綠；證據：`forge-runtime/.tmp/deep-recovery-npm-test.log`、`forge-runtime/.tmp/deep-recovery-check-rerun.log`。
+
+### 初次 review：retryable 分類過寬
+
+- **Bug**：把 `retryable:true` 放在通用 Evidence Package validation failure branch，會把非 duplicate 的驗證錯誤也錯分為可在同 identity 修正。
+- **根因與修復**：回應分類沒有辨識 validator error 類型；修正為只有 errors 包含 `決策 ID 重複` 時標示 retryable，其他 validation failure 維持原回應。RED：`forge-runtime/.tmp/deep-recovery-review-red.log`；GREEN 129/129：`forge-runtime/.tmp/deep-recovery-review-focused.log`。
+- **可重用教訓**：retryability 是錯誤分類契約，不是 validation failure 的通用屬性；應以可核對的錯誤類型窄化，並用負向測試固定非目標錯誤不帶 retryable。既有 TS18046 局部 cast 教訓保留，不以本段重複。
+
+### 最終雙軸 re-review
+
+- 初次 review 發現的 durable state、setup 重複、budget coverage、retryable 過寬、stale state 與 Plan A baseline 標示均已修正；相關 bug、根因與教訓保留在本文件既有段落。
+- 最終 re-review 未發現新 bug：Standards P0/P1/P2=0；Spec P0/P1/P2=0。Final test refactor focused 129/129，證據：`forge-runtime/.tmp/deep-recovery-final-refactor-focused.log`。本結論不取代真實 PI 原情境人工驗收。
+
 - **測試契約**：兩個 public regression 使用規格名稱並完整覆蓋 fresh-attempt lifecycle；既有三個 stale tests 補上 `terminate` assertion。最終 focused/full/check 與 PI smoke 證據分別為 `forge-runtime/.tmp/final-focused-test.log`、`forge-runtime/.tmp/final-full-test.log`、`forge-runtime/.tmp/final-check.log`、`forge-runtime/.tmp/pi-smoke.log`。
+
+## 2026-08-29 Deep mixed-tool batch termination barrier 診斷教訓
+
+- **已驗證 bug 現象**：同一 assistant message 的 Deep search 與 completion 混批時，search 的 `terminate=false` 與 completion 的 `terminate=true` 由 PI `every(terminate)` 聚合，無法以 completion 的終止訊號停止整批；後續可能出現舊 identity、平行 evidence race 或 follow-up 重複。證據：`pi-main/packages/agent/src/agent-loop.ts:344-356`、`:487-551`、`:572-582`，以及使用者提供的實際輸出。
+- **可重用教訓**：completion stale guard 不能取代 transport batch barrier；必須在 Forge extension 以 call ID 記錄 mixed batch、search settle 與 follow-up queued 狀態。只改單一工具的 `terminate`、只改 prompt 或改 PI scheduler 都不能同時保證資料排序與架構邊界。完整核准策略見 [`ADR-0019`](../docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md)。
+- **尚未驗證風險**：PI awaited `message_end` before tools 與穩定 tool-call IDs 是 fragile assumption，需由 AgentSession/faux-provider integration test 監測；semantic decision/discovery gate 不在本 ticket，不將 prompt 語意分類寫成已驗證 runtime 根因。
+
+## 2026-08-29 Deep mixed-tool batch termination barrier 收尾教訓
+
+- **自動 stage panel 誤觸發 agent loop**：根因是 Forge 將不需人類決策的 stage panel 以 `deliverAs: "displayOnly"` 送出，但目前 PI contract 不支援該值，未知 delivery 會落入 steer 且 steer 優先。修復為刪除自動 stage panel 的 `sendMessage`，保留 `setStatus`；需要人類決策的 `WAIT_USER` 面板仍保留。證據：`forge-runtime/extensions/forge-runtime.ts` 自動 stage panel 路徑、`pi-main/packages/coding-agent/src/core/agent-session.ts:1481-1502`、AgentSession targeted 1/1 的本輪最新 log。
+- **測試 workaround 越過 fail-closed**：曾嘗試放寬 `pendingReplayInvocation` gate 讓 integration test 通過，後續安全核驗確認會允許尚未完成正式 handoff 的 Deep tool call；該修改已撤回。證據：`forge-runtime/extensions/forge-runtime.ts:1388` gate、`C:\Users\User\AppData\Local\Temp\forge-runtime-agent-session-callid-red-20260829.log`、本輪 code review 結論。
+- **string content 不是可靠的 replay／route 識別**：RED 重現顯示以訊息內容判斷會混淆 initial 與 barrier follow-up，故該假設與修正已撤回；現行 barrier 以 call ID、identity 與正式 `kind` 判斷。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` mixed-batch regression、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts` AgentSession regression、extension isolated 67/67 log。
+- **可重用教訓**：自動 UI 更新若不需要人類決策，不應透過會進入 agent loop 的訊息通道；若 PI core contract 不支援 display-only，應移除多餘傳送或另開 core ticket，不能以 extension gate workaround 取代。check／回歸仍有既有 TUI terminal／highlight.js caveats，不能把局部綠燈宣稱為全域通過。
+
+## 2026-08-29 流程優先於測試與顯示
+
+- **可重用教訓**：測試通過與畫面出現都不能凌駕正式流程契約。不得修改 `pi-main`、放寬 fail-closed 或既有流程條件來製造綠燈；純顯示步驟若不參與狀態、傳輸或人類決策，應移除會進入 agent loop 的傳送，避免改變排程、順序或結果。
+- **可核對證據**：正式行為見 `forge-runtime/extensions/forge-runtime.ts`；extension 回歸見 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`，AgentSession 回歸見 `forge-runtime/tests/extensions/pi-grill-interactive.test.ts`；PI 既有訊息排序見 `pi-main/packages/coding-agent/src/core/agent-session.ts:1481-1502`。本次保留正式 fail-closed，移除自動 Deep stage panel 傳送，並保留需要人類決策的面板。
+
+## 2026-08-29 WAIT_USER displayOnly 投遞設計教訓
+
+- **觀察／根因**：WAIT_USER `publishState()` 仍將 `forge-stage` custom message 交給 `pi.sendMessage` 並指定 `displayOnly`；PI current 與官方 0.84.3 delivery union 只有 `steer`、`followUp`、`nextTurn`，未知值在 streaming 會落入 `steer`，可能使純顯示訊息進入 agent loop。證據：`forge-runtime/extensions/forge-runtime.ts:2115-2131`、`pi-main/packages/coding-agent/src/core/agent-session.ts:1496-1503`、`pi-main/packages/coding-agent/src/core/extensions/types.ts:1620-1623`。
+- **教訓**：移除錯誤 delivery 欄位而保留 `sendMessage` 仍不安全；正確設計是移除 WAIT_USER `forge-stage` custom message 投遞，保留 state／status／人類輸入／followUp。相關 interactive 與 extension 測試為 `forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。
+- **狀態**：本輪只完成設計文件，未修復、未執行測試、未完成真實 PI TUI 驗證；不可宣稱 bug 已解決。
+
+## 2026-08-29 WAIT_USER UI-only state publication 修復教訓
+
+- **streaming `sendMessage` 未指定 trigger 會 steer**：根因是 PI streaming delivery 對未知或不適用的投遞選項會落入 steer；omission recovery 同時送出兩個 UI 訊息，使 provider call count 由預期 `2` 變成實際 `4`。修復為 WAIT_USER `displayOnly` 不再呼叫 `sendMessage`，omission 純顯示訊息使用 `triggerTurn: false`。證據：`forge-runtime/extensions/forge-runtime.ts:1351,1356,2131`、strict regression RED `C:\Users\User\AppData\Local\Temp\run_wait_user_red_test_20260829.log`、GREEN `C:\Users\User\AppData\Local\Temp\verify_wait_user_extension_contracts_20260829.log`。
+- **InteractiveMode 測試選項 API 漂移**：根因是測試傳入現行 `InteractiveModeOptions` 不存在的 `terminal`／`uiMode` 形狀，導致輸入送至未啟動的 VirtualTerminal 而被丟棄。修復為使用現行 API、test-only attach、`init()` 後再 `run()`，並等待首個 render。證據：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:26,155,302,411,511,669,764`；static red 原有 10 個 terminal option errors，修正後 touched errors 為 0；PI interactive 3/3 logs：`C:\Users\User\AppData\Local\Temp\green_first_virtual_terminal_harness_retry_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_second_virtual_terminal_harness_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_third_virtual_terminal_harness_20260829.log`。
+- **retry test fixture roundId 錯誤**：根因是 retry fixture 使用 `grill-retry-1`，但正式 retry 沿用目前的 `grill-1` round，故等待不到 `retry-attempt-completed`。修復為 fixture 改用 `grill-1`，保留正式 retry identity。證據：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:790`、retry RED／GREEN logs `C:\Users\User\AppData\Local\Temp\red_third_recovery_round_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_third_virtual_terminal_harness_20260829.log`。
+- **sandbox Node `os.userInfo` ENOMEM**：觀察到 sandbox 內 Node v24.14 執行部分檢查時回報 `os.userInfo`／`ENOMEM`，同一 baseline 在 sandbox 外成功；這是環境觀察，沒有證據把它寫成 Windows 資源耗盡根因。證據：隔離 check log `C:\Users\User\AppData\Local\Temp\forge-final-check-isolated-20260829.log` 及 sandbox 外 baseline log（見 `docs/handoff.md`）。
+- **smoke oracle 不足**：普通 active stage 在 WAIT_USER 前出現是合法流程，不能把任意 `forge-stage` 字串視為 WAIT_USER publication regression；驗收必須同時固定時間點與 delivery 對應。cancel 結果為 inconclusive，不作為根因或 GREEN 證據。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:704,4646`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:764-810`、`C:\Users\User\AppData\Local\Temp\verify_wait_user_extension_contracts_20260829.log`。

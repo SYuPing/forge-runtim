@@ -47,6 +47,12 @@ import { buildValidationRepairText } from "../src/ui/validation-repair-widget.ts
 import { buildWaitUserPanel } from "../src/ui/wait-user-panel.ts";
 import { buildWorkflowStatusText } from "../src/ui/workflow-status-widget.ts";
 
+const DEEP_RESULT_GUIDANCE = [
+	"needs_decision 僅用於需要人類選擇。",
+	"needs_discovery 僅用於來源或證據不足。",
+	"正式 route 只依 kind；不得用 decisionSummary 自由文字判斷 route。",
+].join("\n");
+
 function isEvidenceTooLargeRejection(
 	value: unknown,
 ): value is { readonly reason: "evidence_too_large"; readonly byteSize: number; readonly limit: number } {
@@ -113,12 +119,25 @@ interface AssistantThinkingBlock {
 
 interface AssistantToolCallBlock {
 	type: "toolCall";
+	id?: string;
+	name?: string;
+}
+
+interface DeepRetrievalBatch {
+	identity: DeepAttemptIdentity;
+	searchCallIds: ReadonlySet<string>;
+	completionCallIds: ReadonlySet<string>;
+	settledSearchCallIds: Set<string>;
+	mixed: boolean;
+	followUpQueued: boolean;
 }
 
 interface AssistantMessageEvent {
 	message?: {
 		content?: Array<AssistantTextBlock | AssistantThinkingBlock | AssistantToolCallBlock>;
 		role?: string;
+		toolCallId?: string;
+		toolName?: string;
 	};
 }
 
@@ -198,6 +217,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let savedActiveTools: string[] | undefined;
 	let pendingReplayInvocation: string | undefined;
 	let activeWaitUserUiLeaseKey: string | undefined;
+	let deepRetrievalBatch: DeepRetrievalBatch | undefined;
 		const canEnforceToolBoundary = () =>
 			typeof pi.registerTool === "function" &&
 			typeof pi.getActiveTools === "function" &&
@@ -614,12 +634,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					return {
 							content: [{ type: "text", text: "Deep Search 查詢不得為空白。" }],
 							details: { status: "invalid", errors: ["Deep Search 查詢不得為空白。"] },
+							terminate: true,
 					};
 				}
 				if (Array.from(trimmedQuery).length > DEEP_SEARCH_MAX_QUERY_CODE_POINTS) {
 					return {
 							content: [{ type: "text", text: `Deep Search 查詢最多 ${DEEP_SEARCH_MAX_QUERY_CODE_POINTS} 個字元。` }],
 						details: { status: "rejected", reason: "query_too_long", limit: DEEP_SEARCH_MAX_QUERY_CODE_POINTS },
+						terminate: true,
 					};
 				}
 				const query = trimmedQuery.toLowerCase();
@@ -629,6 +651,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					return {
 						content: [{ type: "text", text: "Target source 不得為空白。" }],
 						details: { status: "invalid", retryable: true, reason: "target_source_required" },
+						terminate: true,
+					};
+				}
+				if (!Object.values(workflow.snapshot.candidates).some((candidate) => candidate.kind === "target")) {
+					return {
+						content: [{ type: "text", text: "Target manifest 為空，請改用 wiki 或 code_base。" }],
+						details: { status: "invalid", retryable: true, reason: "target_manifest_empty" },
+						terminate: true,
 					};
 				}
 				const targetCandidates = Object.values(workflow.snapshot.candidates).filter(
@@ -694,12 +724,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				if (reusedEvidenceIds.size > 0) {
 				return {
 						content: [{ type: "text", text: "已重用 Grill 快照中的證據。" }],
-					details: {
-						status: "accepted",
-						...identity,
-						evidence: [],
-						reusedEvidenceIds: [...reusedEvidenceIds],
-					},
+						details: {
+							status: "accepted",
+							...identity,
+							evidence: [],
+							reusedEvidenceIds: [...reusedEvidenceIds],
+						},
+						terminate: true,
 				};
 			}
 			const reusedSupplementalEvidence = sessionState.getDeepSupplementalEvidence().filter(
@@ -708,12 +739,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (reusedSupplementalEvidence.length > 0) {
 				return {
 						content: [{ type: "text", text: "已重用目前 Deep 嘗試中的證據。" }],
-					details: {
-						status: "accepted",
-						...identity,
-						evidence: [],
-						reusedEvidenceIds: reusedSupplementalEvidence.map((evidence) => evidence.evidenceId),
-					},
+						details: {
+							status: "accepted",
+							...identity,
+							evidence: [],
+							reusedEvidenceIds: reusedSupplementalEvidence.map((evidence) => evidence.evidenceId),
+						},
+						terminate: true,
 				};
 			}
 			const searchBudget = sessionState.reserveDeepSearchBudget(identity);
@@ -728,6 +760,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				return {
 					content: [{ type: "text", text: `本輪 Deep Search 最多搜尋 ${DEEP_SEARCH_MAX_PER_SOURCE_ROUND} 次，已拒絕這次搜尋。` }],
 					details: { status: "rejected", reason: "search_budget_exhausted", limit: DEEP_SEARCH_MAX_PER_SOURCE_ROUND },
+					terminate: true,
 				};
 			}
 			let evidence: Array<{
@@ -827,6 +860,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						limit: validatedRejection?.limit ?? DEEP_EVIDENCE_MAX_BYTES,
 						evidence: [],
 					},
+					terminate: true,
 				};
 			}
 			const roundEvidenceBytes = getDeepEvidenceContentBytes([
@@ -853,6 +887,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						limit: DEEP_EVIDENCE_ROUND_MAX_BYTES,
 						evidence: [],
 					},
+					terminate: true,
 				};
 			}
 			const committed = sessionState.commitDeepSearchBudget(identity);
@@ -875,6 +910,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					evidence: supplementalEvidence,
 					reusedEvidenceIds: [...reusedEvidenceIds],
 				},
+				terminate: true,
 			};
 		},
 	});
@@ -914,7 +950,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			{ additionalProperties: false },
 		),
 		async execute(
-			_toolCallId: string,
+			toolCallId: string,
 			params: {
 				attemptId: string;
 				sourceRoundId: string;
@@ -941,6 +977,18 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					sourceRoundId: params.sourceRoundId,
 					phase: params.phase,
 				} as const;
+				if (deepRetrievalBatch?.mixed && deepRetrievalBatch.completionCallIds.has(toolCallId)) {
+					return {
+						content: [{ type: "text", text: "同一批次仍有 Deep Search，完成結果將於搜尋結束後重試。" }],
+						details: {
+							status: "rejected",
+							reason: "mixed_search_completion_batch",
+							retryable: true,
+							...identity,
+						},
+						terminate: true,
+					};
+				}
 						if (!isCurrentDeepAttempt(identity)) {
 						return {
 							content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
@@ -1180,9 +1228,15 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			});
 			const validation = validateEvidencePackage(evidencePackage);
 			if (!validation.ok) {
+				const hasDuplicateDecisionError = validation.errors.some((error) => error.startsWith("決策 ID 重複："));
 				return {
 					content: [{ type: "text", text: validation.errors.join("\n") }],
-					details: { status: "invalid", errors: validation.errors, evidencePackage },
+					details: {
+						status: "invalid",
+						...(hasDuplicateDecisionError ? { retryable: true } : {}),
+						errors: validation.errors,
+						evidencePackage,
+					},
 				};
 			}
 
@@ -1220,10 +1274,63 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	});
 
 		pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx?: CommandContext) => {
-			if (event.message?.role !== "assistant") {
+			if (event.message?.role === "toolResult" && "toolCallId" in event.message) {
+				const batch = deepRetrievalBatch;
+				const toolCallId = event.message.toolCallId;
+				if (!batch || !toolCallId || !batch.searchCallIds.has(toolCallId)) {
+					return;
+				}
+				batch.settledSearchCallIds.add(toolCallId);
+				if (
+					!batch.mixed ||
+					batch.followUpQueued ||
+					batch.settledSearchCallIds.size !== batch.searchCallIds.size ||
+					!isCurrentDeepAttempt(batch.identity) ||
+					!activeWorkflow
+				) {
+					return;
+				}
+				batch.followUpQueued = true;
+				const targetSources = [
+					...new Set(
+						Object.values(activeWorkflow.snapshot.candidates)
+							.filter((candidate) => candidate.kind === "target")
+							.map((candidate) => candidate.metadata.relativePath ?? candidate.source),
+					),
+				].sort();
+				const invocation = `Deep Search 批次已完成。\n${DEEP_RESULT_GUIDANCE}\nTarget source manifest：${JSON.stringify(targetSources)}\n請使用相同 runtime-issued identity 繼續，並在搜尋完成後另送 completion-only batch：${JSON.stringify(batch.identity)}`;
+				pendingReplayInvocation = invocation;
+				await pi.sendUserMessage?.(invocation, { deliverAs: "followUp" });
+				return;
+			}
+			if (event.message?.role !== "assistant" || !("content" in event.message)) {
 				return;
 			}
 			if (hasActiveDeepAttempt()) {
+				const content: Array<AssistantTextBlock | AssistantThinkingBlock | AssistantToolCallBlock> =
+					event.message.content ?? [];
+				const toolCalls = content.filter(
+					(block): block is AssistantToolCallBlock => block.type === "toolCall",
+				);
+				const searchCallIds = toolCalls
+					.filter((block) => block.name === "forge_deep_search")
+					.map((block) => block.id)
+					.filter((id): id is string => typeof id === "string");
+				const completionCallIds = toolCalls
+					.filter((block) => block.name === "forge_deep_retrieval_complete")
+					.map((block) => block.id)
+					.filter((id): id is string => typeof id === "string");
+				const identity = sessionState.currentDeepAttempt();
+				deepRetrievalBatch = identity && searchCallIds.length + completionCallIds.length > 0
+					? {
+							identity,
+							searchCallIds: new Set(searchCallIds),
+							completionCallIds: new Set(completionCallIds),
+							settledSearchCallIds: new Set(),
+							mixed: searchCallIds.length > 0 && completionCallIds.length > 0,
+							followUpQueued: false,
+						}
+					: undefined;
 				return {
 					message: {
 						...event.message,
@@ -1241,12 +1348,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 
 				const firstOmission = sessionState.recordCompletionOmission();
 					if (firstOmission) {
-						await publishState(pi, ctx ?? {}, sessionState.current());
+						await publishState(pi, ctx ?? {}, sessionState.current(), { deliverAs: "displayOnly" });
 						await pi.sendMessage?.({
 							content: "GRILL_COMPLETION_REQUIRED\n請輸入 /forge-runtime retry、/forge-runtime cancel，或 /forge-runtime switch <request>。",
 							customType: "forge-grill-error",
 							display: true,
-						});
+						}, { triggerTurn: false });
 				}
 				clearPendingState();
 				restoreActiveTools();
@@ -1277,9 +1384,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (grillToolNames.includes(event.toolName)) {
 				return hasActiveGrillAttempt() ? undefined : { block: true };
 			}
-			if (deepRetrievalToolNames.includes(event.toolName) || deepUnderstandingToolNames.includes(event.toolName)) {
-				return !pendingReplayInvocation && hasActiveDeepAttempt() ? undefined : { block: true };
-			}
+		if (deepRetrievalToolNames.includes(event.toolName) || deepUnderstandingToolNames.includes(event.toolName)) {
+			return !pendingReplayInvocation && hasActiveDeepAttempt() ? undefined : { block: true };
+		}
 			if (!pendingGrillRun && sessionState.current().stage !== "WAIT_USER") {
 				return;
 			}
@@ -1948,12 +2055,12 @@ async function continueDeepKnowledge(
 		if (!requireDeepToolBoundary(ctx)) {
 			return false;
 		}
-		const nextState = sessionState.beginDeepKnowledge(decisionSummary);
+			const nextState = sessionState.beginDeepKnowledge(decisionSummary);
+			ctx.ui?.setStatus?.(buildWorkflowStatusText(nextState));
 			const deepAttempt = sessionState.currentDeepAttempt();
 			if (!deepAttempt) {
 				throw new Error("Deep Knowledge attempt 未建立");
 			}
-			await publishState(pi, ctx, nextState, { deliverAs: "displayOnly" });
 			const targetSources = workflow
 				? [
 						...new Set(
@@ -1963,7 +2070,7 @@ async function continueDeepKnowledge(
 						),
 					].sort()
 				: [];
-			const invocation = `Deep Knowledge 已開始。Target source manifest：${JSON.stringify(targetSources)}\n請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
+			const invocation = `Deep Knowledge 已開始。\n${DEEP_RESULT_GUIDANCE}\nTarget source manifest：${JSON.stringify(targetSources)}\n請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
 		setPendingReplayInvocation(invocation);
 		await pi.sendUserMessage?.(invocation, { deliverAs: "followUp" });
 		return true;
@@ -2021,5 +2128,6 @@ async function publishState(
 	);
 	const panelText = [status, ...sections].join("\n\n");
 	ctx.ui?.setStatus?.(status);
+	if (options?.deliverAs === "displayOnly") return;
 	await pi.sendMessage?.({ content: panelText, customType: "forge-stage", display: true }, options);
 }
