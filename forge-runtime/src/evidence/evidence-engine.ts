@@ -1,4 +1,4 @@
-export type EvidenceOrigin = "grill" | "deep_retrieval";
+export type EvidenceOrigin = "grill" | "deep_retrieval" | "human_premise";
 
 export interface EvidenceInput {
 	evidenceId: string;
@@ -39,6 +39,7 @@ export interface EvidencePackage {
 export interface EvidencePackageInput {
 	inherited: EvidenceInput[];
 	supplemental: EvidenceInput[];
+	humanPremise?: EvidenceInput[];
 	decisions: EvidenceDecision[];
 	findings: EvidenceFinding[];
 	limitations: EvidenceLimitation[];
@@ -54,6 +55,7 @@ export function createEvidencePackage(input: EvidencePackageInput): EvidencePack
 		evidence: [
 			...input.inherited.map((evidence) => ({ ...evidence, origin: "grill" as const })),
 			...input.supplemental.map((evidence) => ({ ...evidence, origin: "deep_retrieval" as const })),
+			...(input.humanPremise ?? []).map((evidence) => ({ ...evidence, origin: "human_premise" as const })),
 		],
 		decisions: input.decisions,
 		findings: input.findings,
@@ -63,6 +65,7 @@ export function createEvidencePackage(input: EvidencePackageInput): EvidencePack
 
 export function validateEvidencePackage(evidencePackage: EvidencePackage): EvidencePackageValidationResult {
 	const evidenceIds = new Set<string>();
+	const evidenceOrigins = new Map<string, EvidenceOrigin>();
 
 	for (const [label, items] of [
 		["決策（Decision）", evidencePackage.decisions],
@@ -95,6 +98,7 @@ export function validateEvidencePackage(evidencePackage: EvidencePackage): Evide
 		}
 
 		evidenceIds.add(evidence.evidenceId);
+		evidenceOrigins.set(evidence.evidenceId, evidence.origin);
 	}
 
 	for (const finding of evidencePackage.findings) {
@@ -106,6 +110,14 @@ export function validateEvidencePackage(evidencePackage: EvidencePackage): Evide
 
 		if (unknownEvidenceId) {
 			return { ok: false, errors: [`Finding 引用不存在的 Evidence ID：${unknownEvidenceId}`] };
+		}
+
+		if (
+			finding.evidenceIds.length > 0 &&
+			finding.evidenceIds.every((evidenceId) => evidenceOrigins.get(evidenceId) === "human_premise") &&
+			!finding.statement.startsWith("推論：")
+		) {
+			return { ok: false, errors: ["Finding 僅引用 human_premise 時，內容必須以「推論：」開頭"] };
 		}
 	}
 

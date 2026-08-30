@@ -93,9 +93,41 @@ status: completed-with-caveats
 - 保持 extension-local barrier；不擴大至 PI core 或其他共用狀態。
 - 下一步：保留目前 Forge-only 修法；另開 ticket 修正 TUI terminal／highlight.js caveats。若未來要正式支援 `displayOnly`，需另案設計、取得授權並驗證 PI core contract。
 
+## 2026-08-29 本輪修正進度
+
+- 使用者實測在 `DEEP_KNOWLEDGE_RETRIEVAL` 的 pure `forge_deep_search` 後流程中斷；重試仍沿用同一 `sourceRoundId`，累計達 8 次上限後全部被拒絕。
+- 根因：pure search batch 在 `!batch.mixed` guard 提前返回，沒有排入同 identity follow-up；這不是搜尋資料失敗。
+- RED 證據：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:681`，actual pending responses `3`、expected `0`。
+- Production 修正範圍：只移除該 guard；不重設 8 次上限、不修改 `pi-main`，也不放寬 fail-closed gate。
+- 同一單測 GREEN：1/1；完整 PI 互動測試：11/11。
+- extension 測試：66 passed、0 failed，但 process 未退出；static check 僅剩 21 個既有 `pi-main` `highlight.js` baseline 錯誤。
+- 修正前歷史進度：當時仍在補多筆 search／拒絕批次測試與進行 final review；後續已完成並由下方收尾狀態取代。
+
 ## 2026-08-29 收尾狀態
 
 - mixed barrier 已完成；本輪不再為了讓 integration test 通過而放寬正式 pending gate。
 - 自動 stage panel 不需要停下來等人類決策，故移除其 `sendMessage` 副作用並保留 `setStatus`；需要人類決策的 `WAIT_USER` 面板未移除。
 - 驗證：AgentSession targeted 1/1、extension isolated 67/67；check／回歸仍有既有 TUI terminal／highlight.js caveats，不能解讀為全域 green。
 - 狀態：completed-with-caveats。未解問題與下一步限於另案 TUI terminal／highlight.js，以及可能另開的 PI `displayOnly` core contract ticket。
+
+## 2026-08-29 純搜尋批次接續修正完成
+
+### 已完成項目
+
+- 已確認 pure `forge_deep_search` 在 `forge-runtime/extensions/forge-runtime.ts:1284` 的 `!batch.mixed` guard 提前返回，導致沒有 same-identity follow-up。
+- 已完成最小修正：只移除該 guard；保留 terminate、settle barrier、followUpQueued、identity／active checks、mixed reject、completion-only、quota、fail-closed 與 `pi-main` 邊界。
+- 已補 public-seam 回歸，覆蓋兩筆 pure search 全 settle exactly once，以及 rejected／failed settled 後 exactly once。
+
+### 測試結果
+
+- RED：`pi-grill-interactive.test.ts:681` actual pending responses 3、expected 0。
+- GREEN：該測 1/1、完整 PI 互動 11/11、新增 extension 兩測 2/2。
+- extension 完整 assertions 68 pass／0 fail，但 summary 後背景程序未退出，180 秒中止。
+- `npm run check` 與第二段 tsc 僅有既有 `pi-main` `highlight.js` 21 個 baseline 型別錯誤；bounded `npm test` 未觀察失敗，但 180 秒卡在既有 human-decision integration。
+- 兩份獨立 review 無阻擋 finding。
+
+### 未解問題與下一步
+
+- 低風險未解項：synthetic failed result，以及真實 awaited `message_end`／tool-call ID 假設。
+- 不宣稱完整 suite 正常退出，不修改 `pi-main`，不重設同 source round 的 8 次 quota。
+- 狀態：`completed-with-caveats`。

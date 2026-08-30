@@ -59,3 +59,11 @@ PI 原生完整測試不是 gate；Forge contract tests 與真實 AgentSession/f
 - RED→GREEN 後刪除自動 Deep 階段面板的 `sendMessage`／`publishState(...displayOnly...)` 呼叫；只保留 `ctx.ui.setStatus(buildWorkflowStatusText(nextState))`，因此自動流程仍更新 status，但不再送出多餘的模型訊息。
 - 驗證：auto-panel unit 1/1、AgentSession after-status 1/1、三個受影響 tests 3/3、extension isolated `tsconfig.json` 67/67。較早 pi-config 134/134 為 status 修正前結果，不列為最終證據；最後 pi-config log 只有逐項 ✔、沒有 summary。
 - `npm run check` exit 2：production 0 錯誤、本 ticket test 1199 後 0 錯；既有 TUI terminal 10 錯與 pi-main highlight.js 21 錯。完整 pi-grill 受既有 TUI 兩個失敗阻斷，但本 ticket targeted pass。這些是 workspace 驗證 caveat，不是本 ticket production error。
+
+## 2026-08-29 純搜尋批次接續修正收尾
+
+使用者實測中，pure `forge_deep_search` 批次正常回傳並以 `terminate=true` 結束目前回合，但 coordinator 因 `!batch.mixed` guard 提前返回，沒有排入 same-identity follow-up，造成 Deep Retrieval 看起來在 search 後中斷。`/forge-runtime continue` 只更換 `attemptId`、沿用 `sourceRoundId`；前兩次 3 + 5 次累計用完同一 source round 的 8 次上限，是後續現象，不是原始根因。
+
+正式修正只移除 `forge-runtime/extensions/forge-runtime.ts:1284` 的 pure-batch guard。保留 `terminate=true`、全部 settle barrier、`followUpQueued`、identity／active checks、mixed reject、completion-only、quota 與 `pi-main` 不變。public-seam 回歸位於 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1585,1836-1948`，覆蓋兩筆 pure search 全部 settle 後 exactly once follow-up，以及 rejected／failed 也算 settled 並完成後 exactly once。
+
+驗證：PI TUI 回歸由 RED（`pi-grill-interactive.test.ts:681`，actual 3、expected 0）轉為 GREEN 1/1，完整 PI 互動 11/11；新增兩個 extension 回歸 2/2。extension 完整 assertions 68 pass／0 fail，但 summary 後背景程序未退出，180 秒後中止。`npm run check` 與第二段 tsc 僅有既有 `pi-main` `highlight.js` 21 個型別 baseline；bounded `npm test` 未觀察失敗，但 180 秒卡在既有 `Integration_WhenGrillHumanDecisionIsAnswered_ShouldInjectImmutableDecisionIntoEvidencePackage`。兩份獨立 review 無阻擋 finding。剩餘低風險為 synthetic failed result 與真實 awaited `message_end`／tool-call ID 假設。

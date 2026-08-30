@@ -60,6 +60,43 @@ test("EvidencePackage_WhenInheritedAndSupplementalEvidenceMerge_ShouldPreserveOr
 	});
 });
 
+test("EvidencePackage_WhenHumanPremiseInputIsIncluded_ShouldAssignHumanPremiseOrigin", () => {
+	const result = createEvidencePackage({
+		inherited: [],
+		supplemental: [],
+		humanPremise: [
+			{
+				evidenceId: "ev-human-premise-1",
+				kind: "human_premise",
+				source: "forge://human-premise",
+				title: "Human premise",
+				content: "goal=G\nquestion=Q\nanswer=確認",
+				metadata: { needsDiscoveryCount: 2, sourceRoundIds: ["round-1", "round-2"] },
+			},
+		],
+		decisions: [],
+		findings: [],
+		limitations: [],
+	});
+
+	assert.deepEqual(result, {
+		evidence: [
+			{
+				evidenceId: "ev-human-premise-1",
+				kind: "human_premise",
+				source: "forge://human-premise",
+				title: "Human premise",
+				content: "goal=G\nquestion=Q\nanswer=確認",
+				metadata: { needsDiscoveryCount: 2, sourceRoundIds: ["round-1", "round-2"] },
+				origin: "human_premise",
+			},
+		],
+		decisions: [],
+		findings: [],
+		limitations: [],
+	});
+});
+
 test("EvidencePackage_WhenEvidenceIdDuplicates_ShouldReject", () => {
 	const result = createEvidencePackage({
 		inherited: [
@@ -109,6 +146,29 @@ test("EvidencePackage_WhenFindingReferencesUnknownEvidence_ShouldReject", () => 
 		findings: [{ statement: "Finding", evidenceIds: ["ev-unknown-1"] }],
 		limitations: [],
 	});
+
+	const validation = validateEvidencePackage(result);
+
+	assert.equal(validation.ok, false);
+});
+
+test("EvidencePackage_WhenFindingReferencesOnlyHumanPremiseWithoutInferencePrefix_ShouldReject", () => {
+	const result = {
+		evidence: [
+			{
+				evidenceId: "ev-human-premise-1",
+				kind: "human_premise",
+				source: "user",
+				title: "Human premise",
+				content: "User-provided premise",
+				metadata: {},
+				origin: "human_premise",
+			},
+		],
+		decisions: [],
+		findings: [{ statement: "未標示推論前綴的實作結論", evidenceIds: ["ev-human-premise-1"] }],
+		limitations: [],
+	} as unknown as Parameters<typeof validateEvidencePackage>[0];
 
 	const validation = validateEvidencePackage(result);
 

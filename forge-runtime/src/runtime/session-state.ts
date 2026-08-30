@@ -181,6 +181,7 @@ export function createForgeSessionState(): ForgeSessionState {
 	let nextRoundId = 1;
 	let nextDeepAttemptId = 1;
 		let deepAttempt: DeepAttemptIdentity | undefined;
+		let needsDiscoveryCount = 0;
 		let deepSearchBudgetRoundId: string | undefined;
 		let deepSearchCount = 0;
 		const deepSearchReservations = new Map<string, number>();
@@ -264,11 +265,12 @@ export function createForgeSessionState(): ForgeSessionState {
 		}
 		return result;
 	},
-		cancelDeepKnowledge() {
-			const phase = deepAttempt?.phase ?? deepRetryPhase ?? (uiState.stage === "KNOWLEDGE_UNDERSTANDING" ? "KNOWLEDGE_UNDERSTANDING" : "DEEP_KNOWLEDGE_RETRIEVAL");
-			deepAttempt = undefined;
-			deepRetryPhase = undefined;
-			resumableDeepPhase = phase;
+			cancelDeepKnowledge() {
+				const phase = deepAttempt?.phase ?? deepRetryPhase ?? (uiState.stage === "KNOWLEDGE_UNDERSTANDING" ? "KNOWLEDGE_UNDERSTANDING" : "DEEP_KNOWLEDGE_RETRIEVAL");
+				deepAttempt = undefined;
+				deepRetryPhase = undefined;
+				needsDiscoveryCount = 0;
+				resumableDeepPhase = phase;
 			orchestrator = createOrchestrator({ initialStage: phase });
 			uiState = { ...uiState, stage: phase, waitUser: undefined };
 			return uiState;
@@ -416,6 +418,25 @@ export function createForgeSessionState(): ForgeSessionState {
 				}
 
 				orchestrator = ensureOrchestrator(orchestrator);
+				needsDiscoveryCount += 1;
+				if (needsDiscoveryCount >= 2) {
+					uiState = {
+						...uiState,
+						decisionSummary: result.decisionSummary ?? uiState.decisionSummary,
+						stage: orchestrator.transitionTo("WAIT_USER"),
+						waitUser: {
+							kind: "deep_discovery_fallback",
+							roundId: identity.sourceRoundId,
+							decisionId: `${identity.attemptId}-deep-discovery-fallback`,
+							evidenceIds: [...fetchedEvidenceIds],
+							options: ["確認", "同意"],
+							question: "此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認",
+							recommendation: "確認",
+						},
+					};
+					deepAttempt = undefined;
+					return { kind: "accepted", state: uiState, identity };
+				}
 				uiState = {
 					...uiState,
 					decisionSummary: result.decisionSummary ?? uiState.decisionSummary,
@@ -476,6 +497,14 @@ export function createForgeSessionState(): ForgeSessionState {
 					deepAttempt.phase !== identity.phase
 				) {
 					return { kind: "stale", expected: deepAttempt, received: identity };
+				}
+
+				const existing = deepSupplementalEvidence.get(evidenceId);
+				if (existing) {
+					if (evidence && existing.content === evidence.content) {
+						return { kind: "accepted", state: uiState, identity: deepAttempt };
+					}
+					throw new Error("evidence_id_content_conflict");
 				}
 
 		deepSupplementalEvidenceIds.add(evidenceId);
@@ -566,11 +595,15 @@ export function createForgeSessionState(): ForgeSessionState {
 				return uiState;
 			}
 
-			if (!uiState.waitUser) {
-				throw new Error("WAIT_USER requires a pending decision");
-			}
-			const decisionId = uiState.waitUser.decisionId;
+				if (!uiState.waitUser) {
+					throw new Error("WAIT_USER requires a pending decision");
+				}
+				if (uiState.waitUser.kind === "deep_discovery_fallback" && !["同意", "確認"].includes(answer.trim())) {
+					return uiState;
+				}
+				const decisionId = uiState.waitUser.decisionId;
 			const decisionKey = waitUserDecisionKey(uiState.waitUser);
+			const isDeepDiscoveryFallback = uiState.waitUser.kind === "deep_discovery_fallback";
 			const isRelevanceClarification = uiState.waitUser.kind === "relevance_clarification";
 			if (answeredDecisionKeys.has(decisionKey)) {
 				return uiState;
@@ -591,7 +624,7 @@ export function createForgeSessionState(): ForgeSessionState {
 			uiState = {
 				...uiState,
 				decisionSummary: `使用者已回答決策 ${JSON.stringify(decisionId)}：${JSON.stringify(answer)}。`,
-				stage: isRelevanceClarification ? orchestrator.getStage() : orchestrator.transitionTo("GRILL"),
+					stage: isDeepDiscoveryFallback || isRelevanceClarification ? orchestrator.getStage() : orchestrator.transitionTo("GRILL"),
 				waitUser: undefined,
 			};
 			return uiState;
@@ -605,9 +638,10 @@ export function createForgeSessionState(): ForgeSessionState {
 			currentGrillRound = undefined;
 			deepSearchBudgetRoundId = undefined;
 			deepSearchCount = 0;
-		deepSearchReservations.clear();
-		deepAttempt = undefined;
-		deepRetryPhase = undefined;
+			deepSearchReservations.clear();
+			deepAttempt = undefined;
+			needsDiscoveryCount = 0;
+			deepRetryPhase = undefined;
 		resumableDeepPhase = undefined;
 		lockedDeepEvidence = undefined;
 			orchestrator = undefined;

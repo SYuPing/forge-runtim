@@ -4,7 +4,7 @@ type: context
 scope: Forge Runtime v4 設計、實作與交接
 updated: 2026-08-29
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: implemented/verified-with-existing-workspace-caveats
+status: design-approved-ready-for-red
 ---
 
 # Forge Runtime v4 Context
@@ -444,5 +444,26 @@ Ticket 已完成實作、驗證、初次 review fix 與最終雙軸 re-review，
 - state／status／selector／custom editor、answer followUp、retry／recovery 均保留；未修改 `pi-main`。Interactive harness 依目前僅有 `tuiMode` 的 `InteractiveModeOptions`，10 個 tests 使用 test-local `attachVirtualTerminal`、`init`、`run`、`waitForRender`。
 - 驗證：extension targeted 2/2；PI targeted 3/3（含 no-auto-replay 與 explicit retry callCount 2→3）；static touched errors 0，剩餘 pi-main highlight.js 21 個 baseline errors；`git diff --check` 0、`pi-main` diff 0。
 - 真實 PI 0.84.3 no-session smoke 的合法 `/grill-run` WAIT_USER `display-only smoke` 通過並完成 confirm；observed normal active `forge-stage` 皆在 WAIT_USER 前，沒有 WAIT_USER-specific stage 證據。cancel 因在 streaming 送入而 inconclusive；第一次 forged roundId fail-closed 拒絕，不算產品失敗。
-- Full PI file 10/11，唯一 Deep dirty-scope failure `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue`（single search terminate true／no followup）非本 ticket；完整 npm suite 於既有 integration hang（85 pass／0 fail）後中止並保留 log。
-- 核心規範／安全 review PASS；manual retry gap 已補。private renderer terminal cast 是 upstream 無 public injection seam 的測試 caveat，未新增抽象。未解僅剩 Deep dirty-scope failure、完整 suite hang、可選真實 cancel smoke；本 ticket 不需下一 session 實作。
+- 修正前歷史快照：Full PI file 10/11，唯一 Deep dirty-scope failure `PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue`（single search terminate true／no followup）當時尚未修正；已由下方最新 11/11 GREEN 取代。完整 npm suite 於既有 integration hang（85 pass／0 fail）後中止並保留 log。
+- 修正前歷史快照：核心規範／安全 review PASS；manual retry gap 已補。private renderer terminal cast 是 upstream 無 public injection seam 的測試 caveat，未新增抽象。當時未解包含 Deep dirty-scope failure、完整 suite hang、可選真實 cancel smoke；Deep failure 已由下方最新結果取代，static／hung suite caveat 仍保留。
+
+## 2026-08-29 Deep pure-search continuation 修正完成
+
+- 使用者實測 pure `forge_deep_search` 後回合終止但沒有接續；根因是 `forge-runtime/extensions/forge-runtime.ts:1284` 的 `!batch.mixed` guard 讓 coordinator 提前返回。`continue` 沿用 `sourceRoundId`，3 + 5 次後達 8 次上限只是後續結果，不是根因。
+- 正式修正只移除 pure-batch guard；保留 terminate=true、全部 settle barrier、followUpQueued、identity／active checks、mixed reject、completion-only、quota、fail-closed 與 `pi-main` 不變。public seam 見 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1585,1836-1948`。
+- 驗證：PI TUI RED 轉 GREEN 1/1；完整 PI 互動 11/11；新增 extension 兩測 2/2；extension 完整 assertions 68 pass／0 fail，但背景程序於 summary 後 180 秒未退出。check／第二段 tsc 只剩既有 `pi-main` `highlight.js` 21 個 baseline；bounded npm test 卡在既有 human-decision integration，未宣稱整套正常退出。兩份獨立 review 無阻擋 finding。
+
+## 2026-08-29 Deep Discovery fallback 與 human premise 設計核准
+
+- Ticket `deep-discovery-fallback-human-premise-20260829` 狀態為 `design-approved-ready-for-red`，尚未修改 production/test。
+- Retrieval 與 Understanding 合併計算 `needsDiscoveryCount`；第一次 `needs_discovery` 自動重用 Light Discovery→Grill，第二次及之後進入 `WAIT_USER`，kind=`deep_discovery_fallback`，固定問題為「此專案資料來源不足，將以前次 grill/ 資料來源所得之證據進行後續開發，請確認」。
+- 僅接受 trim 後整句「同意」或「確認」。確認後建立 fresh `KNOWLEDGE_UNDERSTANDING` identity，只允許 `forge_deep_complete`；Understanding 完成且 validator 通過才進 `CONTEXT_BUILD`。
+- 同一 workflow 的 Grill／Deep evidence 依 evidenceId 去重並跨 snapshot 保留；零外部來源建立 `human_premise` Evidence。由已驗證 evidence 直接成立的事實性 finding 可維持事實陳述；implementation inference 必須以「推論：」開頭並引用有效 Evidence ID。只引用 `human_premise` 且沒有 verified evidence 時，validator 強制「推論：」；混合 evidence 仍須標示實際推論，既有引用／ID 檢查不放寬。
+- 不修改 `pi-main/`、新 tool/UI、第三次自動 retry、CONTEXT_BUILD 下游或舊 WAIT_USER parser。下一 session 先讀 handoff／CONTEXT／ADR-0021／PLAN-A，展示摘要並等待確認，再以 TDD RED 開始。
+
+## 2026-08-30 Deep Discovery fallback 與 human premise 完成驗證
+
+- Ticket 已完成。Evidence Package 支援並驗證 `human_premise`；Retrieval 與 Understanding 共用 `needsDiscoveryCount`。第一次 `needs_discovery` 經正式 `tool_result` transform 自動重跑 Light Discovery→Grill，第二次進精確問題的 `WAIT_USER`，只接受 trim 後完整 `同意`／`確認`。
+- 確認後建立新的 Knowledge Understanding identity，只允許 `forge_deep_complete`。Grill／Deep evidence 跨第一次 snapshot switch 累積，依 ID 去重，並在 cancel、switch、new workflow、reset 清除。human premise 含 goal、question、answer、`needsDiscoveryCount`、兩輪 `sourceRoundIds`，且 decision 會引用它。
+- READY_FOR_DEEP 使用 terminate 與 pending settled invocation，在 `agent_settled` 的下一個 task 送普通 user message，再重驗 identity、stage、tools；pending handoff 關閉 Deep tool gate；WAIT_USER publication 會 await；`message_end` callback 有 ctx；fallback 無 locked evidence 的 `needs_decision` 將兩個 accumulator keys 視為合法 evidence。
+- 最終證據：Evidence 13/13；Session State 22/22；Extension 142/142；PI interactive 12/12；`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1，Forge Runtime 自身零錯誤，唯一失敗是未修改的 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016），不修改 `pi-main`。

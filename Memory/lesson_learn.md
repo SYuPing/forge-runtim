@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-29
+updated: 2026-08-30
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
-status: implemented-targeted-verified-with-caveats
+status: complete
 ---
 
 # Forge Runtime v4 開發教訓
@@ -204,3 +204,47 @@ status: implemented-targeted-verified-with-caveats
 - **retry test fixture roundId 錯誤**：根因是 retry fixture 使用 `grill-retry-1`，但正式 retry 沿用目前的 `grill-1` round，故等待不到 `retry-attempt-completed`。修復為 fixture 改用 `grill-1`，保留正式 retry identity。證據：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:790`、retry RED／GREEN logs `C:\Users\User\AppData\Local\Temp\red_third_recovery_round_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_third_virtual_terminal_harness_20260829.log`。
 - **sandbox Node `os.userInfo` ENOMEM**：觀察到 sandbox 內 Node v24.14 執行部分檢查時回報 `os.userInfo`／`ENOMEM`，同一 baseline 在 sandbox 外成功；這是環境觀察，沒有證據把它寫成 Windows 資源耗盡根因。證據：隔離 check log `C:\Users\User\AppData\Local\Temp\forge-final-check-isolated-20260829.log` 及 sandbox 外 baseline log（見 `docs/handoff.md`）。
 - **smoke oracle 不足**：普通 active stage 在 WAIT_USER 前出現是合法流程，不能把任意 `forge-stage` 字串視為 WAIT_USER publication regression；驗收必須同時固定時間點與 delivery 對應。cancel 結果為 inconclusive，不作為根因或 GREEN 證據。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:704,4646`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:764-810`、`C:\Users\User\AppData\Local\Temp\verify_wait_user_extension_contracts_20260829.log`。
+
+## 2026-08-29 Deep pure-search continuation 修正教訓
+
+- **根因**：pure `forge_deep_search` 批次在 `forge-runtime/extensions/forge-runtime.ts:1284` 被 `!batch.mixed` guard 提前返回，沒有排入 same-identity follow-up；`continue` 沿用 `sourceRoundId`，3 + 5 次累計到 8 次上限是後續現象，不是搜尋失敗根因。
+- **修法教訓**：移除 pure-batch guard 即可重用既有 settle／followUpQueued／identity barrier；保留 `terminate=true` 與 8 次 quota，不應以重設 quota 或修改 `pi-main` 掩蓋流程問題。證據：`forge-runtime/extensions/forge-runtime.ts:1284`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1585,1836-1948`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:681`。
+
+## 2026-08-29 Deep Discovery fallback 設計觀察
+
+- **已證實現象**：使用者實測第一次 `needs_discovery` 後切到 `LIGHT_DISCOVERY`，舊 Deep identity 後續工具呼叫遭 `Tool execution was blocked`；這證實切換後需要新的正式接手流程。證據：使用者提供的 2026-08-29 runtime log；正式契約記於 [`docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md`](../docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md)。
+- **設計教訓**：不能把沒有外部來源等同於沒有開發依據；創新專案可由使用者明確確認的 `human_premise` 作為可追溯前提，但不得偽裝成外部事實。修復尚未實作，本輪沒有可記錄的修復結果。
+- **驗證教訓**：extension assertions 68 pass／0 fail 仍不能寫成完整 suite 成功，因 summary 後背景程序未退出；check／tsc 的 21 個 `pi-main` `highlight.js` 型別錯誤是既有 baseline。剩餘低風險為 synthetic failed result 與真實 awaited `message_end`／tool-call ID 假設。
+
+## 2026-08-30 Evidence Package 空包缺口
+
+- **已確認現況缺口**：空 Evidence Package（`evidence`／`decisions`／`findings`／`limitations` 全空）目前可通過 validator 並抵達 `CONTEXT_BUILD`。證據：`forge-runtime/src/evidence/evidence-engine.ts:66-148`、`forge-runtime/src/runtime/session-state.ts:253-265,462-471`、`forge-runtime/extensions/forge-runtime.ts:1089,1273-1280`。
+- **已驗證根因範圍**：validator 檢查長度、ID／引用與 blocking limitation，但沒有 non-empty／sufficiency guard；`human_premise` 尚未接入 extension completion 路徑。這是目前可由程式碼核對的事實，不延伸推測其他原因。
+- **影響與處置**：架構期待的「足夠證據才前進」尚未完全落地；本輪只在 `forge-intent-context-flow.html` 標示橘色風險，未修改 runtime。後續修復需另案設計與授權，亦不可捏造本輪已有測試重現。
+- **可重用教訓**：不要把型別可表示或結構 validator 誤寫成完整的可執行／充足性 gate；流程圖與交付說明應明確區分「結構合法」和「證據足夠」。
+
+## 2026-08-30 流程圖狀態與併發描述教訓
+
+- **本輪未發現新的 runtime bug**；本輪調整的是流程圖呈現，不是 runtime 契約或實作。
+- **可重用教訓**：workflow state、completion status、入口等待與併發支線必須分開畫；主流程每列只放一個 state，旁路再標示平行處理、barrier 與等待，避免把顯示層次誤讀成狀態轉換。證據：`forge-intent-context-flow.html:24-32`。
+
+## 2026-08-30 流程圖維護 Skill 教訓
+
+- **本輪未發現新的 runtime bug**；本輪建立的是維護 Skill，不是 runtime 契約或實作修正。
+- **可重用教訓**：Skill 不應快取當下流程結論；每次維護都必須由 CodeGraph 與可執行 handler 重新建立流程證據，避免把 wait 的 kind/status 誤畫成 workflow state。證據：`C:\Users\User\.codex\skills\forge-intent-context-flow\SKILL.md`、`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/src/runtime/session-state.ts`、`forge-intent-context-flow.html`。
+
+## 2026-08-30 通用流程圖 Skill 設計教訓
+
+- **本輪未發現新的 runtime bug**；本輪建立的是跨專案維護 Skill，不是 runtime 契約或實作修正。
+- **可重用教訓**：通用流程圖不可快取 Forge 的 state 結論；應先由實際入口與可執行路徑建立 `Node／Edge／Wait／Parallel` 關係，並把 `status`（實作程度）與 `kind`（等待、併發、終止等）分開，才能清楚表達等待恢復、fork／join 與交接。證據：`C:\Users\User\.codex\skills\code-flowchart-html\SKILL.md`、`C:\Users\User\.codex\skills\code-flowchart-html\assets\vertical-flow-template.html`。
+- **相容性教訓**：Skill validator 曾不接受 frontmatter 的 `disable-model-invocation` 欄位；已改以 `agents/openai.yaml` 的 `policy.allow_implicit_invocation: false` 保留 Forge 專用入口的明確指定語意，並通過 `quick_validate`。證據：`C:\Users\User\.codex\skills\forge-intent-context-flow\agents\openai.yaml`、`C:\Users\User\.codex\skills\code-flowchart-html\agents\openai.yaml`。
+
+## 2026-08-30 Deep Discovery fallback 實作教訓
+
+- **第一次 restart 的正式 seam 是 `tool_result`**：不得由一般文字或非正式 callback 觸發 Light Discovery→Grill。證據：`forge-runtime/extensions/forge-runtime.ts`、Extension 142/142。
+- **`sendUserMessage` 是 void 且 fire-and-forget，會留下 stale tool snapshot**：READY_FOR_DEEP 必須使用 terminate、等待 `agent_settled`，再以可取消的下一個 task 送普通 user message。證據：`forge-runtime/extensions/forge-runtime.ts`、PI interactive 12/12。
+- **等待與 callback context 是流程契約**：WAIT_USER publication 必須 await，`message_end` callback 必須帶 ctx；pending settled 期間必須關閉 Deep tool gate。證據：`forge-runtime/extensions/forge-runtime.ts`、Extension 142/142。
+- **fallback needs_decision 不可只看 locked evidence**：無 locked evidence 時仍須把兩個 accumulator keys 視為合法 evidence，否則合法 fallback 會被錯誤拒絕。證據：`forge-runtime/src/evidence/evidence-engine.ts`、Evidence 13/13。
+- **PI 測試必須 drain event loop 的 settled prompt**：只等待同步 assertion 會在 prompt 尚未 settle 時誤判。證據：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、PI interactive 12/12。
+- **跨 bucket duplicate 懷疑已排除**：曾懷疑不同 bucket 可能產生 duplicate，但 ID prefix 與 `reusedEvidenceIds` invariant 證明正式 API 不可達，因此刪除測試，不增加 speculative guard。證據：`forge-runtime/src/evidence/evidence-engine.ts`、`forge-runtime/tests/evidence/evidence-engine.test.ts`、Session State 22/22。
+- **本輪未發現其他新 bug**；`npm run check` 的唯一失敗是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016），屬既有上游 baseline，不修改 `pi-main`。

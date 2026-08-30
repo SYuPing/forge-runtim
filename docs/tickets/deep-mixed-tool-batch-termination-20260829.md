@@ -45,3 +45,11 @@ none
 上述是實作前歷史交接。Ticket 現已完成實作與驗證，狀態為 `implemented/verified-with-existing-workspace-caveats`。五個 extension contracts 與一個 AgentSession/faux-provider parallel mixed batch integration 已通過；自動 Deep 階段面板先 RED→GREEN 後移除多餘 `sendMessage`／`publishState(...displayOnly...)`，保留 `ctx.ui.setStatus(buildWorkflowStatusText(nextState))`。`WAIT_USER`、recovery 與 pending fail-closed gate 保留，`pi-main` 無 tracked 改動。
 
 驗證：auto-panel unit 1/1、AgentSession after-status 1/1、三個受影響 tests 3/3、extension isolated `tsconfig.json` 67/67。較早 pi-config 134/134 是 status 修正前結果，不作最終證據；最後 pi-config log 只有逐項 ✔、沒有 summary。`npm run check` exit 2：production 0 錯誤、本 ticket test 1199 後 0 錯；既有 TUI terminal 10 錯與 pi-main highlight.js 21 錯。完整 pi-grill 受既有 TUI 兩個失敗阻斷，但本 ticket targeted pass。
+
+## 純搜尋批次接續修正最終結果（2026-08-29）
+
+根因是 coordinator 在 `forge-runtime/extensions/forge-runtime.ts:1284` 的 `!batch.mixed` guard 提前返回，沒有排入 same-identity follow-up。`continue` 沿用 `sourceRoundId`，前兩次 3 + 5 次累計達 8 次上限；quota 沒有被重設，這是正確的有界行為，不是搜尋失敗原因。
+
+正式修正只移除該 pure-batch guard；保留 `terminate=true`、全部 settle barrier、`followUpQueued`、identity／active checks、mixed reject、completion-only、quota 與 `pi-main` 不變。新增 public-seam 測試約 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1585,1836-1948`，固定兩筆 pure search 全 settle 後 exactly once，並固定 rejected／failed 結果也算 settled，完成後 exactly once。
+
+RED：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts:681` actual pending responses 3、expected 0。GREEN：同測 1/1，完整 PI 互動 11/11，新增兩測 2/2。extension 完整 assertions 68 pass／0 fail，但 summary 後背景程序不退出，180 秒中止；`npm run check` 與第二段 tsc 僅剩 21 個既有 `pi-main` `highlight.js` baseline 型別錯誤；bounded `npm test` 未觀察失敗，但 180 秒卡在既有 human-decision integration。兩份獨立 review 無阻擋 finding。低風險未解項為 synthetic failed result，以及真實 awaited `message_end`／tool-call ID 假設。

@@ -9,6 +9,10 @@ status: accepted/implemented
 
 # ADR-0015：Grill 到 Deep Knowledge 的階段邊界與知識交接
 
+## 2026-08-29 Deep Discovery fallback 交叉引用
+
+資料來源不足的第一次自動 Light Discovery→Grill 與第二次起的 human premise WAIT_USER 契約，見 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md)。本 ADR 原則仍有效：Deep 不直接向使用者提問；WAIT_USER 由 Workflow 管理並保留人類決策邊界。
+
 日期：2026-08-23
 
 ## 狀態
@@ -24,8 +28,8 @@ Light Discovery 已能建立候選資料，Grill 也會查證 evidence 並取得
 1. 保留 Grill → Deep Knowledge 的階段分工。Grill 負責查證與取得人類決策；Deep 沿用同一份 immutable snapshot 與已確認決策，不重讀相同 `wiki/`／`code_base/` evidence，只補 snapshot 沒有且後續明確需要的新來源。
 2. 以既有 `continueDeepKnowledge` 作為唯一交接 seam。`READY_FOR_DEEP` 的正式 completion 與 debug completion 都必須通過同一正式 gate；通過 relevance 後，在任何 await 前關閉 Grill pending／round、還原 tools、使舊 round 失效，再開始 Deep。`message_end` 與 `/continue` 必須受 active-stage guard 保護。
 3. relevance failure 是 Discovery clarification，不建立 Grill round。回答後依 `WAIT_USER → USER_CONFIRMED → LIGHT_DISCOVERY`，以原需求加補充重新探索並建立新 snapshot，再進 Grill。
-4. Deep 不直接向使用者提問。未來只有新 Evidence ID 帶來新歧義時，Workflow 才能建立新 Grill round；重複 evidence 或 decisionId 不得循環。現 ticket 不新增 speculative Deep result type，state machine 仍不允許 Deep 直接回 Grill。
-5. round ID 在同一 extension lifetime 內單調遞增，reset 不重設 `nextRoundId`。WAIT_USER identity 採方案 A：`runtime-issued roundId + kind + decisionId`；unknown round reject、精確重播已回答的舊 round 保持 idempotent，新 round 即使重用相同 ID 仍可接受。fetched evidence 只屬於目前 snapshot；同一 snapshot 多輪可保留，candidate IDs 改變時清除舊 fetched evidence。
+4. Deep 不直接向使用者提問。原則上只有新 Evidence ID 帶來新歧義時，Workflow 才能建立新 Grill round；唯一例外是 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md) 規定的第一次自動 discovery fallback：即使沒有新外部 Evidence ID，也只能建立一次新的 source／Grill round，且不得繞過第二次 `WAIT_USER`。重複 evidence 或 decisionId 不得循環。現 ticket 不新增 speculative Deep result type，state machine 仍不允許 Deep 直接回 Grill；上述例外由 ADR-0021 限定並取代本條件的無條件適用。
+5. round ID 在同一 extension lifetime 內單調遞增，reset 不重設 `nextRoundId`。WAIT_USER identity 採方案 A：`runtime-issued roundId + kind + decisionId`；unknown round reject、精確重播已回答的舊 round 保持 idempotent，新 round 即使重用相同 ID 仍可接受。一般規則下，fetched evidence 只屬於目前 snapshot；同一 snapshot 多輪可保留，candidate identity 改變時清除舊 fetched IDs。唯一例外依 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md)：第一次 fallback 切換 snapshot 前，將實際已驗證的 Evidence 內容複製到 workflow-local、以 `evidenceId` 去重的 fallback evidence accumulator；切換後各 snapshot-local IDs 仍照常清除。該 accumulator 只在同一 active workflow 內使用，新 workflow、cancel 或 switch 時清除，且不得回寫或污染一般 Grill snapshot。
 6. runtime 只能保證流程契約，不能證明模型沒有漏掉語意問題。若需要處理此假設，另開 verifier ticket；本 ticket 不加入第二個 LLM evaluator。
 
 ## Consequences
@@ -33,7 +37,7 @@ Light Discovery 已能建立候選資料，Grill 也會查證 evidence 並取得
 - Grill 與 Deep 的責任邊界明確，Deep 不會因重讀相同證據而再次提出 Grill 問題。
 - 舊 Grill event 在 Deep 階段應被 active-stage guard 擋下，且交接前已同步封口 pending state。
 - relevance 問題回到 Discovery，可能增加一次 Light Discovery 與新 snapshot，但不會把來源問題誤當成決策問題。
-- snapshot 與 evidence identity 的生命週期更嚴格；新增來源必須帶來新的 Evidence ID。
+- snapshot 與 evidence identity 的生命週期更嚴格；通常新增來源必須帶來新的 Evidence ID，僅 ADR-0021 的第一次自動 discovery fallback 可在沒有新外部 Evidence ID 時建立一次新 source／Grill round。
 - 本 ADR 只核准交接契約，未核准完整 semantic Deep、Pattern Card、持久化 session 或第二個 evaluator。
 
 ## Rejected alternatives

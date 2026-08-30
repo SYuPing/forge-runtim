@@ -9,6 +9,10 @@ status: implemented-verified-reviewed
 
 # ADR-0018：Deep retryable recovery contract
 
+## 2026-08-29 交叉引用
+
+`needs_discovery` 的有界 fallback、WAIT_USER 確認與 human premise 不屬一般 retryable invalid；其正式契約見 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md)。本 ADR 的 stale／retry 與 fail-closed 原則仍適用。
+
 日期：2026-08-28
 
 ## 狀態

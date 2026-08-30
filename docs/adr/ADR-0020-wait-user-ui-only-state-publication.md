@@ -9,6 +9,10 @@ status: implemented/verified-with-existing-workspace-caveats
 
 # ADR-0020：WAIT_USER UI-only state publication
 
+## 2026-08-29 交叉引用
+
+`deep_discovery_fallback` 沿用本 ADR 的 WAIT_USER UI-only publication；固定問題、嚴格回答 parser 與確認後 state transition 見 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md)。
+
 ## 狀態
 
 已接受設計，且已完成實作與驗證，保留既有 workspace caveats。Ticket：`wait-user-ui-only-state-publication-20260829`。

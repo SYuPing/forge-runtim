@@ -381,3 +381,290 @@ test("SessionState_WhenSnapshotChanges_ShouldDiscardOldSupplementalEvidence", ()
 	assert.deepEqual(state.getDeepSupplementalEvidenceIds(), new Set());
 	assert.equal(state.currentDeepAttempt(), undefined);
 });
+
+test("SessionState_WhenNeedsDiscoveryOccursTwice_ShouldEnterDeepDiscoveryFallbackWaitUser", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+
+	const firstResult = session.handleDeepResult(firstIdentity, { kind: "needs_discovery" });
+	assert.equal(firstResult.kind, "accepted");
+	assert.equal(session.current().stage, "LIGHT_DISCOVERY");
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時第二次重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const secondIdentity = session.currentDeepAttempt();
+	assert.ok(secondIdentity);
+
+	const secondResult = session.handleDeepResult(secondIdentity, { kind: "needs_discovery" });
+	if (secondResult.kind !== "accepted") throw new Error("第二次 needs_discovery 應接受並進入 WAIT_USER");
+
+	assert.deepEqual(
+		{
+			kind: secondResult.kind,
+			stage: secondResult.state.stage,
+			waitUser: {
+				kind: secondResult.state.waitUser?.kind,
+				question: secondResult.state.waitUser?.question,
+				options: secondResult.state.waitUser?.options,
+				recommendation: secondResult.state.waitUser?.recommendation,
+			},
+		},
+		{
+			kind: "accepted",
+			stage: "WAIT_USER",
+			waitUser: {
+				kind: "deep_discovery_fallback",
+				question: "此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認",
+				options: ["確認", "同意"],
+				recommendation: "確認",
+			},
+		},
+	);
+});
+
+test("SessionState_WhenDeepDiscoveryFallbackReceivesNonExactAnswer_ShouldRemainWaitUser", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+	session.handleDeepResult(firstIdentity, { kind: "needs_discovery" });
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時第二次重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const secondIdentity = session.currentDeepAttempt();
+	assert.ok(secondIdentity);
+	session.handleDeepResult(secondIdentity, { kind: "needs_discovery" });
+
+	const before = session.current();
+	session.recordAnswer("我同意");
+	const after = session.current();
+
+	assert.deepEqual(
+		{
+			stage: after.stage,
+			waitUser: after.waitUser,
+			humanDecisionCount: session.getHumanDecisions().length,
+		},
+		{
+			stage: "WAIT_USER",
+			waitUser: before.waitUser,
+			humanDecisionCount: 0,
+		},
+	);
+});
+
+test("SessionState_WhenDeepDiscoveryFallbackReceivesExactConfirmation_ShouldBeginKnowledgeUnderstanding", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+	session.handleDeepResult(firstIdentity, { kind: "needs_discovery" });
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時第二次重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const secondIdentity = session.currentDeepAttempt();
+	assert.ok(secondIdentity);
+	session.handleDeepResult(secondIdentity, { kind: "needs_discovery" });
+
+	session.recordAnswer("  確認  ");
+	const confirmedState = session.current();
+	session.beginDeepKnowledge(undefined, "KNOWLEDGE_UNDERSTANDING");
+	const understandingState = session.current();
+	const understandingIdentity = session.currentDeepAttempt();
+
+	assert.deepEqual(
+		{
+			confirmed: {
+				stage: confirmedState.stage,
+				waitUser: confirmedState.waitUser,
+				humanDecisionCount: session.getHumanDecisions().length,
+			},
+			understanding: {
+				stage: understandingState.stage,
+				activeIdentity: understandingIdentity !== undefined,
+				identityPhase: understandingIdentity?.phase,
+			},
+		},
+		{
+			confirmed: {
+				stage: "USER_CONFIRMED",
+				waitUser: undefined,
+				humanDecisionCount: 1,
+			},
+			understanding: {
+				stage: "KNOWLEDGE_UNDERSTANDING",
+				activeIdentity: true,
+				identityPhase: "KNOWLEDGE_UNDERSTANDING",
+			},
+		},
+	);
+});
+
+test("SessionState_WhenNeedsDiscoveryOccursAgainAfterFallbackConfirmation_ShouldRemainInFallbackWaitUser", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時第一次重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+	const firstResult = session.handleDeepResult(firstIdentity, { kind: "needs_discovery" });
+	assert.equal(firstResult.kind, "accepted");
+	assert.equal(firstResult.state.stage, "LIGHT_DISCOVERY");
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時第二次重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const secondIdentity = session.currentDeepAttempt();
+	assert.ok(secondIdentity);
+	const fallbackResult = session.handleDeepResult(secondIdentity, { kind: "needs_discovery" });
+	assert.equal(fallbackResult.kind, "accepted");
+	assert.equal(fallbackResult.state.stage, "WAIT_USER");
+
+	session.recordAnswer("確認");
+	assert.equal(session.current().stage, "USER_CONFIRMED");
+	session.beginDeepKnowledge(undefined, "KNOWLEDGE_UNDERSTANDING");
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	assert.equal(understandingIdentity.phase, "KNOWLEDGE_UNDERSTANDING");
+
+	const thirdResult = session.handleDeepResult(understandingIdentity, { kind: "needs_discovery" });
+
+	assert.equal(thirdResult.kind, "accepted");
+	assert.equal(thirdResult.state.stage, "WAIT_USER");
+	assert.equal(thirdResult.state.waitUser?.kind, "deep_discovery_fallback");
+	assert.equal(
+		thirdResult.state.waitUser?.question,
+		"此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認",
+	);
+	assert.deepEqual(thirdResult.state.waitUser?.options, ["確認", "同意"]);
+	assert.equal(thirdResult.state.waitUser?.recommendation, "確認");
+});
+
+test("SessionState_WhenDeepDiscoveryFallbackIsCancelled_ShouldResetCounterBeforeRetry", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時第一次重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+	const firstResult = session.handleDeepResult(firstIdentity, { kind: "needs_discovery" });
+	assert.equal(firstResult.kind, "accepted");
+	assert.equal(firstResult.state.stage, "LIGHT_DISCOVERY");
+
+	session.beginGrill();
+	session.startGrillRound("資料不足時第二次重試深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const secondIdentity = session.currentDeepAttempt();
+	assert.ok(secondIdentity);
+	const fallbackResult = session.handleDeepResult(secondIdentity, { kind: "needs_discovery" });
+	assert.equal(fallbackResult.kind, "accepted");
+	assert.equal(fallbackResult.state.stage, "WAIT_USER");
+	assert.equal(fallbackResult.state.waitUser?.kind, "deep_discovery_fallback");
+
+	const cancelledState = session.cancelDeepKnowledge();
+	assert.equal(cancelledState.stage, "DEEP_KNOWLEDGE_RETRIEVAL");
+	assert.equal(cancelledState.waitUser, undefined);
+	assert.equal(session.currentDeepAttempt(), undefined);
+
+	const retriedState = session.retryDeepKnowledge();
+	const retriedIdentity = session.currentDeepAttempt();
+	assert.ok(retriedIdentity);
+	assert.equal(retriedState.stage, "DEEP_KNOWLEDGE_RETRIEVAL");
+	assert.notEqual(retriedIdentity.attemptId, secondIdentity.attemptId);
+
+	const afterRetryResult = session.handleDeepResult(retriedIdentity, { kind: "needs_discovery" });
+	assert.equal(afterRetryResult.kind, "accepted");
+	assert.equal(afterRetryResult.state.stage, "LIGHT_DISCOVERY");
+	assert.equal(afterRetryResult.state.waitUser, undefined);
+});
+
+test("SessionState_WhenResetAfterNeedsDiscovery_ShouldTreatNextNeedsDiscoveryAsFirstOccurrence", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+
+	session.beginGrill();
+	session.startGrillRound("重設前的深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const firstIdentity = session.currentDeepAttempt();
+	assert.ok(firstIdentity);
+	const firstResult = session.handleDeepResult(firstIdentity, { kind: "needs_discovery" });
+	assert.equal(firstResult.kind, "accepted");
+	assert.equal(session.current().stage, "LIGHT_DISCOVERY");
+
+	session.reset();
+	session.beginGrill();
+	session.startGrillRound("重設後的深度知識", snapshot);
+	session.beginDeepKnowledge();
+	const nextIdentity = session.currentDeepAttempt();
+	assert.ok(nextIdentity);
+	const nextResult = session.handleDeepResult(nextIdentity, { kind: "needs_discovery" });
+
+	assert.equal(nextResult.kind, "accepted");
+	assert.equal(nextResult.state.stage, "LIGHT_DISCOVERY");
+	assert.equal(nextResult.state.waitUser, undefined);
+});
+
+test("SessionState_WhenDeepEvidenceIdRepeats_ShouldKeepFirstSameContentAndRejectDifferentContent", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+
+	session.startGrillRound("驗證 Deep evidence ID 衝突", snapshot);
+	session.beginDeepKnowledge();
+	const identity = session.currentDeepAttempt();
+	assert.ok(identity);
+
+	const firstEvidence = {
+		evidenceId: "ev-conflict",
+		kind: "human_premise",
+		source: "使用者輸入",
+		title: "第一筆標題",
+		content: "內容 A",
+		metadata: { source: "first", order: 1 },
+	};
+	const secondSameContent = {
+		...firstEvidence,
+		source: "另一個來源",
+		title: "第二筆標題",
+		metadata: { source: "second", order: 2 },
+	};
+	const differentContent = { ...firstEvidence, content: "內容 B" };
+
+	session.recordDeepSupplementalEvidence(identity, firstEvidence.evidenceId, firstEvidence);
+	session.recordDeepSupplementalEvidence(identity, secondSameContent.evidenceId, secondSameContent);
+
+	assert.deepEqual(session.getDeepSupplementalEvidenceIds(), new Set(["ev-conflict"]));
+	assert.deepEqual(session.getDeepSupplementalEvidence(), [firstEvidence]);
+
+	const stateBeforeConflict = structuredClone(session.current());
+	const identityBeforeConflict = session.currentDeepAttempt();
+	assert.throws(
+		() => session.recordDeepSupplementalEvidence(identity, differentContent.evidenceId, differentContent),
+		(error: unknown) => error instanceof Error && error.message.includes("evidence_id_content_conflict"),
+	);
+
+	assert.deepEqual(session.getDeepSupplementalEvidenceIds(), new Set(["ev-conflict"]));
+	assert.deepEqual(session.getDeepSupplementalEvidence(), [firstEvidence]);
+	assert.deepEqual(session.current(), stateBeforeConflict);
+	assert.deepEqual(session.currentDeepAttempt(), identityBeforeConflict);
+});

@@ -195,7 +195,7 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 	}
 });
 
-test("DeepHandoff_WhenSteerPrecedesIdentityFollowUp_ShouldKeepStagePanelOutOfProviderAndPreserveDeep", async () => {
+test("DeepHandoff_WhenSteerPrecedesSettledIdentityPrompt_ShouldKeepStagePanelOutOfProviderAndPreserveDeep", async () => {
 	const tempDir = join(tmpdir(), `pi-deep-stale-loop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(join(tempDir, "wiki"), { recursive: true });
 	mkdirSync(join(tempDir, "code_base"), { recursive: true });
@@ -311,7 +311,9 @@ test("DeepHandoff_WhenSteerPrecedesIdentityFollowUp_ShouldKeepStagePanelOutOfPro
 		}
 		assert.ok(providerContexts.length > 0, "positive control: initial prompt 必須真的進入 provider loop");
 		await runtime.session.waitForIdle();
-		assert.ok(providerContexts.length >= 4, "positive control: steer 與 identity followUp 都必須真的進入 agent loop");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		await runtime.session.waitForIdle();
+		assert.ok(providerContexts.length >= 4, "positive control: steer 與 settled identity prompt 都必須真的進入 agent loop");
 		assert.ok(providerContexts.some((context) => context.includes("queued steer must not displace Deep identity")), "positive control: queued steer 必須被處理");
 		assert.equal(providerContexts.some((context) => context.includes("forge-stage") && context.includes("DEEP_KNOWLEDGE_RETRIEVAL")), false, "stage panel 不得進入 provider context");
 		assert.equal(staleCompletionResults.length, 1, "過期 Deep completion 必須實際執行並回傳 blocked result");
@@ -319,7 +321,7 @@ test("DeepHandoff_WhenSteerPrecedesIdentityFollowUp_ShouldKeepStagePanelOutOfPro
 		const staleCompletionContent = JSON.stringify(staleCompletionResult.content);
 		assert.equal(staleCompletionContent.includes("過期的 Deep Retrieval 完成結果已忽略。"), false, "過期 completion 不得把使用者問題字串帶入結果");
 		assert.equal(staleCompletionContent.includes("Tool execution was blocked"), true, "過期 completion 必須由 pending gate 阻擋");
-		assert.equal(deepResults.length, 1, "合法 identity followUp 應只執行一次 Deep search");
+		assert.equal(deepResults.length, 1, "合法 identity prompt 應只執行一次 Deep search");
 		const deepResult = deepResults[0] as { content?: Array<{ text?: string }>; details?: Record<string, unknown> };
 		assert.equal(deepResult.details?.status, "accepted", "合法 Deep 後續不可被 stale guard 誤傷");
 		assert.equal(deepResult.content?.some((part) => part.text?.includes("過期的 Deep Retrieval")), false, "合法 Deep 後續不可被 stale guard 誤傷");
@@ -415,6 +417,8 @@ test("SuccessfulReadyForDeepCompletion_ReturnsTerminatingResultWithoutConfirmati
 		terminal.sendInput("請幫我測試 test");
 		terminal.sendInput("\r");
 		const completionResult = await completion as { terminate?: unknown; details?: { status?: unknown } };
+		await runtime.session.waitForIdle();
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
 		await runtime.session.waitForIdle();
 		assert.equal(completionResult.terminate, true);
 		assert.equal(completionResult.details?.status, "READY_FOR_DEEP");
@@ -1340,6 +1344,7 @@ test("AgentSession_WhenParallelMixedDeepBatchRuns_ShouldApplyBarrierEndToEnd", a
 		]);
 		const baselineUserMessages = runtime.session.messages.filter((message) => message.role === "user").length;
 		await runtime.session.prompt("請幫我測試 mixed barrier");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
 		await runtime.session.waitForIdle();
 
 		const sessionMessages = JSON.stringify(runtime.session.messages);
@@ -1391,6 +1396,198 @@ test("AgentSession_WhenParallelMixedDeepBatchRuns_ShouldApplyBarrierEndToEnd", a
 		if (originalPiOffline === undefined) delete process.env.PI_OFFLINE;
 		else process.env.PI_OFFLINE = originalPiOffline;
 		unsubscribe?.();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("PiTui_WhenDeepDiscoveryFallbackNeedsConfirmation_ShouldShowFixedPromptAndEnterUnderstanding", async () => {
+	const tempDir = join(tmpdir(), `pi-grill-fallback-tui-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(join(tempDir, "code_base", "請幫我測試 Forge fallback.md"), "請幫我測試 Forge fallback\nFALLBACK_FIXTURE_UNIQUE_MARKER\n", "utf8");
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	let retrievalCompleteToolCalls = 0;
+	let unsubscribe: (() => void) | undefined;
+	const extractLastCandidateId = (context: unknown): string => {
+		const candidateId = Array.from(JSON.stringify(context).matchAll(/\bev-[0-9a-f]{64}\b/g)).at(-1)?.[0];
+		assert.ok(candidateId, "provider invocation must expose the latest opaque candidate id");
+		return candidateId;
+	};
+	const extractUserTexts = (context: unknown): string[] => {
+		const messages = (context as { messages: Array<{ role: string; content: unknown }> }).messages;
+		return messages.flatMap((message) => {
+			if (typeof message.content === "string") return [message.content];
+			if (!Array.isArray(message.content)) return [];
+			return message.content.flatMap((block) => {
+				if (typeof block !== "object" || block === null || !("type" in block) || block.type !== "text" || !("text" in block) || typeof block.text !== "string") return [];
+				return [block.text];
+			});
+		});
+	};
+	const extractLastRoundId = (context: unknown): string => {
+		const roundMatches = extractUserTexts(context)
+			.flatMap((userText) => Array.from(userText.matchAll(/目前 Grill roundId:\s*(grill-\d+)/g)).map((match) => match[1]))
+		const roundId = roundMatches.at(-1);
+		assert.ok(roundId, "provider invocation must expose the active Grill roundId");
+		return roundId;
+	};
+	const extractLastDeepIdentity = (context: unknown): {
+		attemptId: string;
+		sourceRoundId: string;
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL" | "KNOWLEDGE_UNDERSTANDING";
+	} => {
+		const userTexts = extractUserTexts(context);
+		const identityMatches = userTexts
+			.flatMap((userText) => Array.from(userText.matchAll(/\{"attemptId":"[^"]+","sourceRoundId":"[^"]+","phase":"(?:DEEP_KNOWLEDGE_RETRIEVAL|KNOWLEDGE_UNDERSTANDING)"\}/g)).map((match) => match[0]));
+		const identityJson = identityMatches
+			.at(-1);
+		assert.ok(identityJson, "provider invocation must expose the runtime Deep identity");
+		const identity: unknown = JSON.parse(identityJson);
+		assert.ok(
+			typeof identity === "object" && identity !== null &&
+				typeof (identity as { attemptId?: unknown }).attemptId === "string" &&
+				typeof (identity as { sourceRoundId?: unknown }).sourceRoundId === "string" &&
+				((identity as { phase?: unknown }).phase === "DEEP_KNOWLEDGE_RETRIEVAL" ||
+					(identity as { phase?: unknown }).phase === "KNOWLEDGE_UNDERSTANDING"),
+			"provider invocation exposed an invalid runtime Deep identity",
+		);
+		return {
+			attemptId: (identity as { attemptId: string }).attemptId,
+			sourceRoundId: (identity as { sourceRoundId: string }).sourceRoundId,
+			phase: (identity as { phase: "DEEP_KNOWLEDGE_RETRIEVAL" | "KNOWLEDGE_UNDERSTANDING" }).phase,
+		};
+	};
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const extensionFactory: ExtensionFactory = installForgeRuntimeExtension;
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id, name: model.name, api: model.api, reasoning: model.reasoning,
+								input: model.input, cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
+							})),
+						});
+						extensionFactory(pi);
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: runtimeOptions.model })),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+		});
+		await runtime.session.bindExtensions({});
+		unsubscribe = runtime.session.subscribe((event) => {
+			if (event.type === "tool_execution_end" && event.toolName === "forge_deep_retrieval_complete") {
+				retrievalCompleteToolCalls += 1;
+			}
+		});
+		faux.setResponses([
+			routerStartForgeResponse(),
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
+				candidateId: extractLastCandidateId(context),
+			}, { id: "fallback-grill-evidence-1" })]),
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+				evidence: [extractLastCandidateId(context)],
+				questions: [],
+				recommendation: { reason: "ready", value: "進入 deep knowledge" },
+				requiresUserConfirmation: false,
+				roundId: extractLastRoundId(context),
+				status: "READY_FOR_DEEP",
+			}, { id: "fallback-grill-complete-1" })]),
+			(context) => {
+				const identity = extractLastDeepIdentity(context);
+				return fauxAssistantMessage([fauxToolCall("forge_deep_retrieval_complete", {
+					...identity,
+					outcome: { kind: "needs_discovery", decisionSummary: "需要更多來源" },
+				}, { id: "fallback-retrieval-complete-1" })]);
+			},
+			(context) => {
+				const argumentsPayload = { candidateId: extractLastCandidateId(context) };
+				const response = fauxAssistantMessage([fauxToolCall("forge_grill_evidence", argumentsPayload, { id: "fallback-grill-evidence-2" })]);
+				return response;
+			},
+			(context) => {
+				const argumentsPayload = {
+					evidence: [extractLastCandidateId(context)],
+					questions: [],
+					recommendation: { reason: "ready", value: "進入 deep knowledge" },
+					requiresUserConfirmation: false,
+					roundId: extractLastRoundId(context),
+					status: "READY_FOR_DEEP",
+				};
+				const response = fauxAssistantMessage([fauxToolCall("forge_grill_complete", argumentsPayload, { id: "fallback-grill-complete-2" })]);
+				return response;
+			},
+			(_context) => {
+				return fauxAssistantMessage("等待新的 Deep round。");
+			},
+			(context) => {
+				const identity = extractLastDeepIdentity(context);
+				assert.equal(identity.attemptId, "deep-2");
+				assert.equal(identity.sourceRoundId, "grill-2");
+				assert.equal(identity.phase, "DEEP_KNOWLEDGE_RETRIEVAL");
+				const argumentsPayload = {
+					...identity,
+					outcome: { kind: "needs_discovery", decisionSummary: "第二次仍需要更多來源" },
+				};
+				const response = fauxAssistantMessage([fauxToolCall("forge_deep_retrieval_complete", argumentsPayload, { id: "fallback-retrieval-complete-3" })]);
+				return response;
+			},
+			(_context) => {
+				return fauxAssistantMessage("Understanding follow-up 已正常收尾。");
+			},
+		]);
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
+		void mode.run();
+		await terminal.waitForRender();
+		terminal.sendInput("請幫我測試 Forge fallback");
+		terminal.sendInput("\r");
+		const fixedQuestion = "此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認";
+		await waitForViewport(terminal, "此專案資料來源不足");
+		const fallbackViewport = (await terminal.flushAndGetViewport()).join("\n");
+		const normalizedViewport = fallbackViewport.replace(/\s+/g, "");
+		const normalizedQuestion = fixedQuestion.replace(/\s+/g, "");
+		assert.ok(normalizedViewport.includes(normalizedQuestion), "fallback viewport did not contain the complete fixed question");
+		assert.match(fallbackViewport, /確認/);
+		assert.match(fallbackViewport, /同意/);
+		terminal.sendInput("\r");
+		await waitForViewport(terminal, "KNOWLEDGE_UNDERSTANDING");
+		await runtime.session.waitForIdle();
+		assert.deepEqual(await runtime.session.agent.state.tools.map((tool) => tool.name), ["forge_deep_complete"]);
+		assert.equal(retrievalCompleteToolCalls, 2, "第二次 needs_discovery 後不得再發第三次 retrieval");
+	} finally {
+		unsubscribe?.();
+		mode?.stop();
 		await runtime?.dispose();
 		faux.unregister();
 		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });

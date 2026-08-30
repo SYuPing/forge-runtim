@@ -1913,8 +1913,62 @@ npm --prefix forge-runtime run check
 
 目前 `InteractiveModeOptions` 僅有 `tuiMode`；10 個 interactive tests 改用 test-local `attachVirtualTerminal`，依序 `init`、`run`、`waitForRender` 後輸入。extension targeted 2/2；PI targeted 3/3（含 no-auto-replay 與 explicit retry callCount 2→3）；static touched errors 0，剩餘 pi-main highlight.js 21 個 baseline errors；`git diff --check` 0、`pi-main` diff 0。
 
-真實 PI 0.84.3 no-session smoke 的合法 `/grill-run` WAIT_USER `display-only smoke` 通過並完成 confirm；normal active `forge-stage` 皆在 WAIT_USER 前，未取得 WAIT_USER-specific stage 證據。cancel 因在 streaming 送入而 inconclusive；第一次 forged roundId 被 fail-closed 拒絕，不算產品失敗。full PI file 10/11，唯一 Deep dirty-scope failure 非本 ticket；完整 npm suite 於既有 integration hang（85 pass／0 fail）後中止並保留 log。
+真實 PI 0.84.3 no-session smoke 的合法 `/grill-run` WAIT_USER `display-only smoke` 通過並完成 confirm；normal active `forge-stage` 皆在 WAIT_USER 前，未取得 WAIT_USER-specific stage 證據。cancel 因在 streaming 送入而 inconclusive；第一次 forged roundId 被 fail-closed 拒絕，不算產品失敗。修正前歷史快照為 full PI file 10/11，唯一 Deep dirty-scope failure 非本 ticket；已由 Deep 修正段落記載的最新 11/11 GREEN 取代。完整 npm suite 於既有 integration hang（85 pass／0 fail）後中止並保留 log。
 
 必要 logs：`verify_three_wait_user_pi_contracts_with_retry_20260829.log`、`verify_two_wait_user_extension_contracts_final_20260829.log`、`verify_static_after_harness_sweep_20260829.log`、`verify_full_pi_grill_interactive_20260829.log`、`verify_full_forge_runtime_suite_20260829.log`。
 
-核心規範／安全 review PASS；manual retry gap 已補。private renderer terminal cast 僅為 upstream 無 public injection seam 的測試 caveat，不新增抽象。未解僅剩 Deep dirty-scope failure、完整 suite hang、可選真實 cancel smoke；本 ticket 已完成，不需下一 session 實作。
+核心規範／安全 review PASS；manual retry gap 已補。private renderer terminal cast 僅為 upstream 無 public injection seam 的測試 caveat，不新增抽象。修正前歷史快照曾列 Deep dirty-scope failure；已由最新 11/11 GREEN 取代。現存 caveat 僅為完整 suite hang、可選真實 cancel smoke；本 ticket 已完成，不需下一 session 實作。
+
+## Plan A：Deep pure-search continuation 修正收尾（2026-08-29）
+
+狀態：`implemented/verified-with-existing-workspace-caveats`。使用者實測的 pure `forge_deep_search` 中斷，根因是 coordinator 在 `forge-runtime/extensions/forge-runtime.ts:1284` 的 `!batch.mixed` guard 提前返回，沒有 same-identity follow-up；`continue` 沿用 `sourceRoundId`，3 + 5 次累計達 8 次上限不是根因。
+
+正式修正只移除該 guard，保留 terminate=true、全部 settle barrier、followUpQueued、identity／active checks、mixed reject、completion-only、quota、fail-closed 與 `pi-main` 邊界。public-seam 測試位於 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1585,1836-1948`，固定兩筆 pure search 全 settle exactly once，以及 rejected／failed settled 後完成 exactly once。
+
+驗證：PI TUI RED（`pi-grill-interactive.test.ts:681`，actual 3／expected 0）轉 GREEN 1/1；完整 PI 互動 11/11；新增兩測 2/2。extension 完整 assertions 68 pass／0 fail，但 summary 後背景程序未退出，180 秒中止。`npm run check` 與第二段 tsc 僅有既有 `pi-main` `highlight.js` 21 個 baseline 型別錯誤；bounded `npm test` 未觀察失敗，但 180 秒卡在既有 human-decision integration。兩份獨立 review 無阻擋 finding；剩餘低風險是 synthetic failed result 與真實 awaited `message_end`／tool-call ID 假設。
+
+## Plan A：Deep Discovery fallback 與 human premise（2026-08-29）
+
+### 狀態
+
+`design-approved-ready-for-red`；設計已核准，尚未修改 production/test。唯一契約來源為 [`ADR-0021`](adr/ADR-0021-deep-discovery-fallback-human-premise.md)。
+
+### 建置範圍
+
+- Retrieval／Understanding 合併計 `needsDiscoveryCount`；第一次 `needs_discovery` 自動 Light Discovery→Grill。
+ - 第二次及之後以 `kind=deep_discovery_fallback` 進 WAIT_USER，固定問題為「此專案資料來源不足，將以前次 grill/ 資料來源所得之證據進行後續開發，請確認」，只接受 trim 後整句「同意」／「確認」。
+- 確認後 fresh `KNOWLEDGE_UNDERSTANDING`，只允許 `forge_deep_complete`；累積兩輪 evidence 依 evidenceId 去重，零外部來源建立 `human_premise`。由已驗證 evidence 直接成立的事實性 finding 可維持事實陳述；implementation inference 必須以「推論：」開頭並引用有效 ID。只引用 `human_premise` 且沒有 verified evidence 時，validator 強制「推論：」；混合 evidence 仍須標示實際推論，既有引用／ID 檢查不放寬。
+
+### 檔案
+
+Production：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/src/workflow/state-machine.ts`、`forge-runtime/src/ui/ui-state.ts`、`forge-runtime/src/evidence/evidence-engine.ts`。
+
+Tests：`forge-runtime/tests/evidence/evidence-engine.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。
+
+### 不建置與執行順序
+
+不改 `pi-main/`、新 tool schema／Light Discovery tool／UI、validator、第三次自動 retry、CONTEXT_BUILD 下游或舊 WAIT_USER parser。每個 slice 先由獨立子代理寫測試，獨立 runner RED，再最小 production 實作、獨立 GREEN，最後分離 Standards／Spec review。本 ticket 只有 Plan A，沒有 Plan B；repo 既有的 `PLAN-B` 與本 ticket 無關，因本 ticket 沿用既有 `WAIT_USER` panel。
+
+### 測試與驗證
+
+Evidence 11+2=13；extension 68+6=74 assertions；PI 11+1=12。由 `forge-runtime/` 執行：
+
+```text
+npx tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/evidence/evidence-engine.test.ts
+npx tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/extensions/forge-runtime-extension.test.ts
+npx tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/extensions/pi-grill-interactive.test.ts
+npm run check
+npm test（180 秒有界）
+```
+
+期望依序為：Evidence `13 pass/0 fail`；extension `74 assertions/0 fail`（summary 後可能有背景 handle caveat）；PI `12 pass/0 fail`；`npm run check` 保留既有 21 個 `highlight.js` baseline；完整 `npm test` 保留既有 hang caveat，不宣稱完整 suite exit 0。
+
+### 脆弱假設與下一步
+
+`deliverAs: followUp` 必須只排隊不重入 active tool turn；evidenceId 必須跨 snapshot 穩定去重；fallback prompt／identity 不得成為 provider 自由文字路由。若不成立即停下，不放寬 gate。下一 session 先讀 handoff／CONTEXT／ADR-0021／PLAN-A，展示摘要並等待使用者確認。
+
+### 實作與最終驗證（2026-08-30）
+
+狀態：`completed`。已完成 `human_premise` Evidence Package、共用 `needsDiscoveryCount`、第一次正式 `tool_result` transform 的 Light Discovery→Grill、第二次精確 `WAIT_USER` 與 exact `同意`／`確認`、新 Knowledge Understanding identity 與 completion-only gate。evidence 跨 snapshot switch 累積並依 ID 去重，於 cancel、switch、new workflow、reset 清除；human premise 與 decision 引用、READY_FOR_DEEP settle handoff、WAIT_USER await publication、`message_end` ctx 與 fallback needs_decision accumulator keys 均已完成。
+
+驗證：Evidence 13/13；Session State 22/22；Extension 142/142；PI interactive 12/12；`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1，但 Forge Runtime 自身零錯誤，唯一失敗為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016）。

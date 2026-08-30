@@ -9,6 +9,10 @@ status: implemented-verified-reviewed
 
 # ADR-0016：Deep Knowledge Retrieval、Understanding 與 Evidence Package
 
+## 2026-08-29 Discovery fallback 與 human premise
+
+資料不足復原、`human_premise` origin、跨 snapshot evidence 累積與 fallback validator 限制，依 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md) 執行；本 ADR 的 Evidence Package 唯一性、引用存在性與 blocking gate 不放寬。
+
 日期：2026-08-24
 
 ## 狀態
@@ -27,7 +31,7 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
    - `Deep Retrieval`：只可使用 `forge_deep_search` 在 `wiki/`、`code_base/` 補查，或使用 Grill snapshot 已明確存在的 target source；最多沿用既有每次 3 筆上限，完成時由 `forge_deep_retrieval_complete` 鎖定證據集合。
    - `Knowledge Understanding`：只能讀取已鎖定的證據集合，透過 `forge_deep_complete` 產出 Evidence Package，不再搜尋或改動證據集合。
 4. 兩階段沿用主 session active model。撤回模型派發構想；本 ADR 不新增 `ForgeLlmRunner`、policy、fallback、模型設定或 custom loop，也不修改 `pi-main/`。
-5. Deep result 只有 `completed`、`needs_decision`、`needs_discovery`。`needs_decision` 不直接呼叫 Grill，而由 Workflow 建立新的 `WAIT_USER` round；`needs_discovery` 回到 `LIGHT_DISCOVERY`。技術失敗或取消保留當前輸入，不自動回 Grill。
+5. Deep result 只有 `completed`、`needs_decision`、`needs_discovery`。`needs_decision` 不直接呼叫 Grill，而由 Workflow 建立新的 `WAIT_USER` round；`needs_discovery` 僅在同一 workflow 第一次時回到 `LIGHT_DISCOVERY`，第二次及之後依 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md) 進入 `WAIT_USER`，由該 ADR 限定並取代本條件的無條件回轉。技術失敗或取消保留當前輸入，不自動回 Grill。
 6. Evidence Package 最小結構為：`evidence`（`kind`、`source`、`title`、完整 `content`、`metadata`、`origin`）、`decisions`（`decisionId`、`statement`、`evidenceIds`）、`findings`（`statement`、`evidenceIds`）、`limitations`（僅非阻擋限制）。不建立重複的 `citations` 欄位。
 7. `completed` 必須通過 deterministic validator：Evidence ID 唯一；每個 finding 至少引用一個 Evidence ID，且所有引用 ID 必須存在於 package；證據保留完整來源與內容；blocking gap／conflict 存在時不得回傳 `completed`。本 ADR 不加入第二個 LLM verifier。
 8. 每個 Deep 階段以 `attemptId + sourceRoundId + phase` 識別。stale call 拒絕；`/continue` 以新 `attemptId` 重試當前階段。target source 不明確時不得猜路徑，改回 `needs_decision`。
@@ -37,7 +41,7 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
 
 - 公開建立 seam 為 `createEvidencePackage({ inherited, supplemental, decisions, findings, limitations })`；它自動填入每筆 evidence 的 `origin`，輸出順序固定為 inherited 後 supplemental，merge 細節不另行公開。
 - 公開驗證 seam 為 `validateEvidencePackage(package)`，成功回傳 `{ ok: true }`，正常驗證失敗回傳 `{ ok: false, errors: string[] }`，不以 throw 表示預期中的驗證失敗。
-- Evidence 欄位固定為 `evidenceId`、`kind: string`、`source`、`title`、`content`、`metadata: Record<string, unknown>`、`origin: "grill" | "deep_retrieval"`。
+- Evidence 欄位固定為 `evidenceId`、`kind: string`、`source`、`title`、`content`、`metadata: Record<string, unknown>`、`origin: "grill" | "deep_retrieval" | "human_premise"`；`human_premise` 的 fallback 規則依 ADR-0021，不能被當成外部事實。
 - limitation 固定為 `{ statement: string, blocking: boolean }`；`blocking: true` 時不得完成。Evidence ID 在整個 package 內必須唯一；每個 finding 至少引用一個 evidence ID，且只能引用 package 內存在的 ID。
 - Deep retry 保留同一 `sourceRoundId`，只產生新的 `attemptId`。public test seam 與第一個驗收測試為 `EvidencePackage_WhenInheritedAndSupplementalEvidenceMerge_ShouldPreserveOrigins`。
 
@@ -53,7 +57,7 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
 - `ForgeSessionState` 對外只新增一個 public seam：`handleDeepResult(identity, result)`；`result` union 僅包含 `completed`、`needs_decision`、`needs_discovery`。
 - `completed` 依 `identity.phase` 分流：`Deep Retrieval` 進入 `Knowledge Understanding`；`Knowledge Understanding` 進入 `CONTEXT_BUILD`。
 - `needs_decision` 建立全新的 `WAIT_USER` round，`kind` 為 `deep_decision`，`roundId` 使用目前 `attemptId`，不冒充 Grill round；保留 current input／evidence，並使該 attempt 後續呼叫成為 stale。
-- `needs_discovery` 進入 `LIGHT_DISCOVERY` 並結束目前 attempt；stale 結果靜默忽略且不改變 state。
+- `needs_discovery` 第一次進入 `LIGHT_DISCOVERY` 並結束目前 attempt；第二次及之後依 ADR-0021 進入 `WAIT_USER`，stale 結果靜默忽略且不改變 state。
 - technical failure 不屬於 result union，走 cancel／no-op，保留原 Deep phase 與 input，等待 `/continue`。Orchestrator 只負責映射 result，不持有 attempt／evidence；StateMachine 只增加合法轉移。
 - public test seam 補為 `handleDeepResult(identity, result)`；第一個 Workflow 紅燈測試為 `StateMachine_WhenRetrievalCompletes_ShouldEnterKnowledgeUnderstanding`。
 
@@ -80,7 +84,7 @@ ADR-0015 已完成 Grill 到 Deep 的 immutable snapshot 交接，但當時刻�
 
 ## 與 ADR-0015 的關係
 
-本 ADR 明確擴充 ADR-0015 當時刻意排除的 full semantic Deep 與 Deep result type。ADR-0015 的下列邊界仍然有效：Deep 不直接向使用者提問；任何新取捨、需求或矛盾都必須由 Workflow → `WAIT_USER` → Grill 取得人類決策；Evidence snapshot 不可被回寫；relevance failure 仍回 Light Discovery。
+本 ADR 明確擴充 ADR-0015 當時刻意排除的 full semantic Deep 與 Deep result type。ADR-0015 的下列邊界仍然有效：Deep 不直接向使用者提問；任何尚未解決的新取捨、需求或矛盾都必須由 Workflow → `WAIT_USER` → Grill 取得人類決策；Evidence snapshot 不可被回寫；relevance failure 仍回 Light Discovery。跨 snapshot 保留 evidence 的唯一例外，是 [`ADR-0021`](ADR-0021-deep-discovery-fallback-human-premise.md) 定義的 workflow-local fallback evidence accumulator：它複製實際已驗證的 Evidence 內容並以 `evidenceId` 去重，不沿用已失效的 snapshot-local fetched IDs，也不污染一般 Grill snapshot。第二次資料不足的固定 fallback 問題若已由 Workflow 提出，且使用者以整句同意／確認完成該人類決策，便沒有未解取捨，可依 ADR-0021 由 `USER_CONFIRMED` 進入 `KNOWLEDGE_UNDERSTANDING`；若 Understanding 後出現新的取捨或矛盾，仍回一般 `WAIT_USER` → Grill。
 
 ## Consequences
 

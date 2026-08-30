@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-29
+updated: 2026-08-30
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: implemented-targeted-verified-with-caveats
+status: complete
 ---
 
 # Forge Runtime v4 開發記錄
@@ -216,7 +216,7 @@ status: implemented-targeted-verified-with-caveats
 ### 初次 review 修正里程碑（已修）
 
 - Standards P1 durable state 已補齊；P2 重複 setup 已抽為單一 `prepareDeepRetrieval` helper。Spec P1 已補至少 9 次 empty target 仍回 `target_manifest_empty` 的 budget assertion，並將 retryable 從通用 validation branch 縮到 duplicate error；Spec P2 stale state 已修；Plan A 已將 209 pass/1 fail 標為實作前基線。
-- Review-fix 驗證：focused 129/129、本地 214/214；標準 `npm test` 214 pass/1 fail，唯一為既存 qwen 缺檔；`npm run check` 38 個 baseline errors且未指向本 ticket 兩檔。證據：`forge-runtime/.tmp/deep-recovery-review-focused.log`、`deep-recovery-review-local.log`、`deep-recovery-review-npm-test.log`、`deep-recovery-review-check.log`。
+ - Review-fix 驗證：focused 129/129、本地 214/214；標準 `npm test` 214 pass/1 fail，唯一為既存 qwen 缺檔；`npm run check` 38 個 baseline errors 且未指向本 ticket 兩檔。證據：`forge-runtime/.tmp/deep-recovery-review-focused.log`、`deep-recovery-review-local.log`、`deep-recovery-review-npm-test.log`、`deep-recovery-review-check.log`。
 
 ### 最終雙軸 re-review 里程碑
 
@@ -250,3 +250,45 @@ status: implemented-targeted-verified-with-caveats
 - 驗證：WAIT_USER strict RED 先觀察實際 call count `4`、預期 `2`，修正後 GREEN；PI interactive 3/3、extension focused 2/2；static check 對本輪 touched files 為 0 errors；`git diff --check` 與 `pi-main` hygiene 通過。證據：`C:\Users\User\AppData\Local\Temp\run_wait_user_red_test_20260829.log`、`C:\Users\User\AppData\Local\Temp\verify_wait_user_extension_contracts_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_first_virtual_terminal_harness_retry_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_second_virtual_terminal_harness_20260829.log`、`C:\Users\User\AppData\Local\Temp\green_third_virtual_terminal_harness_20260829.log`。
 - 完整套件與邊界：完整 package／Deep suite 仍受既有 Deep 測試與 TUI terminal／highlight.js baseline caveats 影響，不能宣稱全域 green；真實 PI smoke 僅證明啟動與 extension 載入，未取代原始情境人工驗收。未修改 `pi-main/`。
 - 狀態：`implemented-targeted-verified-with-caveats`；本輪 ticket 已完成指定 Forge/UI-only 修正與 targeted 驗證，剩餘 caveats 另見 [`docs/handoff.md`](../docs/handoff.md)、[`docs/PLAN-A.md`](../docs/PLAN-A.md)、[`ADR-0020`](../docs/adr/ADR-0020-wait-user-ui-only-state-publication.md) 與 [`agent-state/wait-user-ui-only-state-publication-20260829.md`](../agent-state/wait-user-ui-only-state-publication-20260829.md)。
+
+## 2026-08-29 Deep Discovery fallback 與 human premise 設計核准
+
+- 使用者核准 ticket `deep-discovery-fallback-human-premise-20260829`：第一次 `needs_discovery` 自動重用 Light Discovery→Grill；第二次起固定問題進 `WAIT_USER`，確認後進 `KNOWLEDGE_UNDERSTANDING`，完成且 validator 通過才進 `CONTEXT_BUILD`。
+- Retrieval／Understanding 合併計數；同一 workflow 的 Grill／Deep evidence 依 evidenceId 去重並跨 snapshot 保留。零外部來源以 `human_premise` Evidence 記錄原始 goal、固定問題與明確回答。由已驗證 evidence 直接成立的事實性 finding 可維持事實陳述；implementation inference 必須以「推論：」開頭並引用有效 Evidence ID。只引用 `human_premise` 且沒有 verified evidence 時，validator 強制「推論：」；混合 evidence 仍須標示實際推論，既有引用／ID 檢查不放寬。
+- 狀態為 `design-approved-ready-for-red`，尚未修改 production/test。詳細契約見 [`docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md`](../docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md)。
+
+## 2026-08-29 Deep pure-search continuation 修正
+
+- 目標：修正 pure `forge_deep_search` 批次在 search 後沒有 same-identity follow-up 的流程中斷。
+- 重大實作：只移除 `forge-runtime/extensions/forge-runtime.ts:1284` 的 `!batch.mixed` 提前返回；保留 terminate、settle barrier、followUpQueued、identity／active checks、mixed reject、completion-only、quota、fail-closed 與 `pi-main` 邊界。
+- 驗證：PI TUI 回歸 1/1、完整 PI 互動 11/11、新增 extension 回歸 2/2；extension assertions 68 pass／0 fail 但程序於 summary 後 180 秒未退出。check／第二段 tsc 僅剩既有 21 個 `pi-main` `highlight.js` baseline 型別錯誤；bounded npm test 卡在既有 human-decision integration。兩份獨立 review 無阻擋 finding。
+- 狀態：`implemented/verified-with-existing-workspace-caveats`；不宣稱完整 suite 正常退出。
+
+## 2026-08-30 Forge Runtime intent→Context_build 流程圖交付（已更正）
+
+- 目標：細掃 `forge-runtime/` 的 intent→`CONTEXT_BUILD` 完整連線，整理 state transition、等待邊界、PI parallel 與 Forge barrier、identity、Evidence／Context Build 邊界，並以白話文輸出可閱讀的 HTML 流程圖。
+- 重大過程：使用者更正交付形式，改為獨立的 `forge-intent-context-flow.html`；流程圖改成自上而下九列、每列一個 state，併發與等待在旁路呈現，交接文字精簡化。原 `forge-runtime-flow.html` 已復原且無 diff。
+ - 交付判定：Browser 1280×900 與 390×844 均 PASS；手機支線寬 289-296px，console 0。流程圖以橘色標出已確認的空 Evidence Package 風險，未修改 runtime 來掩蓋缺口。
+- 修改範圍：本輪唯一 HTML 交付為 `forge-intent-context-flow.html`；`forge-runtime-flow.html` 已復原、無 diff。未修改 `pi-main/` 或 Forge Runtime production code。缺口與後續狀態見 [`lesson_learn.md`](./lesson_learn.md) 及 [`agent-state/forge-intent-context-flow-20260830.md`](../agent-state/forge-intent-context-flow-20260830.md)。原交付紀錄已由本段更正取代。
+
+## 2026-08-30 Forge intent→Context Build 維護 Skill 建立
+
+- 目標：建立個人 Skill `C:\Users\User\.codex\skills\forge-intent-context-flow\`，讓後續維護自動辨識目標 HTML `forge-intent-context-flow.html`，不誤用舊 `forge-runtime-flow.html`。
+- 重大實作：Skill 固定真相優先序、由上到下每列一個 state 的垂直版型、併發／等待／barrier 的旁路表達、fragile junction 標記、桌機／手機驗證與舊檔護欄。
+- 驗證：`quick_validate` UTF-8 PASS；獨立 review 無 P0/P1/P2。Skill 位於 repo 外，未修改 Forge Runtime 或 `pi-main/`。
+
+## 2026-08-30 建立通用程式流程圖 HTML Skill
+
+- 目標：建立獨立且適用任何程式碼專案的 `C:\Users\User\.codex\skills\code-flowchart-html`，依實際執行路徑產出或維護垂直 HTML 流程圖，不綁定 Forge、PI 或特定 state 名稱。
+- 重大決策：以 `Node／Edge／Wait／Parallel` 關聯模型保存來源與交接；主線每列一個真正狀態，等待、條件、錯誤、回流與併發在旁路呈現；純 HTML／CSS，不加入外部依賴或 agent loop。
+- 交付內容：`SKILL.md`、`agents/openai.yaml` 與 `assets/vertical-flow-template.html`；模板包含主線、等待恢復、fork→branches→join/barrier 與手機版旁路連線。
+- 驗證：`quick_validate` UTF-8 PASS；模板於 1280×900／390×844 瀏覽器驗證 PASS、console 0；synthetic forward-test 以 10 nodes／12 edges／2 waits／1 parallel PASS。未修改 runtime、`forge-runtime-flow.html` 或 `forge-intent-context-flow.html`。
+- 相容邊界：既有 `forge-intent-context-flow` 保留為 Forge 專用維護入口，`agents/openai.yaml` 設定 `policy.allow_implicit_invocation: false`，只有明確指定才使用，避免與通用 Skill 觸發衝突。
+
+## 2026-08-30 Deep Discovery fallback 與 human premise 完成
+
+- 目標：在不修改 `pi-main` 的前提下，讓 Retrieval／Understanding 對 `needs_discovery` 安全 fallback，保留跨 snapshot evidence，並在使用者精確確認後以 `human_premise` 支援後續 Knowledge Understanding。
+- 重大實作：Evidence Package 支援並驗證 `human_premise`；第一次正式 `tool_result` transform 自動重跑 Light Discovery→Grill；第二次進精確 `WAIT_USER`，只接受 trim 後完整 `同意`／`確認`。確認後建立新 Knowledge Understanding identity，只允許 `forge_deep_complete`。Grill／Deep evidence 依 ID 去重，於 cancel、switch、new workflow、reset 清除；human premise 記錄 goal、question、answer、`needsDiscoveryCount`、兩輪 `sourceRoundIds` 並由 decision 引用。
+- 重大實作：READY_FOR_DEEP 使用 terminate 與 pending settled invocation，在 `agent_settled` 的下一個 task 送普通 user message，再重驗 identity／stage／tools；pending handoff 關閉 Deep tool gate；WAIT_USER publication await；`message_end` callback 帶 ctx；fallback 無 locked evidence 的 `needs_decision` 將兩個 accumulator keys 視為合法 evidence。
+- 驗證：Evidence 13/13、Session State 22/22、Extension 142/142、PI interactive 12/12、`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1，但 Forge Runtime 自身零錯誤，唯一失敗為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016）。
+- 狀態：ticket 已完成，目前無待做 production 項目，只剩上游 check baseline；未修改 `pi-main`。

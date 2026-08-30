@@ -39,6 +39,7 @@ import {
 	createEvidencePackage,
 	validateEvidencePackage,
 	type EvidenceDecision,
+	type EvidenceInput,
 	type EvidenceFinding,
 	type EvidenceLimitation,
 } from "../src/evidence/evidence-engine.ts";
@@ -132,6 +133,18 @@ interface DeepRetrievalBatch {
 	followUpQueued: boolean;
 }
 
+interface PendingDiscoveryRestart {
+	toolCallId: string;
+	toolName: string;
+	identity: DeepAttemptIdentity;
+}
+
+interface PendingSettledDeepInvocation {
+	activeWorkflow: ActiveWorkflowContext;
+	invocation: string;
+	identity: DeepAttemptIdentity;
+}
+
 interface AssistantMessageEvent {
 	message?: {
 		content?: Array<AssistantTextBlock | AssistantThinkingBlock | AssistantToolCallBlock>;
@@ -155,6 +168,13 @@ interface ToolCallEvent {
 	input: Record<string, unknown>;
 }
 
+interface ToolResultEvent {
+	toolCallId: string;
+	toolName: string;
+	content: unknown[];
+	isError: boolean;
+}
+
 interface InputEvent {
 	text?: unknown;
 }
@@ -163,9 +183,10 @@ type ForgeEventHandler<TEvent> = {
 	bivarianceHack(event: TEvent, ctx?: CommandContext): Promise<unknown> | unknown;
 }["bivarianceHack"];
 
-interface ForgeExtensionApi {
-	on?(eventName: "tool_call", handler: ForgeEventHandler<ToolCallEvent>): void;
-	on?(
+	interface ForgeExtensionApi {
+		on?(eventName: "tool_call", handler: ForgeEventHandler<ToolCallEvent>): void;
+		on?(eventName: "tool_result", handler: ForgeEventHandler<ToolResultEvent>): void;
+		on?(
 		eventName: string,
 		handler: ForgeEventHandler<AssistantMessageEvent | UserMessageEvent | InputEvent>,
 	): void;
@@ -216,8 +237,24 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let activeWorkflow: ActiveWorkflowContext | undefined;
 	let savedActiveTools: string[] | undefined;
 	let pendingReplayInvocation: string | undefined;
-	let activeWaitUserUiLeaseKey: string | undefined;
-	let deepRetrievalBatch: DeepRetrievalBatch | undefined;
+	let pendingSettledDeepInvocation: PendingSettledDeepInvocation | undefined;
+	let pendingSettledDeepInvocationTimer: ReturnType<typeof setTimeout> | undefined;
+		let pendingDiscoveryRestart: PendingDiscoveryRestart | undefined;
+		const fetchedGrillEvidence = new Map<string, EvidenceInput>();
+		const fetchedDeepSupplementalEvidence = new Map<string, EvidenceInput>();
+		const acceptedNeedsDiscoverySourceRoundIds: string[] = [];
+		let fallbackHumanDecisionId: string | undefined;
+		let fallbackHumanPremise: EvidenceInput | undefined;
+		const rememberFetchedEvidence = (store: Map<string, EvidenceInput>, evidence: EvidenceInput): void => {
+			const existing = store.get(evidence.evidenceId);
+			if (existing) {
+				if (existing.content !== evidence.content) throw new Error("evidence_id_content_conflict");
+				return;
+			}
+			store.set(evidence.evidenceId, { ...evidence, metadata: { ...evidence.metadata } });
+		};
+		let activeWaitUserUiLeaseKey: string | undefined;
+		let deepRetrievalBatch: DeepRetrievalBatch | undefined;
 		const canEnforceToolBoundary = () =>
 			typeof pi.registerTool === "function" &&
 			typeof pi.getActiveTools === "function" &&
@@ -262,11 +299,24 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		restoreActiveTools();
 	};
 		const clearPendingState = () => {
-		pendingGrillRun = false;
-		pendingKnowledgeRequest = undefined;
-		pendingReplayInvocation = undefined;
-		activeWaitUserUiLeaseKey = undefined;
-	};
+			pendingGrillRun = false;
+			pendingKnowledgeRequest = undefined;
+			pendingReplayInvocation = undefined;
+			pendingSettledDeepInvocation = undefined;
+			if (pendingSettledDeepInvocationTimer) {
+				clearTimeout(pendingSettledDeepInvocationTimer);
+				pendingSettledDeepInvocationTimer = undefined;
+			}
+			pendingDiscoveryRestart = undefined;
+			activeWaitUserUiLeaseKey = undefined;
+		};
+		const clearFallbackWorkflowState = () => {
+			fetchedGrillEvidence.clear();
+			fetchedDeepSupplementalEvidence.clear();
+			acceptedNeedsDiscoverySourceRoundIds.length = 0;
+			fallbackHumanPremise = undefined;
+			fallbackHumanDecisionId = undefined;
+		};
 		const publishWaitUser = async (
 			payload: WaitUserPayload,
 		ctx: CommandContext,
@@ -274,7 +324,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	): Promise<void> => {
 		const decisionKey = waitUserDecisionKey(payload);
 		const currentState = sessionState.current();
-		if (currentState.stage === "WAIT_USER" && currentState.waitUser) {
+			if (currentState.stage === "WAIT_USER" && currentState.waitUser) {
 			if (decisionKey !== waitUserDecisionKey(currentState.waitUser)) {
 				return;
 			}
@@ -379,16 +429,52 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			answer: string,
 		):
 			| { kind: "not_deep" }
-			| { kind: "handled"; state: ForgeUiState; invocation?: string } => {
-			const current = sessionState.current();
-			if (current.stage !== "WAIT_USER" || current.waitUser?.kind !== "deep_decision") {
-				return { kind: "not_deep" };
-			}
-			if (!pi.sendUserMessage) {
-				return { kind: "handled", state: current };
-			}
-			const answeredState = sessionState.recordAnswer(answer);
-			const retryState = sessionState.retryDeepKnowledge(answeredState.decisionSummary);
+				| { kind: "handled"; state: ForgeUiState; invocation?: string } => {
+				const current = sessionState.current();
+				const waitUserKind = current.waitUser?.kind;
+				if (current.stage !== "WAIT_USER" || (waitUserKind !== "deep_decision" && waitUserKind !== "deep_discovery_fallback")) {
+					return { kind: "not_deep" };
+				}
+				const answeredState = sessionState.recordAnswer(answer);
+					if (answeredState.stage === "WAIT_USER") {
+						return { kind: "handled", state: answeredState };
+					}
+					if (waitUserKind === "deep_discovery_fallback") {
+						const workflow = activeWorkflow;
+						if (!workflow) {
+							return { kind: "handled", state: answeredState };
+						}
+						fallbackHumanDecisionId = current.waitUser?.decisionId;
+						const sourceRoundIds = [...acceptedNeedsDiscoverySourceRoundIds];
+						const evidenceId = `human-premise-${createHash("sha256")
+							.update([workflow.goal, current.waitUser?.question ?? "", answer, ...sourceRoundIds].join("\u0000"))
+							.digest("hex")}`;
+						fallbackHumanPremise = {
+							evidenceId,
+							kind: "human_premise",
+							source: "forge://human-premise",
+							title: "使用者前提",
+							content: [`目標：${workflow.goal}`, `問題：${current.waitUser?.question ?? ""}`, `回答：${answer}`].join("\n"),
+							metadata: {
+								needsDiscoveryCount: sourceRoundIds.length,
+								sourceRoundIds,
+							},
+						};
+					}
+					if (!pi.sendUserMessage) {
+						return { kind: "handled", state: answeredState };
+					}
+					if (waitUserKind === "deep_discovery_fallback") {
+					const nextState = sessionState.beginDeepKnowledge(answeredState.decisionSummary, "KNOWLEDGE_UNDERSTANDING");
+					const nextAttempt = sessionState.currentDeepAttempt();
+					if (!nextAttempt) {
+						return { kind: "handled", state: nextState };
+					}
+					activateDeepUnderstandingTools();
+					const invocation = `請依使用者決定 ${JSON.stringify(answer)} 繼續 Forge Deep ${nextAttempt.phase}。attemptId=${nextAttempt.attemptId} sourceRoundId=${nextAttempt.sourceRoundId} phase=${nextAttempt.phase}`;
+					return { kind: "handled", state: nextState, invocation };
+				}
+				const retryState = sessionState.retryDeepKnowledge(answeredState.decisionSummary);
 			const retryAttempt = sessionState.currentDeepAttempt();
 			if (!retryAttempt) {
 				return { kind: "handled", state: retryState };
@@ -400,7 +486,11 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		};
 		const resumeWaitUserAnswer = async (answer: string, ctx: CommandContext): Promise<boolean> => {
 			const current = sessionState.current();
-			if (current.stage === "WAIT_USER" && current.waitUser?.kind === "deep_decision" && !requireDeepToolBoundary(ctx)) {
+				if (
+					current.stage === "WAIT_USER" &&
+					(current.waitUser?.kind === "deep_decision" || current.waitUser?.kind === "deep_discovery_fallback") &&
+					!requireDeepToolBoundary(ctx)
+				) {
 				return true;
 			}
 			const deepAnswer = prepareDeepKnowledgeAnswer(answer);
@@ -437,6 +527,19 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				round.snapshot.manifest,
 			);
 		};
+			const queueDiscoveryRestart = (toolCallId: string, toolName: string, identity: DeepAttemptIdentity, state: ForgeUiState) => {
+					if (state.stage === "LIGHT_DISCOVERY") {
+						pendingDiscoveryRestart = { toolCallId, toolName, identity };
+					}
+				};
+			const recordAcceptedNeedsDiscovery = (
+				completion: ReturnType<typeof sessionState.handleDeepResult>,
+				outcome: { kind: string },
+			) => {
+				if (completion.kind === "accepted" && outcome.kind === "needs_discovery") {
+					acceptedNeedsDiscoverySourceRoundIds.push(completion.identity.sourceRoundId);
+				}
+			};
 
 	pi.registerTool?.({
 		name: "forge_grill_evidence",
@@ -502,9 +605,17 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							evidence: [],
 						},
 					};
-				}
-				sessionState.recordEvidenceFetch(candidate.candidateId);
-			return {
+					}
+					sessionState.recordEvidenceFetch(candidate.candidateId);
+					rememberFetchedEvidence(fetchedGrillEvidence, {
+						content: candidate.content,
+						evidenceId: candidate.candidateId,
+						kind: candidate.kind,
+						metadata: candidate.metadata,
+						source: candidate.source,
+						title: candidate.title,
+					});
+				return {
 				content: [{ type: "text", text: candidate.content }],
 				details: {
 					candidateId: candidate.candidateId,
@@ -526,9 +637,10 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					return { block: true };
 				}
 				const completion = parseActiveGrillCompletion(params);
-				if (completion.requiresUserConfirmation) {
-					const waitUser = toWaitUserPayload(completion);
-					void publishWaitUser(waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
+				let deepInvocation: string | undefined;
+					if (completion.requiresUserConfirmation) {
+						const waitUser = toWaitUserPayload(completion);
+							void publishWaitUser(waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
 						(ctx as CommandContext).ui?.notify?.(
 							`Forge WAIT_USER UI 失敗：${error instanceof Error ? error.message : String(error)}`,
 							"error",
@@ -548,17 +660,31 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							completion.recommendation.reason,
 							completion,
 							activateDeepRetrievalTools,
+							"settled",
 					);
-					if (!enteredDeep) {
+					if (!enteredDeep.entered) {
 						return {
 							content: [{ type: "text", text: "Forge 無法安全限制 Deep 工具面，已拒絕進入 Deep。" }],
 							details: { status: "rejected", reason: "deep_tool_boundary_unavailable" },
 						};
 					}
+					deepInvocation = enteredDeep.invocation;
+					const deepIdentity = sessionState.currentDeepAttempt();
+					if (!activeWorkflow || !deepInvocation || !deepIdentity) {
+						return {
+							content: [{ type: "text", text: "Forge 無法安全準備 Deep 交接，已拒絕進入 Deep。" }],
+							details: { status: "rejected", reason: "deep_settled_invocation_unavailable" },
+						};
+					}
+					pendingSettledDeepInvocation = {
+						activeWorkflow,
+						invocation: deepInvocation,
+						identity: deepIdentity,
+					};
 				}
 				pendingGrillRun = ["GRILL", "WAIT_USER"].includes(sessionState.current().stage);
 				return {
-						content: [{ type: "text", text: "Forge Grill 完成結果已接受。" }],
+					content: [{ type: "text", text: "Forge Grill 完成結果已接受。" }],
 					details: { roundId: completion.roundId, status: completion.status },
 					terminate: true,
 				};
@@ -900,7 +1026,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 
 			for (const item of supplementalEvidence) {
-				sessionState.recordDeepSupplementalEvidence(identity, item.evidenceId, item);
+				const recorded = sessionState.recordDeepSupplementalEvidence(identity, item.evidenceId, item);
+				if (recorded.kind === "accepted") rememberFetchedEvidence(fetchedDeepSupplementalEvidence, item);
 			}
 			return {
 				content: [{ type: "text", text: supplementalEvidence.map((item) => item.content).join("\n\n") }],
@@ -1023,11 +1150,24 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						return {
 							content: [{ type: "text", text: "過期的 Deep Retrieval 完成結果已忽略。" }],
 							details: { status: "stale", lockedEvidenceIds: [] },
-							terminate: true,
+								terminate: true,
 						};
 					}
+					recordAcceptedNeedsDiscovery(completion, params.outcome);
+				if (completion.state.stage === "LIGHT_DISCOVERY") {
+					queueDiscoveryRestart(toolCallId, "forge_deep_retrieval_complete", identity, completion.state);
+				}
 				restoreActiveTools();
-				await publishState(pi, ctx as CommandContext, completion.state);
+				if (completion.state.stage === "WAIT_USER" && completion.state.waitUser) {
+					await publishWaitUser(completion.state.waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
+						(ctx as CommandContext).ui?.notify?.(
+							`Forge WAIT_USER UI 失敗：${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					});
+				} else {
+					await publishState(pi, ctx as CommandContext, completion.state);
+				}
 				return {
 					content: [{ type: "text", text: `Forge Deep Retrieval 的 ${params.outcome.kind} 結果已接受。` }],
 					details: { status: params.outcome.kind, payload: params.outcome },
@@ -1183,10 +1323,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 			if (params.outcome.kind !== "completed") {
 				if (params.outcome.kind === "needs_decision") {
-					const locked = sessionState.getLockedDeepEvidence();
-					const knownEvidenceIds = new Set(
-						locked ? [...locked.inherited, ...locked.supplemental].map((evidence) => evidence.evidenceId) : [],
-					);
+			const locked = sessionState.getLockedDeepEvidence();
+			const knownEvidenceIds = new Set(
+				locked
+					? [...locked.inherited, ...locked.supplemental].map((evidence) => evidence.evidenceId)
+					: [...fetchedGrillEvidence.keys(), ...fetchedDeepSupplementalEvidence.keys()],
+			);
 					if (hasUnknownEvidenceIds(params.outcome.evidenceIds, knownEvidenceIds)) {
 						return {
 							content: [{ type: "text", text: "Knowledge Understanding 的 needs_decision 引用了未知的 Evidence ID。" }],
@@ -1199,11 +1341,24 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						return {
 							content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],
 							details: { status: "stale" },
-							terminate: true,
+								terminate: true,
 						};
 					}
+				recordAcceptedNeedsDiscovery(completion, params.outcome);
+				if (completion.state.stage === "LIGHT_DISCOVERY") {
+					queueDiscoveryRestart(_toolCallId, "forge_deep_complete", identity, completion.state);
+				}
 				restoreActiveTools();
-				await publishState(pi, ctx as CommandContext, completion.state);
+				if (completion.state.stage === "WAIT_USER" && completion.state.waitUser) {
+					await publishWaitUser(completion.state.waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
+						(ctx as CommandContext).ui?.notify?.(
+							`Forge WAIT_USER UI 失敗：${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					});
+				} else {
+					await publishState(pi, ctx as CommandContext, completion.state);
+				}
 				return {
 					content: [{ type: "text", text: `Forge Deep 的 ${params.outcome.kind} 結果已接受。` }],
 					details: { status: params.outcome.kind, payload: params.outcome },
@@ -1212,17 +1367,26 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 
 			const locked = sessionState.getLockedDeepEvidence();
-			if (!locked) {
+			if (!locked && fetchedGrillEvidence.size === 0) {
 				return {
 					content: [{ type: "text", text: "Deep 證據尚未鎖定。" }],
 					details: { status: "invalid", errors: ["Deep evidence 尚未鎖定"] },
 				};
 			}
 
+			const decisions = [...sessionState.getHumanDecisions(), ...params.outcome.decisions].map((decision) =>
+				decision.decisionId === fallbackHumanDecisionId && fallbackHumanPremise
+					? {
+							...decision,
+							evidenceIds: [...new Set([...decision.evidenceIds, fallbackHumanPremise.evidenceId])],
+						}
+					: decision,
+			);
 			const evidencePackage = createEvidencePackage({
-				inherited: [...locked.inherited],
-				supplemental: [...locked.supplemental],
-				decisions: [...sessionState.getHumanDecisions(), ...params.outcome.decisions],
+				inherited: locked ? [...locked.inherited] : [...fetchedGrillEvidence.values()],
+				supplemental: locked ? [...locked.supplemental] : [...fetchedDeepSupplementalEvidence.values()],
+				humanPremise: fallbackHumanPremise ? [fallbackHumanPremise] : [],
+				decisions,
 				findings: params.outcome.findings,
 				limitations: params.outcome.limitations,
 			});
@@ -1273,7 +1437,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		pendingReplayInvocation = undefined;
 	});
 
-		pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx?: CommandContext) => {
+		pi.on?.("message_end", async (event: AssistantMessageEvent | UserMessageEvent, ctx) => {
 			if (event.message?.role === "toolResult" && "toolCallId" in event.message) {
 				const batch = deepRetrievalBatch;
 				const toolCallId = event.message.toolCallId;
@@ -1282,7 +1446,6 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				}
 				batch.settledSearchCallIds.add(toolCallId);
 				if (
-					!batch.mixed ||
 					batch.followUpQueued ||
 					batch.settledSearchCallIds.size !== batch.searchCallIds.size ||
 					!isCurrentDeepAttempt(batch.identity) ||
@@ -1365,6 +1528,72 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		};
 	});
 
+	pi.on?.("tool_result", async (event: ToolResultEvent, ctx?: CommandContext) => {
+		const pendingRestart = pendingDiscoveryRestart;
+		if (!pendingRestart || event.toolCallId !== pendingRestart.toolCallId || event.toolName !== pendingRestart.toolName) {
+			return undefined;
+		}
+		pendingDiscoveryRestart = undefined;
+		if (event.isError !== false) {
+			return undefined;
+		}
+
+		const current = sessionState.current();
+		let currentRoundId: string | undefined;
+		try {
+			currentRoundId = sessionState.continueGrillRound().roundId;
+		} catch {
+			currentRoundId = undefined;
+		}
+		if (
+			!activeWorkflow ||
+			current.stage !== "LIGHT_DISCOVERY" ||
+			currentRoundId !== pendingRestart.identity.sourceRoundId ||
+			!requireGrillToolBoundary(ctx ?? {})
+		) {
+			return undefined;
+		}
+
+		const invocation = await restartLightDiscoveryAndGrill(activeWorkflow, ctx ?? {});
+		return {
+			content: [...event.content, { type: "text", text: invocation }],
+		};
+	});
+
+	pi.on?.("agent_settled", async () => {
+		const pending = pendingSettledDeepInvocation;
+		if (!pending || pendingSettledDeepInvocationTimer) {
+			return;
+		}
+		pendingSettledDeepInvocation = undefined;
+		pendingSettledDeepInvocationTimer = setTimeout(async () => {
+			pendingSettledDeepInvocationTimer = undefined;
+			const current = sessionState.current();
+			const currentAttempt = sessionState.currentDeepAttempt();
+			const requiredTool = currentAttempt?.phase === "DEEP_KNOWLEDGE_RETRIEVAL"
+				? "forge_deep_retrieval_complete"
+				: currentAttempt?.phase === "KNOWLEDGE_UNDERSTANDING"
+					? "forge_deep_complete"
+					: undefined;
+			const activeTools = pi.getActiveTools?.();
+			if (
+				activeWorkflow !== pending.activeWorkflow ||
+				!currentAttempt ||
+				currentAttempt.attemptId !== pending.identity.attemptId ||
+				currentAttempt.sourceRoundId !== pending.identity.sourceRoundId ||
+				currentAttempt.phase !== pending.identity.phase ||
+				!hasActiveDeepAttempt() ||
+				!requiredTool ||
+				!activeTools?.includes(requiredTool) ||
+				!pi.sendUserMessage
+			) {
+				return;
+			}
+			pendingReplayInvocation = pending.invocation;
+			await pi.sendUserMessage(pending.invocation);
+		}, 0);
+	});
+
 		pi.on?.("message_update", async (event: AssistantMessageEvent) => {
 			if ((!pendingGrillRun && !hasActiveDeepAttempt()) || event.message?.role !== "assistant") {
 				return;
@@ -1385,7 +1614,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				return hasActiveGrillAttempt() ? undefined : { block: true };
 			}
 		if (deepRetrievalToolNames.includes(event.toolName) || deepUnderstandingToolNames.includes(event.toolName)) {
-			return !pendingReplayInvocation && hasActiveDeepAttempt() ? undefined : { block: true };
+				return !pendingReplayInvocation && !pendingSettledDeepInvocation && hasActiveDeepAttempt()
+					? undefined
+					: { block: true };
 		}
 			if (!pendingGrillRun && sessionState.current().stage !== "WAIT_USER") {
 				return;
@@ -1431,6 +1662,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			const approvedRequest = pendingKnowledgeRequest.request;
 			const approvedRootDir = pendingKnowledgeRequest.rootDir;
 			pendingKnowledgeRequest = undefined;
+			clearFallbackWorkflowState();
 			await publishState(pi, ctx ?? {}, sessionState.beginIntent(approvedRequest));
 			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(approvedRequest));
 			pendingGrillRun = true;
@@ -1472,7 +1704,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 								(isApproval(routingText) || waitUser.recommendation.trim().toLowerCase() === normalized)
 								? waitUser.recommendation
 							: routingText);
-						if (waitUser?.kind === "deep_decision") {
+						if (["deep_decision", "deep_discovery_fallback"].includes(waitUser?.kind ?? "")) {
 							if (!requireDeepToolBoundary(ctx ?? {})) {
 								return { action: "handled" as const };
 							}
@@ -1528,6 +1760,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return { action: "handled" as const };
 		}
 
+			clearFallbackWorkflowState();
 			await publishState(pi, ctx ?? {}, sessionState.beginIntent(canonicalRequest));
 			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(canonicalRequest));
 			pendingGrillRun = true;
@@ -1598,7 +1831,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			grillResult,
 			activateDeepRetrievalTools,
 		);
-						if (!enteredDeep) {
+						if (!enteredDeep.entered) {
 							return;
 						}
 						pendingGrillRun = ["GRILL", "WAIT_USER"].includes(sessionState.current().stage);
@@ -1699,8 +1932,10 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					const deepCancel =
 						current.stage === "DEEP_KNOWLEDGE_RETRIEVAL" ||
 						current.stage === "KNOWLEDGE_UNDERSTANDING" ||
-						(current.stage === "WAIT_USER" && current.waitUser?.kind === "deep_decision");
+						(current.stage === "WAIT_USER" &&
+							(current.waitUser?.kind === "deep_decision" || current.waitUser?.kind === "deep_discovery_fallback"));
 					clearPendingState();
+					clearFallbackWorkflowState();
 					restoreActiveTools();
 					if (deepCancel) {
 						pendingGrillRun = false;
@@ -1733,6 +1968,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					return;
 				}
 				activeWorkflow = undefined;
+				clearFallbackWorkflowState();
 				clearPendingState();
 				restoreActiveTools();
 				sessionState.reset();
@@ -2030,8 +2266,9 @@ async function continueDeepKnowledge(
 		setPendingReplayInvocation: (invocation: string) => void,
 		decisionSummary?: string,
 		_grillResult?: StructuredGrillResult,
-		onProceedToDeepKnowledge?: () => void,
-	): Promise<boolean> {
+			onProceedToDeepKnowledge?: () => void,
+		deliveryMode: "settled" | "followUp" = "followUp",
+		): Promise<{ entered: boolean; invocation?: string }> {
 	const workflow = activeWorkflow;
 	const candidates = workflow?.lightDiscovery.codeBaseCandidates ?? [];
 	const relevance = evaluateCandidateRelevance(candidates);
@@ -2049,11 +2286,11 @@ async function continueDeepKnowledge(
 			recommendation: "縮小需求範圍",
 		};
 			await publishWaitUser(waitUserPayload, ctx);
-			return false;
+			return { entered: false };
 		}
 
 		if (!requireDeepToolBoundary(ctx)) {
-			return false;
+			return { entered: false };
 		}
 			const nextState = sessionState.beginDeepKnowledge(decisionSummary);
 			ctx.ui?.setStatus?.(buildWorkflowStatusText(nextState));
@@ -2071,9 +2308,13 @@ async function continueDeepKnowledge(
 					].sort()
 				: [];
 			const invocation = `Deep Knowledge 已開始。\n${DEEP_RESULT_GUIDANCE}\nTarget source manifest：${JSON.stringify(targetSources)}\n請繼續執行搜尋，並在每次工具呼叫中原樣帶入 runtime-issued identity：${JSON.stringify(deepAttempt)}`;
+		onProceedToDeepKnowledge?.();
+		if (deliveryMode === "settled") {
+			return { entered: true, invocation };
+		}
 		setPendingReplayInvocation(invocation);
 		await pi.sendUserMessage?.(invocation, { deliverAs: "followUp" });
-		return true;
+		return { entered: true };
 	}
 
 function parseWaitUserPayload(raw: string): WaitUserPayload {
