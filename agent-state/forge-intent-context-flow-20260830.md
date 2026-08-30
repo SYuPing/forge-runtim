@@ -53,3 +53,38 @@ status: completed-with-caveats
 
 - Forge 專用 Skill 仍保留作為相容維護入口；其 `agents/openai.yaml` 已設定 `policy.allow_implicit_invocation: false`，避免攔截通用流程圖需求。
 - 跨專案通用維護已移至 [`C:\Users\User\.codex\skills\code-flowchart-html\SKILL.md`]，狀態與驗證見 [`agent-state/code-flowchart-html-20260830.md`](./code-flowchart-html-20260830.md)。
+
+## 本輪同步狀態
+
+### 已完成項目
+
+- 依 current runtime 更新 `forge-intent-context-flow.html` 的九列流程與旁路語意。
+- 同步 `CONTEXT.md`、`docs/PLAN-A.md`、`docs/handoff.md`、`Memory/record.md`、`Memory/lesson_learn.md`。
+
+### 重要決策
+
+- 九列 baseline 不變；無 runtime／架構決策變更，不拆 Plan B、不建立新 ADR。
+- `forge-runtime-flow.html` before/after SHA-256 均為 `822ABDA78BB3C6DB7429C0D2365F56E15C97247B25E72279CBB3D7406C6249E0`，本輪不修改。
+
+### 修改檔案
+
+- `forge-intent-context-flow.html`（視覺交付，由主代理更新）
+- `CONTEXT.md`、`docs/PLAN-A.md`、`docs/handoff.md`
+- `docs/adr/ADR-0001-forge-runtime-v4-foundation.md`
+- `Memory/record.md`、`Memory/lesson_learn.md`
+- `agent-state/forge-intent-context-flow-20260830.md`
+
+### 測試結果
+
+- 靜態 parser、純 HTML/CSS、semantic classes、九 state 通過；獨立內容 review P0=0、P1=0。
+- 無可用 browser instance；1280×900、390×844、console、overflow、截斷未實測。
+
+### 未解問題
+
+- CONTEXT_BUILD production wiring 尚未接上。
+- Evidence Package 全空目前不被 validator 拒絕。
+- 匿名 handler mixed-batch 細節未完全展開，未在圖上標成完成。
+
+### 下一步
+
+- 另案設計、授權並實作 Context Build 與 Evidence 充足性修復；完成真實 PI 原始情境人工驗收。

@@ -1106,6 +1106,7 @@ TDD 垂直切片已完成：core streaming RED → minimal route；persistence/c
 
 ### Rollback
 
+
 回退本 ticket 的 production/test commit，並同步回退 ADR、Context、Plan、handoff、Memory 與 agent-state；不回退或修改 `pi-main/`。
 
 ---
@@ -1972,3 +1973,101 @@ npm test（180 秒有界）
 狀態：`completed`。已完成 `human_premise` Evidence Package、共用 `needsDiscoveryCount`、第一次正式 `tool_result` transform 的 Light Discovery→Grill、第二次精確 `WAIT_USER` 與 exact `同意`／`確認`、新 Knowledge Understanding identity 與 completion-only gate。evidence 跨 snapshot switch 累積並依 ID 去重，於 cancel、switch、new workflow、reset 清除；human premise 與 decision 引用、READY_FOR_DEEP settle handoff、WAIT_USER await publication、`message_end` ctx 與 fallback needs_decision accumulator keys 均已完成。
 
 驗證：Evidence 13/13；Session State 22/22；Extension 142/142；PI interactive 12/12；`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1，但 Forge Runtime 自身零錯誤，唯一失敗為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016）。
+
+## Plan A：Decision replay 的 UI-only stage 與 settled identity（2026-08-30）
+
+### 狀態
+
+`implementation-in-progress`；使用者已明確核准先更新文件再實作。只執行本 Plan A，沒有 Plan B，因為本 ticket 不改 UI 畫面，只隔離 stage message 的 transport，並修正 decision answer 後的 settled replay 時序。
+
+### Building
+
+- 在唯一 `publishState` 出口，讓所有 `forge-stage` 以正確 PI 契約 `ctx.ui.setStatus("forge-runtime", status)` 更新 UI，固定傳入 key 與 status text；不呼叫 `pi.sendMessage`，也不進 agent/provider context。
+- needs_decision 回答後終止 current run，沿用既有 `agent_settled` + next task + ordinary user message；先送出新的 attempt identity，完成 matching `message_start` 後才允許後續 Deep tool call。
+- 保留 pending marker、identity/stage/tools revalidation、stale reject 與 fail-closed tool gate。
+- Retrieval completed 與 Deep `needs_decision` answer 只設定既有 `pendingSettledDeepInvocation`，待 `agent_settled` 後由既有 identity／active-tool／workflow guards 發送；這是 transport 修正，不改 state machine 或流程順序。
+
+### Not Building
+
+- 不修改 `session-state.ts`、state machine、evidence、validator、Grill、第一次 `needs_discovery` restart、READY_FOR_DEEP 語意、Context Build、UI 視覺或既有 WAIT_USER／cancel／retry／switch 流程。
+- 不修改 `pi-main`，不新增 public API、delivery contract、tool schema、scheduler、替代 queue 或 Plan B。
+- 不放寬 stale 或 fail-closed 條件，不以測試 workaround 改變正式契約。
+
+### Approach
+
+先以 `publishState` 的單一出口切斷純顯示 stage 的 agent-loop transport，讓所有 callers 一次受益；decision answer 則使用既有 settled handoff seam，避免在 current run 中提前重播。若現有 seam 不足以保證新的 identity 在首次 Deep call 前已進入 provider context，立即停下回報，不跨檔案或 public API 擴 scope。
+
+### Fragile assumptions
+
+- `ctx.ui.setStatus("forge-runtime", status)` 是純顯示通道，不會重新進入 agent loop；若缺少 key 或 text，footer provider 會刪除項目，此假設已被證偽。
+- `agent_settled` 的 next task 與 ordinary user message 能在 matching identity 驗證後恢復工具；pending marker 期間舊 attempt 必須持續被 block。
+- PI provider context 與 observable tool result 可可靠觀察 stage 未進 user-role context、首次 Deep call 與 blocked 次數。若上游時序或 API 改變，測試必須失敗，不可放寬 gate。
+
+### Files
+
+| 類別 | 檔案 | 預計變動 |
+| --- | --- | --- |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | UI-only stage 出口與 settled decision replay 的最小修正 |
+| Tests | `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | Extension pending decision replay 與 tool gate 回歸 |
+| Tests | `forge-runtime/tests/extensions/pi-grill-interactive.test.ts` | 真實 PI provider context 與首次 Deep tool execution/result 回歸 |
+| Documents | `CONTEXT.md`、本文件、ADR、ticket、agent-state、`docs/handoff.md` | 記錄契約、執行與狀態 |
+| 不修改 | `pi-main/` | 維持上游原始碼不變 |
+
+### Tests
+
+依 vertical slices 執行，每個 slice 先由測試子代理新增測試並打 RED，主代理確認 RED 後才改 production；測試、production、驗證與 review 分工不可合併。
+
+- Slice A1：Extension `observedStatuses` 收到固定 key `forge-runtime` 與正確的 `CONTEXT_BUILD` status text。
+- Slice A2：真 PI trace 必須實際到達 Context Build，再驗證 provider context 沒有 user-role stage；不能只用「沒有 literal」假綠。
+- Slice B：Retrieval accepted／terminate 後 trace 為 `callCount=5` 且 idle；needs_decision answer 後 fresh deep-2 首次 Deep call 成功一次，blocked=0。
+- Slice C：Extension pending decision replay 期間，舊 attempt 仍被 `tool_call` gate 阻擋。
+
+基線為 Extension 142、PI 12、全套 248；預估新增後目標為 Extension 144、PI 14、全套 252，實際數量以測試落地為準。
+
+### Execution Order
+
+1. 讀取本 handoff、CONTEXT、ADR、本 ticket、agent-state 與 Memory，檢查工作樹；本文件完成後同一 session 可直接進入 TDD，不需二次確認。
+2. Slice A1 由 Extension 測試子代理先補 status regression 並執行 RED；主代理只修改 `forge-runtime/extensions/forge-runtime.ts` 的 stage publication。
+3. Slice A2 由 PI 測試代理先補 provider context regression 並執行 RED；主代理確認 stage 不再進 agent loop。
+4. Slice B 由 PI 測試代理先補 settled decision replay／tool execution-result regression 並執行 RED；主代理以既有 settled handoff 做最小修正。
+5. Slice C 由 Extension 測試代理先補 pending gate regression 並執行 RED；主代理確認不需新增 production 檔後完成修正。
+6. 由獨立驗證代理執行 targeted、完整 suite 與 check；再由獨立 review 代理檢查 Standards／Spec、scope 與其他流程不變量。
+7. 驗證完成後同步更新 CONTEXT、ADR、本 Plan、ticket、agent-state、Memory 與 handoff。
+
+目前 production 已完成 status key、`forge-stage` UI-only 與兩個 settled producer；C 舊 attempt gate 已 targeted 1/1 green。test-only Promise trace 已確認第一次 Deep `needs_discovery` 的精確根因：`agent_end → agent_settled → sendUserMessage` 的 Promise 已 resolve，但 provider `callCount=4`、`pendingResponses=4`；`pi.on("input")` 在沒有 marker且 stage=`GRILL` 時回 `handled`，因此 invocation 被吃掉，只有精確等於 `pendingReplayInvocation` 時才回 `continue`。下一步只在 Discovery timer 通過既有 settled guards、呼叫 `sendUserMessage` 前設定 `pendingReplayInvocation = pendingDiscovery.invocation`；沿用既有 `message_start` full exact match 清除與 tool_call fail-closed gate，sendUserMessage 失敗時保留 marker。Deep 邏輯、Grill WAIT_USER、needs_discovery 次數／人類確認規則、READY、validator、evidence、state machine、`pi-main` 均維持不變。
+
+### Verification
+
+驗收必須證明：stage 仍在 UI 可見但完全不進 provider/user-role context；decision answer 後第一次新 identity Deep call 即成功且無 blocked result；pending replay 期間舊 identity 仍 fail-closed。另須確認既有 Grill、WAIT_USER、第一次 `needs_discovery`、Context Build、cancel/retry/switch 與合法 Deep 後續測試維持綠燈，`pi-main` 無 diff。
+
+第一次 `needs_discovery` 的 fallback targeted 必須證明 accepted tool result 後確實產生下一個 provider user turn，且只消費 matching `toolCallId`、`toolName`、`isError=false`、workflow／identity 邊界；不匹配或缺少 sendUserMessage 時維持 fail-closed。現況 Extension full 144/144、A2／B／C targeted 綠，PI full 因此 transport 缺口仍紅；修正後重跑 fallback targeted、PI full、Extension full、type/check 與 whole suite。
+
+### Rollback
+
+只撤回本 ticket 的 `forge-runtime/extensions/forge-runtime.ts`、兩個測試檔與本次文件段落；不還原其他 ticket 歷史，不修改 `pi-main`，不引入 migration。
+
+## Plan A：Intent 到 Context 流程圖衍生視圖同步（2026-08-30）
+
+### 狀態
+
+`completed-with-browser-caveat`。本輪只執行單一 HTML／文件維護計畫，九列 baseline 不變；沒有 runtime 或架構決策變更，因此不拆 Plan B，也不建立新 ADR。
+
+### 已執行
+
+- 依目前 handler、session state、state-machine 與既有契約校正 `forge-intent-context-flow.html`：RECEIVE shortcut／`missingAssets`／fail-closed、WAIT_USER `displayOnly`／`transcript`、Deep stale identity 與兩種回流、Evidence `human_premise`／Finding-only `推論：`、CONTEXT_BUILD partial。
+- 保持 `forge-runtime-flow.html`、`pi-main` 與 runtime 不變；該舊圖 before/after SHA-256 均為 `822ABDA78BB3C6DB7429C0D2365F56E15C97247B25E72279CBB3D7406C6249E0`，LastWriteTimeUtc 為 `2026-08-30T06:51:21.2337516Z`，且本輪開始前已 dirty。
+
+### Verification
+
+- 靜態 parser、純 HTML/CSS、semantic classes、九 state 通過；獨立內容 review P0=0、P1=0。
+- 沒有可用 browser instance，故 1280×900、390×844、console、水平 overflow 與截斷的 runtime 視覺驗證未完成。
+- 未解風險：CONTEXT_BUILD production 尚未接；Evidence Package 全空目前不被 validator 拒絕；匿名 handler mixed-batch 細節未完全展開，圖上未把未證實細節標成完成。
+
+## 2026-08-30 Decision replay Discovery transport 覆核
+
+真 PI test-only spy 已否決 `sendUserMessage(..., { deliverAs: "followUp" })`：雖確認 handler 被呼叫，卻沒有 `queue_update`，provider `callCount=4`、`pendingResponses=4`；whole-file targeted 13 pass/1 fail、blocked=0。後續只保留 `pendingDiscoveryRestart` 精準消費與既有 guards；match success 後呼叫既有 `restartLightDiscoveryAndGrill`，建立獨立 `pendingSettledDiscoveryInvocation`，由既有 `agent_settled` handler 以 0ms timer 重驗 activeWorkflow、GRILL stage、current round、Grill tool boundary、`sendUserMessage`，再用不帶 `deliverAs` 的正常 user message 開下一 provider turn。Discovery marker 與 Deep marker 分離，清理 pending state 時一併清除 marker／timer；不新增 PI event、不改其他既有流程。status 維持 `implementation-in-progress`，下一步先實作 settled Discovery marker，再重跑 fallback targeted、PI full、Extension full、check 與 whole suite。
+## 完成與驗證（2026-08-30）
+
+本計畫已完成。實作維持最小範圍：UI status 與 agent transport 分離；Deep decision / Retrieval completion 於 settled 後重播；第一次 discovery restart 使用獨立 settled marker，並在 settled 後重新驗證上下文再送正常 user message。既有 exact message-start 清除與 fail-closed tool gate 保留。
+
+驗證已涵蓋 A1、A2、B、C、fallback、Extension helper；fallback 1/1、PI full 14/14、Extension 144/144、npm test 252/252。未改動 pi-main、狀態機、session-state、evidence/validator 或既有 WAIT_USER 語意。整體 typecheck 僅受既有 pi-main highlight.js 型別宣告缺失阻擋。

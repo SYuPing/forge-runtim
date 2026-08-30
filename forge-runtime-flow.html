@@ -32,7 +32,7 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    h1, h2, h3, p { text-wrap: pretty; overflow-wrap: anywhere; }
+    h1, h2, h3, p, li, code, footer { text-wrap: pretty; overflow-wrap: anywhere; }
 
     header {
       padding: clamp(2.5rem, 6vw, 5rem) max(1.25rem, calc((100vw - 1240px) / 2));
@@ -353,15 +353,15 @@
 </head>
 <body>
   <header>
-    <p class="eyebrow">FORGE RUNTIME / ARCHITECTURE + DELIVERY</p>
-    <h1>目前已完成的流程，從收到需求一路走到交接</h1>
-    <p>這張圖把架構文件的流程，和 2026/08/07 到 2026/08/28 的開發進度放在一起。綠色是已完成，橘色是只完成一部分，灰色虛線是這一輪還沒有做完。</p>
+    <p class="eyebrow">FORGE RUNTIME / 流程與進度</p>
+    <h1>目前流程做到哪裡，從收到需求一路看到交接</h1>
+    <p>這張圖把目前真的做完、只做一部分，以及還沒做完的工作放在一起。進度更新到 2026/08/30；綠色是已完成，橘色是部分完成，灰色虛線是後續工作。</p>
   </header>
 
   <main>
     <section aria-labelledby="flow-title">
       <div class="section-heading">
-        <h2 id="flow-title">一、目前完成的主流程</h2>
+        <h2 id="flow-title">一、目前主流程做到哪裡</h2>
         <p>主流程依序往右，遇到需要人決定時才停下。</p>
       </div>
 
@@ -395,17 +395,17 @@
             <h3>逐項查證</h3>
             <p>檢查找到的資料，確認證據夠不夠，判斷能不能繼續。</p>
           </article>
-          <article class="flow-node done has-ai">
+          <article class="flow-node partial has-ai">
             <span class="ai-badge" aria-label="此區塊包含 AI 判斷">AI</span>
             <span class="step">05 / 交接</span>
-            <h3>整理已確認的資料</h3>
-            <p>只使用前面確認過的資料，不把同一份來源重新讀一遍。</p>
+            <h3>深入找資料並整理</h3>
+            <p>沿用前面確認過的資料，缺什麼才補找，最後整理成可核對的資料包。</p>
           </article>
           <article class="flow-node partial has-ai">
             <span class="ai-badge" aria-label="此區塊包含 AI 判斷">AI</span>
             <span class="step">06 / 後續</span>
-            <h3>後面的完整工作</h3>
-            <p>還包括整理需求、寫規格、實作和審查，這一輪還沒有全部做完。</p>
+            <h3>交給後續工作</h3>
+            <p>後面還有背景整理、設計決定、規格、實作、測試與審查，目前尚未全部完成。</p>
           </article>
         </div>
 
@@ -418,7 +418,7 @@
         <div class="branch">
           <article class="back">
             <h3>資料不夠，或需要你做決定</h3>
-            <p>先停下來等你回答。你回答後，系統會重新找資料或再查一次，不會自動替你選答案。</p>
+            <p>第一次只是資料不足時，系統會先自動再找一次。仍然不足，或需要你做決定時，才停下來等你回答；系統不會替你選答案。</p>
           </article>
           <article class="forward">
             <h3>資料夠了，可以繼續</h3>
@@ -445,24 +445,24 @@
           <article class="done">
             <h3>這一輪已完成</h3>
             <ul>
-              <li>需求分流、找檔案、逐項查證與資料交接。</li>
-              <li>使用者等待、回答、重試、取消與切換。</li>
-              <li>完成後真正停止，畫面訊息不誤送回模型。</li>
-              <li>不同輪次的資料分開，舊訊息不能把流程拉回去。</li>
-              <li>Deep Retrieval、Knowledge Understanding 與 Evidence Package 的最小交接；完整 <code>npm test</code> 212/212 通過，<code>npm run check</code> exit 0。</li>
-              <li>Deep Retrieval 與 Knowledge Understanding 的輸出守門：只保留合法工具呼叫，不讓實作內容提前出現。</li>
-              <li>Deep target source 契約與 completion stale termination：缺少 target 時保留重試額度，六個過期 completion 分支都會終止當次流程。</li>
+              <li>判斷是否啟動、先找相關檔案、逐項查證，再深入補找資料。</li>
+              <li>等待使用者、接收回答、重試、取消與切換工作。</li>
+              <li>每一輪使用固定資料和獨立編號；舊訊息與過期結果不能把流程拉回去。</li>
+              <li>同一批搜尋會先收齊，再只接續一次；只用來顯示的訊息不會誤開新的模型回合。</li>
+              <li>第一次資料不足會自動重找；第二次仍不足時，會等待使用者明確確認再繼續。</li>
+              <li>使用者明確同意的前提會和已查證資料一起保存；資料包的格式與交接已完成。</li>
+              <li>最新完整測試 248/248 通過，兩輪獨立審查也都通過。</li>
             </ul>
           </article>
           <article class="future">
             <h3>這一輪還沒做完</h3>
             <ul>
-              <li>尚未由使用者在真實 PI session 重跑原始情境。</li>
-              <li>完整控制面板與固定畫面配置（widget tree、dashboard）。</li>
-              <li>從多個來源整理摘要、知識卡（Pattern Card）與長期保存。</li>
-              <li>第二次查核，以及架構文件後面的完整工作，包括外部來源。</li>
-              <li>mixed tool batch 的整批終止行為，以及真實 PI session 的原始情境人工驗收。</li>
-              <li>不把未完成項目畫成目前已交付。</li>
+              <li>空白資料包目前仍可能通過最後檢查；「資料是否真的足夠」還需要另案補強。</li>
+              <li>整理背景文件，以及後面的設計決定、規格、工作單、實作、測試與審查。</li>
+              <li>完整控制面板與固定畫面配置。</li>
+              <li>多來源摘要、知識卡、長期保存、第二次獨立查核與外部來源。</li>
+              <li>由使用者在實際操作畫面重跑原始情境。</li>
+              <li>整個工作區的程式檢查仍被上游 <code>highlight.js</code> 的既有問題擋住；Forge Runtime 本身沒有檢查錯誤。</li>
             </ul>
           </article>
         </div>
@@ -480,12 +480,10 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/07 至 08/10</p>
-            <h3>先完成骨架、入口與基本畫面</h3>
-            <p><strong>做了什麼：</strong>先把工作順序、需求分流、找資料、查證和等待人決定的規則定下來，也接上狀態、訊息和選單。</p>
-            <p><strong>設計考量：</strong>先守住固定流程和人類決策邊界，讓模型只能提出建議，不能自己跳過等待。</p>
-            <p><strong>實作細節：</strong>用集中狀態、訊息和選單接住入口、分流、找資料與等待，畫面先保留最小可操作範圍。</p>
-            <p class="detail no-bug"><strong>這段期間 Bug：</strong>沒有明確記錄的 Bug。當時主要的取捨是先不做完整畫面。</p>
-            <p class="detail fix"><strong>解決方案：</strong>先做能看、能操作的基本畫面，避免一開始就花時間做完整控制面板；完整控制面板列為後續項目，等待另案決定。</p>
+            <h3>先把基本流程接起來</h3>
+            <p><strong>做了什麼：</strong>接起「收到需求、判斷是否啟動、找資料、查證、等待人決定」的基本順序，也加上最小可用的狀態、訊息和選單。</p>
+            <p class="detail no-bug"><strong>這段期間 Bug：</strong>沒有文件能證實的新 Bug；當時先把完整控制面板留到後面。</p>
+            <p class="detail fix"><strong>怎麼處理：</strong>先交付能看、能操作的基本畫面，避免完整畫面拖住主流程。</p>
           </article>
         </div>
 
@@ -493,12 +491,10 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/11 至 08/16</p>
-            <h3>查證與等待流程變得可靠</h3>
-            <p><strong>做了什麼：</strong>完成查證工具、使用者確認、重試、取消、切換，以及完成遺漏時的復原。</p>
-            <p><strong>設計考量：</strong>等待、重試和取消都可能改變流程狀態，所以必須讓流程可回復，也不能把不完整資料誤當成已確認。</p>
-            <p><strong>實作細節：</strong>把共用檢查放在流程共通位置，依資料是否真的足夠決定阻擋，並讓互動測試有明確結束路徑。</p>
-            <p class="detail bug"><strong>這段期間 Bug：</strong>測試有時只是表面通過，測試資料不完整，空資料被錯誤擋下，互動測試也可能一直不結束。</p>
-            <p class="detail fix"><strong>解決方案：</strong>改用真正的啟動方式測試，補齊資料，只在真的需要時阻擋，補上共用檢查，並讓測試正常退出。</p>
+            <h3>讓查證、等待和重試真的可靠</h3>
+            <p><strong>做了什麼：</strong>完成查證、請使用者確認、重試、取消、切換，以及模型漏掉完成動作時的復原。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>有些測試表面通過，卻沒有走真正的啟動方式；測試資料也曾不完整，空資料被誤擋，互動測試還可能一直不結束。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>改走真正的啟動路徑，補齊測試資料，把共用檢查集中在同一處，並讓測試結束後確實退出。</p>
           </article>
         </div>
 
@@ -506,12 +502,11 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/17 至 08/20</p>
-            <h3>保住送出的內容，並正確結束一輪</h3>
-            <p><strong>做了什麼：</strong>讓完整查證指令原樣送出，完成後真的停止；畫面和紀錄保留需要看的訊息，但不再誤送回模型。</p>
-            <p><strong>設計考量：</strong>送出的內容和畫面顯示是兩件事；既要保留完整指令，也要用明確狀態表示流程已結束。</p>
-            <p><strong>實作細節：</strong>將原始內容與顯示內容分開處理，加入停止標記，並在重新整理、分支和重新載入時檢查是否還能送回模型。</p>
-            <p class="detail bug"><strong>這段期間 Bug：</strong>為了顯示在畫面上而改寫文字，曾讓模型看不到完整指令；把文字藏起來，也曾被誤以為等於流程已停止。</p>
-            <p class="detail fix"><strong>解決方案：</strong>移除會改寫訊息的做法，加入明確的停止標記，並在重新整理、分支和重新載入時都檢查內容是否不該送回模型。</p>
+            <h3>送出的內容不再被畫面改壞</h3>
+            <p><strong>做了什麼：</strong>讓完整指令原樣送給模型，完成後確實停止；畫面仍看得到必要訊息，但這些訊息不會再送回模型。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>為了讓畫面好讀而改寫訊息，曾讓模型收不到完整指令；只把文字藏起來，也曾被誤當成整個回合已經停止。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>把「送給模型」和「顯示給人」分開處理，加入真正的停止訊號，並確保只顯示的訊息在重新載入後仍不會進模型。</p>
+            <p><strong>驗證：</strong>Forge 132 項測試與 9 項互動測試通過；另有 76 項相關測試通過、2 項略過。</p>
           </article>
         </div>
 
@@ -519,12 +514,10 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/20 與 08/21 之間</p>
-            <h3>決定從頭開始，逐步確認後再往下走</h3>
-            <p><strong>做了什麼：</strong>重新整理開發方式，決定從頭開始，把整條流程拆成一個個小步驟，先確認前一步正確，再推進下一步。</p>
-            <p><strong>設計考量：</strong>08/20 前常發生改好 A 卻弄壞 B，影響是進度無法穩定累積；因此先建立可逐步確認的節奏，讓問題停在剛發生的地方。</p>
-            <p><strong>實作細節：</strong>每一步完成後先做對應確認；通過才往下走，失敗就停在當前步驟修正，不把未確認的變更繼續帶進後面的流程。</p>
-            <p class="detail bug"><strong>這段期間遇到的問題：</strong>前面的開發常出現改好 A 卻弄壞 B 的情況，導致修正彼此互相影響，進度無法穩定累積。</p>
-            <p class="detail fix"><strong>解決方案：</strong>從頭開始拆成小步驟，每一步先驗證，確認正確才往下一步；如果失敗，就停在當前步驟修正，避免問題一路擴大。</p>
+            <h3>把工作切成小步，避免修一處壞一處</h3>
+            <p><strong>做了什麼：</strong>重新安排開發順序，把整條流程拆成小步驟，每一步確認正確後才往下走。</p>
+            <p class="detail no-bug"><strong>這段期間 Bug：</strong>沒有可單獨核對的新 Bug；當時確認的開發困難是不同修正會互相影響，進度不容易穩定累積。</p>
+            <p class="detail fix"><strong>怎麼處理：</strong>每一步先做對應檢查；失敗就停在當前步驟修正，不把未確認的變更帶到後面。</p>
           </article>
         </div>
 
@@ -532,12 +525,11 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/21 至 08/22</p>
-            <h3>入口分流與第一階段找資料完成</h3>
-            <p><strong>做了什麼：</strong>把規則和使用者文字分開，完成只找檔名與基本資料的第一階段搜尋，每個來源最多列三筆並固定排序。</p>
-            <p><strong>設計考量：</strong>入口分流不能被使用者文字污染；第一階段只需快速找到候選檔案，避免把尚未查證的內容當成結論。</p>
-            <p><strong>實作細節：</strong>分開傳遞規則與使用者文字，對候選檔案固定排序並限制每個來源三筆，再讀取內容確認相關性。</p>
-            <p class="detail bug"><strong>這段期間 Bug：</strong>使用者文字可能混進規則裡，讓分流判斷不穩；明明找到相關檔案，系統也曾把它判成不相關；舊測試還會製造假失敗。</p>
-            <p class="detail fix"><strong>解決方案：</strong>把規則和使用者文字分開傳遞，真的讀取內容來判斷是否相關，清掉已淘汰的測試並改寫還有效的測試。完整測試最後 140/140 通過。</p>
+            <h3>先判斷是否啟動，再找出可能相關的檔案</h3>
+            <p><strong>做了什麼：</strong>把固定規則和使用者文字分開，先只找檔名與基本資料；每個來源最多列三筆，順序固定。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>使用者文字曾混進固定規則，讓判斷不穩；找到的相關檔案也曾被誤判為不相關，舊測試還會製造假失敗。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>把規則與使用者文字分開，讀取候選內容後再判斷是否相關，並刪除或改寫已過時的測試。</p>
+            <p><strong>驗證：</strong>互動測試 9/9、完整測試 140/140 通過，程式檢查也通過。</p>
           </article>
         </div>
 
@@ -545,12 +537,10 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/23</p>
-            <h3>先把查證到下一步的交接規則說清楚</h3>
-            <p><strong>做了什麼：</strong>確認查證階段負責確認資料和取得人同意，下一步沿用同一份已確認資料，不重讀相同來源。</p>
-            <p><strong>設計考量：</strong>查證和後續整理各自負責不同工作；交接時要保留同一輪的資料，避免來源變動造成前後答案不一致。</p>
-            <p><strong>實作細節：</strong>為每輪、等待和決定保留清楚編號，進入下一步前先關掉舊等待，再把已確認資料交出去。</p>
+            <h3>先訂好查證後怎麼交接</h3>
+            <p><strong>做了什麼：</strong>確認前一段負責查證資料和取得人類同意；下一段沿用同一份已確認資料，不重新讀取可能已變動的來源。</p>
             <p class="detail no-bug"><strong>當天 Bug：</strong>這一天沒有經測試證實的新 Bug，主要是在確認可能出錯的地方和交接規則。</p>
-            <p class="detail fix"><strong>解決方案：</strong>先決定每一輪、每種等待和每個決定都要有清楚編號，並規定進入下一步前要先關掉舊等待。</p>
+            <p class="detail fix"><strong>怎麼處理：</strong>規定每一輪、每種等待和每個決定都要有清楚編號；交接前先關掉舊等待，再送出已確認資料。</p>
           </article>
         </div>
 
@@ -558,13 +548,11 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/24</p>
-            <h3>完成交接，並補上最後的 Bug</h3>
-            <p><strong>做了什麼：</strong>完成資料分開保存、舊訊息防護、等待前收好舊狀態，並讓正式流程和除錯流程使用同一套檢查。</p>
-            <p><strong>設計考量：</strong>重試、舊訊息、不同等待和來源變動都可能讓流程回到錯的輪次，因此狀態識別必須比顯示文字更完整。</p>
-            <p><strong>實作細節：</strong>以完整輪次與等待編號識別狀態，正式與除錯共用檢查，下一步只讀取前面鎖定的已確認資料。</p>
-            <p class="detail bug"><strong>當天 Bug：</strong>重試時可能把「工具還在工作」誤當成「可以重播」；除錯流程可能繞過正式檢查；舊訊息可能重開查證；不同等待可能因編號文字相同而混淆；下一步也可能重新讀到已變動的來源。</p>
-            <p class="detail fix"><strong>解決方案：</strong>分開判斷工具是否還在工作和是否真的能重播；正式、除錯共用同一套檢查；在第一次等待前先關閉舊狀態；每輪使用完整編號；下一步只使用前面確認過的資料。</p>
-            <p><strong>驗證：</strong>文件記載為 157/157 測試通過、兩份 tsconfig 的 <code>npm run check</code> 通過，兩輪審查沒有發現問題；本頁沒有重新執行驗證。</p>
+            <h3>交接完成，舊訊息不再拉錯流程</h3>
+            <p><strong>做了什麼：</strong>把每輪資料分開保存，交接前收好舊狀態，並讓正式操作與除錯操作走同一套檢查。</p>
+            <p class="detail bug"><strong>當天 Bug：</strong>重試可能被錯當成重播；除錯操作可能繞過正式檢查；舊訊息可能重開查證；不同等待可能混在一起；下一步也可能讀到已變動的來源。這些問題都會把流程帶回錯的一輪。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>把「工具仍在工作」和「可以重播」分開判斷；所有入口共用檢查；每輪使用完整編號；下一步只使用前面已確認的資料。</p>
+            <p><strong>驗證：</strong>完整測試 157/157 通過，兩組程式檢查通過，兩輪獨立審查都沒有發現問題。</p>
           </article>
         </div>
 
@@ -572,13 +560,11 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/25</p>
-            <h3>完成 Deep Retrieval、Knowledge Understanding 與 Evidence Package</h3>
-            <p><strong>做了什麼：</strong>把更深入的找資料、理解資料和證據交接串起來，讓下一步拿到同一份可核對的證據包。</p>
-            <p><strong>設計考量：</strong>深入搜尋和理解必須分成兩個階段，並保留證據來源、決策、發現與限制；資料不完整或有阻擋性限制時不能假裝完成。</p>
-            <p><strong>實作細節：</strong>每輪用 <code>attemptId + sourceRoundId + phase</code> 組成 identity；重試只更換 attempt，保留原本的輸入與證據。Workflow 依三種結果分流：完成、需要人決定、需要補資料。Evidence Package validator 會檢查查詢數、檔案數、總量、文字長度、重複 ID、引用與阻擋性限制，並套用安全上限。</p>
-            <p class="detail bug"><strong>這段期間 Bug：</strong>讀檔後才檢查大小，可能先讀入過大檔案；單筆檢查可繞過整輪 2 MiB 上限；stale outcome 先做其他處理，可能污染目前流程；模型可能覆寫人類決策；active tools 能力消失時仍可能繼續；首次 Grill 轉 Deep 沒有傳 identity，可能讓交接失去這一輪的身分。</p>
-            <p class="detail fix"><strong>解決方案：</strong>改成讀檔前先用 stat 檢查大小，並用整輪原子檢查守住 2 MiB；stale outcome 優先驗證後靜默拒絕；先把 human decisions 注入上下文並拒絕重複 decisionId；每次動態檢查 active tools，無法安全限制時 fail-closed；首次 Grill 先建立 pendingReplayInvocation marker，再用 follow-up 傳遞 identity。</p>
-            <p><strong>驗證：</strong>文件記載初次 <code>npm test</code> 208/208，identity handoff 修正後完整 209/209 通過；<code>npm run check</code> exit 0，並有 diff-check 記錄。</p>
+            <h3>深入找資料，整理成可核對的資料包</h3>
+            <p><strong>做了什麼：</strong>把深入找資料、理解資料和整理證據串起來，讓下一步拿到來源、決定、發現與限制都能核對的資料包。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>系統曾先讀檔才檢查大小，整輪容量也可能被拆成多筆繞過；舊結果可能干擾新一輪；模型可能覆寫人類決定；工具已不可用時仍可能繼續；第一次交接也曾漏掉這次工作的編號。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>先看檔案大小，再讀內容；整輪一起計算總量；先拒絕舊結果；人類決定先保存且不可覆寫；工具不足時停止；交接時附上這次工作的完整編號。</p>
+            <p><strong>驗證：</strong>初次完整測試 208/208；補好交接後為 209/209，程式檢查通過。</p>
           </article>
         </div>
 
@@ -586,24 +572,22 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/26</p>
-            <h3>擋住 Deep 階段提前輸出實作內容</h3>
-            <p><strong>做了什麼：</strong>讓 Deep Retrieval 和 Knowledge Understanding 只整理、查證後續實作需要的證據，不在這兩個階段開始寫 RTL 或其他實作內容。</p>
-            <p><strong>設計考量：</strong>找資料階段可以保留合法工具呼叫，但不能把模型產生的實作文字帶進畫面或後續流程。</p>
-            <p><strong>實作細節：</strong>在 Deep active attempt 的串流更新和結束事件清空 <code>text</code>／<code>thinking</code>，同時保留合法的 <code>toolCall</code>；不影響等待、取消後或後續階段。</p>
-            <p class="detail bug"><strong>當天 Bug：</strong>Deep 階段原本只有工具限制，沒有同步攔住文字輸出，因此流程曾出現 RTL；這會讓尚未到實作階段的內容提前被看見。</p>
-            <p class="detail fix"><strong>解決方案：</strong>新增 Deep active 判斷，統一處理串流與終局事件，只清除文字內容並保留合法工具呼叫；因此不必擴大 Grill recovery 或修改 <code>pi-main/</code>。</p>
-            <p><strong>驗證：</strong>先以 <code>FORBIDDEN_IMPLEMENTATION_MARKER</code> 形成紅燈，修正後 targeted 9/9；完整 <code>npm test</code> 209/209 通過，<code>npm run check</code> exit 0，production review 沒有功能問題。</p>
+            <h3>找資料時不會提前開始寫程式</h3>
+            <p><strong>做了什麼：</strong>讓深入找資料和整理資料的階段只準備證據，不會提早輸出程式碼；接續工作也等到正確編號送達後才開始。</p>
+            <p class="detail bug"><strong>當天 Bug：</strong>原本只限制可用工具，沒有一起攔住文字，所以找資料時曾提前出現程式碼；工具也曾太早開啟，導致新的工作編號還沒送到，就先用了舊編號。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>在文字產生途中和結束時都拿掉實作內容，只保留查資料需要的動作；接續訊息真正進入後才開啟下一階段工具，無法安全交接時就先擋下。</p>
+            <p><strong>驗證：</strong>輸出守門的指定測試 9/9 通過；最後完整測試 211/211，程式檢查通過。</p>
           </article>
         </div>
         <div class="milestone green">
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/27</p>
-            <h3>修正過期 Deep 完成結果反覆被忽略</h3>
-            <p><strong>做了什麼：</strong>只處理 Deep Retrieval stale completion 循環，讓初始 Deep stage panel 只顯示、不參與 agent-loop，並保留 identity 到正確的使用者訊息開始時才消費。</p>
-            <p class="detail bug"><strong>這段期間 Bug：</strong>Deep stage panel 先成為 steer，舊 identity completion 先執行，反覆顯示「過期的 Deep Retrieval 完成結果已忽略。」。</p>
-            <p class="detail fix"><strong>怎麼解決：</strong>input 只預載工具；matching user <code>message_start</code> 才清 pending；pending 期間阻擋 Deep tool_call，避免工具預載與 delivery 授權互相干擾。</p>
-            <p><strong>驗證：</strong>正式 RED 1 fail、GREEN 1 pass；extension 117/117、PI integration 10/10、完整 <code>npm test</code> 212/212、<code>npm run check</code> exit 0。真實 PI v0.83.0 僅完成啟動 smoke check，人工情境尚未驗收。</p>
+            <h3>過期結果不再反覆重跑</h3>
+            <p><strong>做了什麼：</strong>保留這次工作的編號，等正確訊息真的開始後才使用；交接時也會列出可選檔案，缺少檔名時不會亂猜。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>畫面狀態曾比真正的接續訊息更早喚醒模型，讓舊編號先執行，反覆出現「過期結果已忽略」；交接沒列出檔案時，也可能把輸入錯誤誤當成需要人類選擇。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>正確訊息開始前先擋住前一輪的處理動作；交接時列出可選檔案，缺少檔名就要求修正輸入，而且不扣掉重試機會。</p>
+            <p><strong>驗證：</strong>兩批完整測試分別為 212/212、217/217，程式檢查通過。實際操作只完成啟動檢查，原始情境仍未人工重跑。</p>
           </article>
         </div>
 
@@ -611,19 +595,41 @@
           <div class="milestone-dot" aria-hidden="true"></div>
           <article>
             <p class="date">08/28</p>
-            <h3>讓過期的 Deep 完成結果真正停止</h3>
-            <p><strong>做了什麼：</strong>補齊兩個 Deep completion 工具的六個過期回傳，讓同一批已失效的結果被忽略後，不再繼續把 agent loop 往下推。</p>
-            <p><strong>設計考量：</strong>過期結果只應結束當次處理，不應改動目前狀態或工具；新的有效嘗試仍要能重新進入需要人決定的流程。</p>
-            <p><strong>實作細節：</strong>六個 stale branch 都加入 <code>terminate: true</code>；以公開流程測試確認 WAIT_USER／清理、舊 identity 的狀態與工具不變，以及新 identity 可再次提出決定。</p>
-            <p class="detail bug"><strong>這段期間 Bug：</strong>過期 completion 只回報 stale，沒有終止訊號，可能讓 agent loop 繼續處理同一批無效結果。</p>
-            <p class="detail fix"><strong>怎麼解決：</strong>六個 stale branch 補上終止訊號，並用 fresh-attempt regression 固定過期結果的終止與新嘗試的可恢復性。</p>
-            <p><strong>驗證：</strong>focused 124/124、full 219/219、<code>npm run check</code> pass；PI smoke 成功啟動並回傳 <code>smoke ok</code>。真實原始情境仍未完成人工驗收。</p>
+            <h3>無效結果會停止，輸入錯誤可以原地改正</h3>
+            <p><strong>做了什麼：</strong>讓六種過期結果都結束當次處理；沒有可選檔案或決定編號重複時，保留同一次工作讓模型修正後重送。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>過期結果只有「已失效」狀態，沒有停止訊號；空的檔案清單曾被當成要請人選擇；決定編號重複時，系統也沒有清楚表示可以改正後重送。審查還發現「可以重送」一度套得太廣。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>六個過期分支都補上停止訊號；空清單改成請模型換來源；只有決定編號重複這種錯誤可原地重送，其他檢查失敗仍照原規則擋下。</p>
+            <p><strong>驗證：</strong>前一批完整測試 219/219 通過；後一批指定測試 129/129、本機完整測試 214/214。標準測試當時另有 1 項既有缺檔問題，因此沒有宣稱全部正常。</p>
+          </article>
+        </div>
+
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/29</p>
+            <h3>同一批工作先收齊，再只接續一次</h3>
+            <p><strong>做了什麼：</strong>同一批搜尋和完成結果會先一起收好；純搜尋結束後會自動接續。只用來顯示狀態的訊息不再送進模型流程，需要人回答的畫面則保留。</p>
+            <p class="detail bug"><strong>當天 Bug：</strong>搜尋和完成若同批出現，可能互相打架；純搜尋後有時沒有下一步；只想更新畫面的訊息也曾讓模型多跑一輪，造成順序混亂或卡住。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>用每個處理動作自己的編號追蹤整批工作，等搜尋都收齊後只送一次接續訊息；刪除不必進流程的畫面傳送，只保留狀態文字和真正需要人回答的面板。</p>
+            <p><strong>驗證：</strong>指定測試與互動測試通過，實際操作測試最後為 11/11。完整套件當時曾在顯示結果後未退出，程式檢查也仍有上游既有問題，所以沒有宣稱整個工作區全部正常。</p>
+          </article>
+        </div>
+
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/30</p>
+            <h3>資料真的不足時，先重找，再請人確認</h3>
+            <p><strong>做了什麼：</strong>第一次資料不足會自動回頭再找；第二次仍不足才詢問使用者。使用者明確同意後，回答會被記成可追查的使用者前提，再和已查證資料一起交給下一步整理。</p>
+            <p class="detail bug"><strong>當天 Bug：</strong>直接送出接續訊息會留下舊的工具清單；等待畫面沒等完就往下走，可能錯過回答；沒有鎖定資料時，合法的補救結果也曾被誤擋。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>先結束舊回合，等它完全停下後再開下一步；等待畫面確實完成後才繼續；把同一工作中已確認的資料保留下來，並清楚標明使用者前提不是外部事實。</p>
+            <p><strong>驗證：</strong>資料包 13/13、流程狀態 22/22、擴充功能 142/142、實際操作測試 12/12、完整測試 248/248，兩輪獨立審查都通過。整體程式檢查只剩未修改的上游 <code>highlight.js</code> 既有問題；Forge Runtime 本身沒有錯誤。</p>
           </article>
         </div>
       </div>
     </section>
   </main>
 
-  <footer>更新日期：2026/08/28。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、docs/PLAN-A.md、docs/handoff.md、agent-state/deep-completion-stale-termination-20260828.md、docs/tickets/deep-completion-stale-termination-20260828.md、progress-timeline.html。流程狀態只反映目前文件已證實的範圍，不會自動讀取 runtime 狀態。</footer>
+  <footer>更新日期：2026/08/30。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、CONTEXT.md、docs/PLAN-A.md、docs/handoff.md、docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、agent-state/deep-discovery-fallback-human-premise-20260829.md。這是人工整理的進度快照，只反映文件已證實的範圍，不會自動讀取程式狀態。</footer>
 </body>
 </html>

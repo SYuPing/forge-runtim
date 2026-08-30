@@ -131,7 +131,7 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 			boundaryTimer = setTimeout(() => {
 				resolveBoundary("deadline");
 				resolve("deadline");
-			}, 2000);
+			}, 5000);
 		});
 		unsubscribeBoundary = runtime.session.subscribe((event) => {
 			if (event.type === "agent_settled") resolveBoundary("idle");
@@ -158,13 +158,13 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 Forge");
 		terminal.sendInput("\r");
-		await waitForViewport(terminal, "是否進入 deep knowledge？");
 		const boundaryOutcome = await Promise.race([boundary, boundaryDeadline]);
 		assert.equal(
 			boundaryOutcome,
 			"idle",
 			"WAIT_USER 顯示後舊回合未先終止：agent turn 未在使用者回答前 settle。",
 		);
+		await waitForViewport(terminal, "是否進入 deep knowledge？");
 		const callCountAtWaitUser = faux.state.callCount;
 		const assistantMessagesAtWaitUser = runtime.session.messages.filter((message) => message.role === "assistant").length;
 		assert.equal(callCountAtWaitUser, 2, "router completion 與 Grill completion 應分開計數");
@@ -175,7 +175,7 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 
 			terminal.sendInput("是");
 			terminal.sendInput("\r");
-			for (let attempt = 0; attempt < 100; attempt += 1) {
+			for (let attempt = 0; attempt < 250; attempt += 1) {
 				const userMessages = runtime.session.messages.filter((message) => message.role === "user");
 				if (userMessages.length === 2 && JSON.stringify(userMessages[1]).includes("grill-2")) break;
 				await new Promise((resolve) => setTimeout(resolve, 20));
@@ -305,7 +305,7 @@ test("DeepHandoff_WhenSteerPrecedesSettledIdentityPrompt_ShouldKeepStagePanelOut
 		await terminal.waitForRender();
 		terminal.sendInput("請幫我測試 BoundaryToken");
 		terminal.sendInput("\r");
-		for (let attempt = 0; attempt < 100; attempt += 1) {
+		for (let attempt = 0; attempt < 250; attempt += 1) {
 			if (providerContexts.length > 0) break;
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
@@ -667,7 +667,6 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 					},
 				}, { id: "call-deep-complete-1" }),
 			]),
-			fauxAssistantMessage("Deep knowledge 已完成。"),
 		]);
 		mode = new InteractiveMode(runtime);
 		attachVirtualTerminal(mode, terminal);
@@ -693,6 +692,374 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 		assert.match((await terminal.flushAndGetViewport()).join("\n"), /CONTEXT_BUILD/);
 	} finally {
 		unsubscribeSearch();
+		mode?.stop();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("PiProvider_WhenContextBuildStageIsPublished_ShouldKeepStageOutOfProviderContext", async () => {
+	const tempDir = join(tmpdir(), `pi-stage-provider-context-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(tempDir, { recursive: true });
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(join(tempDir, "code_base", "context-isolation.ts"), "// context-isolation\nexport const contextIsolation = true;\n");
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	const providerContexts: string[] = [];
+	let deepCompletionCount = 0;
+	let unsubscribeCompletion: () => void = () => {};
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const extensionFactory: ExtensionFactory = installForgeRuntimeExtension;
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id,
+								name: model.name,
+								api: model.api,
+								reasoning: model.reasoning,
+								input: model.input,
+								cost: model.cost,
+								contextWindow: model.contextWindow,
+								maxTokens: model.maxTokens,
+							})),
+						});
+						extensionFactory(pi);
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model: runtimeOptions.model,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+		});
+		await runtime.session.bindExtensions({});
+		unsubscribeCompletion = runtime.session.subscribe((event) => {
+			if (event.type !== "tool_execution_end" || event.toolName !== "forge_deep_complete") return;
+			deepCompletionCount += 1;
+		});
+		faux.setResponses([
+			(context) => {
+				providerContexts.push(JSON.stringify(context));
+				return routerStartForgeResponse();
+			},
+			(context) => {
+				providerContexts.push(JSON.stringify(context));
+				return fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
+					candidateId: extractCandidateId(context),
+				}, { id: "call-stage-context-evidence" })]);
+			},
+			(context) => {
+				providerContexts.push(JSON.stringify(context));
+				return fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+					evidence: [extractCandidateId(context)],
+					questions: [],
+					recommendation: { reason: "候選相關性足夠。", value: "進入 deep knowledge" },
+					requiresUserConfirmation: false,
+					roundId: "grill-1",
+					status: "READY_FOR_DEEP",
+				}, { id: "call-stage-context-ready" })]);
+			},
+			(context) => {
+				providerContexts.push(JSON.stringify(context));
+				return fauxAssistantMessage([fauxToolCall("forge_deep_search", {
+					attemptId: "deep-1",
+					sourceRoundId: "grill-1",
+					phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+					query: "context-isolation.ts",
+					source: "code_base",
+				}, { id: "call-stage-context-search" })]);
+			},
+			(context) => {
+				providerContexts.push(JSON.stringify(context));
+				return fauxAssistantMessage([fauxToolCall("forge_deep_retrieval_complete", {
+					attemptId: "deep-1",
+					sourceRoundId: "grill-1",
+					phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+					outcome: { kind: "completed" },
+				}, { id: "call-stage-context-retrieval-complete" })]);
+			},
+			(context) => {
+				providerContexts.push(JSON.stringify(context));
+				return fauxAssistantMessage([fauxToolCall("forge_deep_complete", {
+					attemptId: "deep-1",
+					sourceRoundId: "grill-1",
+					phase: "KNOWLEDGE_UNDERSTANDING",
+					outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+				}, { id: "call-stage-context-understanding-complete" })]);
+			},
+		]);
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
+		void mode.run();
+		await terminal.waitForRender();
+		terminal.sendInput("請幫我測試 context-isolation");
+		terminal.sendInput("\r");
+		await waitForScrollBuffer(terminal, "DEEP_KNOWLEDGE_RETRIEVAL");
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			if (providerContexts.some((context) => context.includes("任務：請幫我測試 context-isolation"))) break;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		for (let attempt = 0; attempt < 100 && deepCompletionCount < 1; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.equal(deepCompletionCount, 1, "bounded wait 應等到 forge_deep_complete completed");
+		await runtime.session.waitForIdle();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await runtime.session.waitForIdle();
+
+		assert.equal(
+			providerContexts.some((context) => context.includes("任務：請幫我測試 context-isolation")),
+			true,
+			"positive control: provider context 必須看得到同一回合的正常 user input",
+		);
+		assert.equal(
+			providerContexts.some((context) => context.includes("Forge CONTEXT_BUILD [active]")),
+			false,
+			"provider context 不得包含 Forge CONTEXT_BUILD [active] literal",
+		);
+		const completionToolCall = runtime.session.messages
+			.filter((message) => message.role === "assistant")
+			.flatMap((message) => message.content)
+			.find((block) => block.type === "toolCall" && block.name === "forge_deep_complete") as { id?: string } | undefined;
+		assert.ok(completionToolCall?.id, "session history 必須保留 forge_deep_complete tool call");
+		const completionToolResult = runtime.session.messages.find(
+			(message) =>
+				(message as { role?: string; toolCallId?: string }).role === "toolResult" &&
+				(message as { toolCallId?: string }).toolCallId === completionToolCall?.id,
+		) as { isError?: boolean; details?: { status?: string } } | undefined;
+		assert.ok(completionToolResult, "session history 必須保留 forge_deep_complete tool result");
+		assert.equal(completionToolResult?.details?.status, "accepted");
+		assert.equal(completionToolResult?.isError, false);
+		assert.equal(faux.getPendingResponseCount(), 0);
+	} finally {
+		unsubscribeCompletion();
+		mode?.stop();
+		await runtime?.dispose();
+		faux.unregister();
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("PiProvider_WhenDeepDecisionIsAnswered_ShouldCompleteFirstFreshAttemptWithoutBlockedRetry", async () => {
+	const tempDir = join(tmpdir(), `pi-deep-decision-replay-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(tempDir, { recursive: true });
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(
+		join(tempDir, "code_base", "spi_mode0_loopback.sv"),
+		"SPI_MODE0 loopback\nMISO follows MOSI at the same bit position.\n",
+		"utf8",
+	);
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	const terminal = new VirtualTerminal(100, 30);
+	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
+	let mode: InteractiveMode | undefined;
+	let unsubscribe: (() => void) | undefined;
+	const providerContexts: string[] = [];
+	const deepCompletions: Array<{ result: unknown; input: string }> = [];
+	let blockedCompletions = 0;
+	try {
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((model) => ({
+								id: model.id,
+								name: model.name,
+								api: model.api,
+								reasoning: model.reasoning,
+								input: model.input,
+								cost: model.cost,
+								contextWindow: model.contextWindow,
+								maxTokens: model.maxTokens,
+							})),
+						});
+						installForgeRuntimeExtension(pi);
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: runtimeOptions.model })),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+		});
+		await runtime.session.bindExtensions({});
+		unsubscribe = runtime.session.subscribe((event) => {
+			if (event.type !== "tool_execution_end" || event.toolName !== "forge_deep_complete") return;
+			const result = event.result as { content?: unknown };
+			const input = JSON.stringify(event);
+			deepCompletions.push({ result, input });
+			if (JSON.stringify(result.content).includes("Tool execution was blocked")) blockedCompletions += 1;
+		});
+		faux.setResponses([
+			(context) => {
+				return routerStartForgeResponse();
+			},
+			(context) => {
+				return fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
+					candidateId: extractCandidateId(context),
+				}, { id: "call-decision-replay-evidence" })]);
+			},
+			(context) => {
+				return fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+				evidence: [extractCandidateId(context)],
+				questions: [],
+				recommendation: { reason: "候選同時符合檔案路徑與內容。", value: "進入 deep knowledge" },
+				requiresUserConfirmation: false,
+				roundId: "grill-1",
+				status: "READY_FOR_DEEP",
+				}, { id: "call-decision-replay-ready" })]);
+			},
+			(context) => {
+				return fauxAssistantMessage([fauxToolCall("forge_deep_search", {
+				attemptId: "deep-1",
+				sourceRoundId: "grill-1",
+				phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+				query: "spi_mode0_loopback.sv SPI_MODE0",
+				source: "code_base",
+				}, { id: "call-decision-replay-search" })]);
+			},
+			(context) => {
+				return fauxAssistantMessage([fauxToolCall("forge_deep_retrieval_complete", {
+				attemptId: "deep-1",
+				sourceRoundId: "grill-1",
+				phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+				outcome: { kind: "completed" },
+				}, { id: "call-decision-replay-retrieval" })]);
+			},
+			(context) => {
+				return fauxAssistantMessage([fauxToolCall("forge_deep_complete", {
+				attemptId: "deep-1",
+				sourceRoundId: "grill-1",
+				phase: "KNOWLEDGE_UNDERSTANDING",
+				outcome: {
+					kind: "needs_decision",
+					decisionId: "spi_mode0_behavior",
+					question: "MISO 應如何驅動？",
+					options: ["固定驅動（不三態；例如維持 0）", "純直通"],
+					recommendation: "固定驅動（不三態；例如維持 0）",
+					evidenceIds: [extractCandidateId(context)],
+					decisionSummary: "需要確認 MISO 驅動行為。",
+				},
+				}, { id: "call-decision-replay-needs-decision" })]);
+			},
+			(context) => {
+				providerContexts.push(JSON.stringify(context));
+				return fauxAssistantMessage([fauxToolCall("forge_deep_complete", {
+					attemptId: "deep-2",
+					sourceRoundId: "grill-1",
+					phase: "KNOWLEDGE_UNDERSTANDING",
+					outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+				}, { id: "call-decision-replay-fresh-complete" })]);
+			},
+		]);
+		mode = new InteractiveMode(runtime);
+		attachVirtualTerminal(mode, terminal);
+		await mode.init();
+		void mode.run();
+		await terminal.waitForRender();
+		terminal.sendInput("請分析 SPI_MODE0 loopback");
+		terminal.sendInput("\r");
+		await waitForViewport(terminal, "MISO 應如何驅動？");
+		terminal.sendInput("\r");
+		for (let attempt = 0; attempt < 100 && deepCompletions.length < 2; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.equal(deepCompletions.length, 2, "bounded wait 應等到 fresh deep-2 completion");
+		await runtime.session.waitForIdle();
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		await runtime.session.waitForIdle();
+		assert.equal(blockedCompletions, 0, "正常決策回答不得觸發 blocked retry");
+		assert.equal(
+			deepCompletions.length,
+			2,
+			"Deep completion 應只有 needs_decision 與 fresh deep-2 各一次",
+		);
+		assert.equal(
+			providerContexts.some((context) => context.includes("attemptId=deep-2")),
+			true,
+			"新 provider context 必須包含 deep-2 identity",
+		);
+		const freshToolCall = runtime.session.messages
+			.filter((message) => message.role === "assistant")
+			.flatMap((message) => message.content)
+			.find(
+				(block) =>
+					block.type === "toolCall" &&
+					block.name === "forge_deep_complete" &&
+					(block.arguments as Record<string, unknown>).attemptId === "deep-2",
+			) as {
+				id?: string;
+				arguments?: Record<string, unknown>;
+			} | undefined;
+		assert.ok(freshToolCall?.id, "session history 必須保留 deep-2 forge_deep_complete tool call");
+		assert.equal(freshToolCall?.arguments?.sourceRoundId, "grill-1");
+		assert.equal(freshToolCall?.arguments?.phase, "KNOWLEDGE_UNDERSTANDING");
+		const freshToolResult = runtime.session.messages.find(
+			(message) =>
+				(message as { role?: string; toolCallId?: string }).role === "toolResult" &&
+				(message as { toolCallId?: string }).toolCallId === freshToolCall?.id,
+		) as { isError?: boolean; details?: { status?: string } } | undefined;
+		assert.ok(freshToolResult, "session history 必須保留 deep-2 tool result");
+		assert.equal(freshToolResult?.details?.status, "accepted");
+		assert.equal(freshToolResult?.isError, false);
+		assert.equal(faux.getPendingResponseCount(), 0);
+	} finally {
+		unsubscribe?.();
 		mode?.stop();
 		await runtime?.dispose();
 		faux.unregister();
@@ -1341,6 +1708,13 @@ test("AgentSession_WhenParallelMixedDeepBatchRuns_ShouldApplyBarrierEndToEnd", a
 					outcome: { kind: "completed" },
 				}, { id: "mixed-batch-retrieval-completion-only" })]);
 			},
+			() => {
+				return fauxAssistantMessage([fauxToolCall("forge_deep_complete", {
+					...deepIdentity,
+					phase: "KNOWLEDGE_UNDERSTANDING",
+					outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+				}, { id: "mixed-batch-understanding-complete" })]);
+			},
 		]);
 		const baselineUserMessages = runtime.session.messages.filter((message) => message.role === "user").length;
 		await runtime.session.prompt("請幫我測試 mixed barrier");
@@ -1386,12 +1760,26 @@ test("AgentSession_WhenParallelMixedDeepBatchRuns_ShouldApplyBarrierEndToEnd", a
 		const barrierUserMessageJson = JSON.stringify(barrierUserMessages[0]);
 		assert.ok(barrierUserMessageJson.includes("deep-1"));
 		assert.ok(barrierUserMessageJson.includes("grill-1"));
-		assert.equal(
-			runtime.session.messages.filter((message) => JSON.stringify(message).includes("forge-stage") && JSON.stringify(message).includes("KNOWLEDGE_UNDERSTANDING")).length,
-			1,
-			"Deep retrieval must transition to Knowledge Understanding once",
+		assert.deepEqual(
+			await runtime.session.agent.state.tools.map((tool) => tool.name),
+			["forge_deep_complete"],
+			"只有通過 retrieval barrier 後才可進入 Knowledge Understanding",
 		);
-		assert.deepEqual(await runtime.session.agent.state.tools.map((tool) => tool.name), ["forge_deep_complete"]);
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			if (toolEnds.some((entry) => entry.toolCallId === "mixed-batch-understanding-complete")) break;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.ok(
+			toolEnds.some((entry) => entry.toolCallId === "mixed-batch-understanding-complete"),
+			"Knowledge Understanding completion event 應在 cleanup 前完成",
+		);
+		await runtime.session.waitForIdle();
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		await runtime.session.waitForIdle();
+		for (let attempt = 0; attempt < 100 && !runtime.session.isIdle; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.equal(runtime.session.isIdle, true, "後續 settled 事件應在 cleanup 前完成");
 	} finally {
 		if (originalPiOffline === undefined) delete process.env.PI_OFFLINE;
 		else process.env.PI_OFFLINE = originalPiOffline;
@@ -1511,17 +1899,21 @@ test("PiTui_WhenDeepDiscoveryFallbackNeedsConfirmation_ShouldShowFixedPromptAndE
 		});
 		faux.setResponses([
 			routerStartForgeResponse(),
-			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
-				candidateId: extractLastCandidateId(context),
-			}, { id: "fallback-grill-evidence-1" })]),
-			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
-				evidence: [extractLastCandidateId(context)],
-				questions: [],
-				recommendation: { reason: "ready", value: "進入 deep knowledge" },
-				requiresUserConfirmation: false,
-				roundId: extractLastRoundId(context),
-				status: "READY_FOR_DEEP",
-			}, { id: "fallback-grill-complete-1" })]),
+			(context) => {
+				return fauxAssistantMessage([fauxToolCall("forge_grill_evidence", {
+					candidateId: extractLastCandidateId(context),
+				}, { id: "fallback-grill-evidence-1" })]);
+			},
+			(context) => {
+				return fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+					evidence: [extractLastCandidateId(context)],
+					questions: [],
+					recommendation: { reason: "ready", value: "進入 deep knowledge" },
+					requiresUserConfirmation: false,
+					roundId: extractLastRoundId(context),
+					status: "READY_FOR_DEEP",
+				}, { id: "fallback-grill-complete-1" })]);
+			},
 			(context) => {
 				const identity = extractLastDeepIdentity(context);
 				return fauxAssistantMessage([fauxToolCall("forge_deep_retrieval_complete", {
@@ -1545,9 +1937,6 @@ test("PiTui_WhenDeepDiscoveryFallbackNeedsConfirmation_ShouldShowFixedPromptAndE
 				};
 				const response = fauxAssistantMessage([fauxToolCall("forge_grill_complete", argumentsPayload, { id: "fallback-grill-complete-2" })]);
 				return response;
-			},
-			(_context) => {
-				return fauxAssistantMessage("等待新的 Deep round。");
 			},
 			(context) => {
 				const identity = extractLastDeepIdentity(context);

@@ -1,10 +1,10 @@
 ---
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
-scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829
-updated: 2026-08-29
+scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829、deep-decision-replay-ui-only-stage-20260830
+updated: 2026-08-30
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、agent-state/wait-user-ui-only-state-publication-20260829.md、docs/tickets/wait-user-ui-only-state-publication-20260829.md、scoped validation logs
-status: implemented/verified-with-existing-workspace-caveats
+status: implementation-in-progress
 ---
 
 # Intent route-only LLM 交接
@@ -434,3 +434,46 @@ Ticket `deep-discovery-fallback-human-premise-20260829` 已完成，目前無待
 Grill／Deep evidence 跨第一次 snapshot switch 累積並依 ID 去重，在 cancel、switch、new workflow、reset 清除。human premise 記錄 goal、question、answer、`needsDiscoveryCount`、兩輪 `sourceRoundIds`，decision 引用該 premise。READY_FOR_DEEP 使用 terminate 與 pending settled invocation，在 `agent_settled` 的下一個 task 送普通 user message，再重驗 identity／stage／tools；pending handoff 關閉 Deep tool gate；WAIT_USER publication await；`message_end` callback 帶 ctx；fallback 無 locked evidence 的 `needs_decision` 將兩個 accumulator keys 視為合法 evidence。
 
 最終證據：Evidence 13/13、Session State 22/22、Extension 142/142、PI interactive 12/12、`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1，Forge Runtime 自身零錯誤，唯一失敗是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016）。不修改 `pi-main`。
+
+## Decision replay 的 UI-only stage 修正交接（2026-08-30）
+
+### 狀態與目標
+
+Ticket `deep-decision-replay-ui-only-stage-20260830` 已完成設計文件並進入實作，狀態為 `implementation-in-progress`。使用者已核准先更新文件再開始實作；目前可沿既有核准方向繼續，不需再次確認。
+
+實測問題是：`needs_decision` 回答後，純 UI 的 `forge-stage` 經 `pi.sendMessage` 進入 steer queue，排在新 attempt identity 前；current run 未終止，模型拿舊 identity 重試，造成多次 `Tool execution was blocked`。`CONTEXT_BUILD` stage 也可能進 provider context，被模型誤認成使用者要求。真 PI trace 另證明 Retrieval accepted／terminate 後 `callCount=5` 且 idle，表示 Retrieval→Knowledge Understanding 缺少 explicit continuation；這是 transport 缺口，不是 state machine 要重排。
+
+### 核准設計與不變量
+
+- `publishState` 唯一出口的所有 `forge-stage` 永遠 UI-only，使用 `ctx.ui.setStatus("forge-runtime", status)` 固定 key 加 status text，不進 `pi.sendMessage` 或 agent/provider context；只移除 `sendMessage` 會因 undefined text 讓 footer provider 刪除項目，不能採用。
+- decision answer 後終止 current run，沿用既有 `agent_settled` + next task + ordinary user message；先送新 attempt identity，再允許 Deep call。
+- 保留 pending marker、matching `message_start`、identity/stage/tools revalidation 與全部 fail-closed gate。
+- Retrieval completed 與 Deep `needs_decision` answer 都只設定既有 `pendingSettledDeepInvocation`，等 `agent_settled` 後由既有 identity／active-tool／workflow guards 發送；不新增替代 transport。
+- 第一次 Deep `needs_discovery` 的真 PI 實測顯示，將既有 restart invocation 拼入 tool-result content 不會產生下一個 provider user turn，accepted tool result 後會停住並留下 pending provider responses。保留既有 pendingDiscoveryRestart 與消費點，僅在 `toolCallId`、`toolName`、`isError=false`、workflow／identity 邊界全匹配時一次性消費，呼叫既有 `restartLightDiscoveryAndGrill`，改以 `pi.sendUserMessage(invocation, { deliverAs: "followUp" })` 排入下一 provider turn；缺少 sendUserMessage 或不匹配時 fail-closed，不新增 `tool_execution_end` API。
+- 不影響 session-state、state machine、evidence、validator、Grill WAIT_USER 語意、needs_discovery 次數／人類確認規則、READY_FOR_DEEP、Context Build、cancel/retry/switch、合法 Deep 後續或 `pi-main`。若需要第二個 production 檔、public API 或新的事件 API，立即停下回報。
+
+### 實作計畫
+
+執行 [`docs/PLAN-A.md`](PLAN-A.md)，只有 Plan A、沒有 Plan B，因本 ticket 不改 UI 畫面，只隔離 transport。Production 只允許 `forge-runtime/extensions/forge-runtime.ts`；測試只允許 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 與 `forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。
+
+TDD vertical slices：A1) Extension `observedStatuses` 驗證固定 key `forge-runtime` 與 `CONTEXT_BUILD` status text；A2) 真 PI trace 必須真正到達 Context Build，且沒有 user-role stage，不能只用「沒有 literal」假綠；B) Retrieval trace `callCount=5` 且 idle，並驗證 fresh deep-2 首次成功、blocked=0；C) Extension pending replay 期間舊 attempt 仍被 gate 阻擋（targeted 1/1 green）。目前 production 已完成 status key、`forge-stage` UI-only 與兩個 settled producer；Extension full 144/144、A2／B／C targeted 綠。PI full 因第一次 `needs_discovery` transport 缺口仍紅，修正後重跑 fallback targeted、PI full、Extension full、type/check、whole suite。
+
+### 相關文件與第一步
+
+相關文件：[`CONTEXT.md`](../CONTEXT.md)、[`docs/PLAN-A.md`](PLAN-A.md)、[`docs/adr/ADR-0022-forge-stage-ui-only-settled-decision-replay.md`](adr/ADR-0022-forge-stage-ui-only-settled-decision-replay.md)、[`docs/tickets/deep-decision-replay-ui-only-stage-20260830.md`](tickets/deep-decision-replay-ui-only-stage-20260830.md)、[`agent-state/deep-decision-replay-ui-only-stage-20260830.md`](../agent-state/deep-decision-replay-ui-only-stage-20260830.md)。下一步先完成有效 A2／B RED，再實作兩個 settled producer；typecheck 需確認本地 `setStatus` 型別。不得改 Grill WAIT_USER、needs_discovery、READY、validator、evidence、state machine 或 `pi-main`。
+## 2026-08-30 Intent 到 Context 流程圖同步
+
+## 2026-08-30 Decision replay Discovery transport 覆核
+
+先前記載的 Discovery direct follow-up 方向已被真 PI test-only spy 否證：`sendUserMessage(..., { deliverAs: "followUp" })` 確實被呼叫，但沒有 `queue_update`，provider `callCount=4`、`pendingResponses=4`；whole-file targeted 13 pass/1 fail、blocked=0。進一步的 test-only Promise trace 已確認根因：`agent_end → agent_settled → sendUserMessage` 的 Promise 已 resolve，但 `pi.on("input")` 在沒有 marker且 stage=`GRILL` 時回 `handled`（已有 workflow），因此 invocation 被吃掉；只有精確等於 `pendingReplayInvocation` 時才回 `continue`。下一步是保留既有 `pendingDiscoveryRestart` 與所有 settled guards，Discovery timer 在呼叫 `sendUserMessage` 前先設定 `pendingReplayInvocation = pendingDiscovery.invocation`；後續沿用既有 `message_start` full exact match 清除與 tool_call fail-closed gate，sendUserMessage 失敗時保留 marker。Deep 邏輯不改，其他輸入仍按原契約；文件與實作狀態維持 `implementation-in-progress`。
+
+唯一視覺交付 `forge-intent-context-flow.html` 已依 current runtime 更新，九列 baseline 不變。同步內容包含 RECEIVE shortcut／`missingAssets`／fail-closed、WAIT_USER `displayOnly`／`transcript`、Deep stale identity 與 `needs_decision`／`needs_discovery` 回流、Evidence `human_premise` 與 Finding-only `推論：`，以及 CONTEXT_BUILD production wiring 的 partial 標示。無 runtime 或架構決策變更，不新增 ADR；`forge-runtime-flow.html`、`pi-main` 均未修改，且 `forge-runtime-flow.html` 本輪開始前已 dirty。
+
+靜態 parser、純 HTML/CSS、semantic classes、九 state 通過；獨立內容 review P0=0、P1=0。沒有可用 browser instance，1280×900／390×844、console、overflow 與截斷實測未完成。未解風險為 CONTEXT_BUILD 尚未接上 production、空 Evidence Package 仍可能通過 validator，以及匿名 mixed-batch 細節未完全證實。
+## 本輪交接完成（2026-08-30）
+
+本 ticket 已完成。`publishState` 現在只更新 `ui.setStatus("forge-runtime", text)`；Deep decision answer、Retrieval completed，以及第一次 `needs_discovery` restart 都在 `agent_settled` 後以既有 replay 邊界送出正常 user message。Discovery restart 另保留獨立 settled marker，settled 時會重新驗證 workflow、GRILL、round、tool 與 `sendUserMessage`。`message_start` full exact 清除及 `tool_call` fail-closed gate 保持不變。
+
+驗證：fallback 1/1；PI full 14/14（約 10.69 秒，無 blocked/pending/dispose async）；Extension 144/144（約 3.04 秒）；npm test 252/252（約 30.2 秒）；final review 無阻擋 finding。整體 `npm run check` 仍受既有 pi-main `syntax-highlight.ts` 的 highlight.js TS7016 共 21 筆阻擋，本 ticket 未修改上游。
+
+未解風險僅有：PI interactive typecheck 的既有上游阻塞，以及尚未做 `sendUserMessage` 故障注入；兩者皆非本 ticket 必要條件。下一步可選修復上游依賴型別，不屬本 ticket 範圍。

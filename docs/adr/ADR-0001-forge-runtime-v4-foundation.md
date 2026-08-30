@@ -44,6 +44,11 @@ Accepted
 - 澄清：mandatory stage routing 不能只停留在 state mutation；像 `WAIT_USER` confirm 這類邊界，一旦確認完成，runtime 必須在同一 workflow 內實際續接下一個 mandatory stage，而不只是把 stage 名稱改掉。
 - 風險：若 extension hook 不足以表達 `WAIT_USER` 或 tool gating，需停下來重新確認是否接受薄適配層，不能默默侵入 `pi-main/`。
 
+## 2026-08-30 衍生視圖同步註記
+
+- 本輪只同步 `forge-intent-context-flow.html` 衍生視圖；九列 state 與人類決策邊界不變，`CONTEXT_BUILD` production wiring 仍為 partial。
+- 沒有新架構決策，本 ADR 維持 `Accepted`。
+
 ## Not Building
 
 - 不在本 ADR 內決定完整外部知識後端。

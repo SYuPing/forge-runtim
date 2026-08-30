@@ -21,7 +21,6 @@ import {
 import { runLightDiscovery, type LightDiscoveryMatch, type LightDiscoveryResult } from "../src/discovery/light-discovery.ts";
 import { understandIntent } from "../src/intent/intent-understanding.ts";
 import type { IntentModelContext } from "../src/intent/intent-types.ts";
-import { buildEvidenceSummaryText } from "../src/ui/evidence-summary-widget.ts";
 import {
 			createForgeSessionState,
 			type DeepAttemptIdentity,
@@ -44,8 +43,6 @@ import {
 	type EvidenceLimitation,
 } from "../src/evidence/evidence-engine.ts";
 import type { ForgeUiState } from "../src/ui/ui-state.ts";
-import { buildValidationRepairText } from "../src/ui/validation-repair-widget.ts";
-import { buildWaitUserPanel } from "../src/ui/wait-user-panel.ts";
 import { buildWorkflowStatusText } from "../src/ui/workflow-status-widget.ts";
 
 const DEEP_RESULT_GUIDANCE = [
@@ -84,7 +81,7 @@ interface CommandContext extends IntentModelContext {
 					done: (value: string | undefined) => void,
 				) => Component | Promise<Component>,
 		): Promise<string | undefined>;
-		setStatus?(status: string): void;
+		setStatus?(key: string, text: string | undefined): void;
 	};
 	}
 
@@ -143,6 +140,12 @@ interface PendingSettledDeepInvocation {
 	activeWorkflow: ActiveWorkflowContext;
 	invocation: string;
 	identity: DeepAttemptIdentity;
+}
+
+interface PendingSettledDiscoveryInvocation {
+	activeWorkflow: ActiveWorkflowContext;
+	invocation: string;
+	sourceRoundId: string;
 }
 
 interface AssistantMessageEvent {
@@ -239,6 +242,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let pendingReplayInvocation: string | undefined;
 	let pendingSettledDeepInvocation: PendingSettledDeepInvocation | undefined;
 	let pendingSettledDeepInvocationTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingSettledDiscoveryInvocation: PendingSettledDiscoveryInvocation | undefined;
+	let pendingSettledDiscoveryInvocationTimer: ReturnType<typeof setTimeout> | undefined;
 		let pendingDiscoveryRestart: PendingDiscoveryRestart | undefined;
 		const fetchedGrillEvidence = new Map<string, EvidenceInput>();
 		const fetchedDeepSupplementalEvidence = new Map<string, EvidenceInput>();
@@ -306,6 +311,11 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			if (pendingSettledDeepInvocationTimer) {
 				clearTimeout(pendingSettledDeepInvocationTimer);
 				pendingSettledDeepInvocationTimer = undefined;
+			}
+			pendingSettledDiscoveryInvocation = undefined;
+			if (pendingSettledDiscoveryInvocationTimer) {
+				clearTimeout(pendingSettledDiscoveryInvocationTimer);
+				pendingSettledDiscoveryInvocationTimer = undefined;
 			}
 			pendingDiscoveryRestart = undefined;
 			activeWaitUserUiLeaseKey = undefined;
@@ -494,14 +504,20 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				return true;
 			}
 			const deepAnswer = prepareDeepKnowledgeAnswer(answer);
-			if (deepAnswer.kind === "handled") {
-				await publishState(pi, ctx, deepAnswer.state);
-				if (deepAnswer.invocation) {
-					pendingReplayInvocation = deepAnswer.invocation;
-					await pi.sendUserMessage?.(deepAnswer.invocation, { deliverAs: "followUp" });
-				}
-				return true;
+	if (deepAnswer.kind === "handled") {
+		await publishState(pi, ctx, deepAnswer.state);
+		if (deepAnswer.invocation) {
+			const nextAttempt = sessionState.currentDeepAttempt();
+			if (activeWorkflow && nextAttempt) {
+				pendingSettledDeepInvocation = {
+					activeWorkflow,
+					invocation: deepAnswer.invocation,
+					identity: nextAttempt,
+				};
 			}
+		}
+		return true;
+	}
 			if (!pi.sendUserMessage) {
 				return false;
 			}
@@ -1196,6 +1212,16 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 
 			activateDeepUnderstandingTools();
 			await publishState(pi, ctx as CommandContext, completion.state);
+			const invocation =
+				`請繼續 Forge Deep ${completion.identity.phase}。attemptId=${completion.identity.attemptId} ` +
+				`sourceRoundId=${completion.identity.sourceRoundId} phase=${completion.identity.phase}`;
+			if (activeWorkflow) {
+				pendingSettledDeepInvocation = {
+					activeWorkflow,
+					invocation,
+					identity: completion.identity,
+				};
+			}
 			const locked = sessionState.getLockedDeepEvidence();
 			const lockedEvidenceIds = locked
 				? [...locked.inherited, ...locked.supplemental].map((evidence) => evidence.evidenceId)
@@ -1537,6 +1563,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		if (event.isError !== false) {
 			return undefined;
 		}
+		if (!pi.sendUserMessage) {
+			return undefined;
+		}
 
 		const current = sessionState.current();
 		let currentRoundId: string | undefined;
@@ -1554,13 +1583,48 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return undefined;
 		}
 
-		const invocation = await restartLightDiscoveryAndGrill(activeWorkflow, ctx ?? {});
-		return {
-			content: [...event.content, { type: "text", text: invocation }],
-		};
+		const workflow = activeWorkflow;
+		const invocation = await restartLightDiscoveryAndGrill(workflow, ctx ?? {});
+		let sourceRoundId: string | undefined;
+		try {
+			sourceRoundId = sessionState.continueGrillRound().roundId;
+		} catch {
+			sourceRoundId = undefined;
+		}
+		if (!activeWorkflow || !sourceRoundId) {
+			return undefined;
+		}
+		pendingSettledDiscoveryInvocation = { activeWorkflow, invocation, sourceRoundId };
+		return undefined;
 	});
 
 	pi.on?.("agent_settled", async () => {
+		const pendingDiscovery = pendingSettledDiscoveryInvocation;
+		if (pendingDiscovery && !pendingSettledDiscoveryInvocationTimer) {
+			pendingSettledDiscoveryInvocation = undefined;
+			pendingSettledDiscoveryInvocationTimer = setTimeout(async () => {
+				pendingSettledDiscoveryInvocationTimer = undefined;
+				const current = sessionState.current();
+				let currentRoundId: string | undefined;
+				try {
+					currentRoundId = sessionState.continueGrillRound().roundId;
+				} catch {
+					currentRoundId = undefined;
+				}
+				if (
+					activeWorkflow !== pendingDiscovery.activeWorkflow ||
+					current.stage !== "GRILL" ||
+					currentRoundId !== pendingDiscovery.sourceRoundId ||
+					!hasActiveGrillAttempt() ||
+					!requireGrillToolBoundary({}) ||
+					!pi.sendUserMessage
+				) {
+					return;
+				}
+				pendingReplayInvocation = pendingDiscovery.invocation;
+				await pi.sendUserMessage(pendingDiscovery.invocation);
+			}, 0);
+		}
 		const pending = pendingSettledDeepInvocation;
 		if (!pending || pendingSettledDeepInvocationTimer) {
 			return;
@@ -2293,7 +2357,7 @@ async function continueDeepKnowledge(
 			return { entered: false };
 		}
 			const nextState = sessionState.beginDeepKnowledge(decisionSummary);
-			ctx.ui?.setStatus?.(buildWorkflowStatusText(nextState));
+	ctx.ui?.setStatus?.("forge-runtime", buildWorkflowStatusText(nextState));
 			const deepAttempt = sessionState.currentDeepAttempt();
 			if (!deepAttempt) {
 				throw new Error("Deep Knowledge attempt 未建立");
@@ -2354,21 +2418,11 @@ function parseWaitUserPayload(raw: string): WaitUserPayload {
 }
 
 async function publishState(
-	pi: ForgeExtensionApi,
+	_pi: ForgeExtensionApi,
 	ctx: CommandContext,
 	state: ForgeUiState,
-	options?: { deliverAs?: "displayOnly" },
+	_options?: { deliverAs?: "displayOnly" },
 ): Promise<void> {
 	const status = buildWorkflowStatusText(state);
-	const sections = [
-		buildWaitUserPanel(state),
-		state.stage === "WAIT_USER" ? buildEvidenceSummaryText({ ...state, lastEvidenceIds: [] }) : buildEvidenceSummaryText(state),
-		buildValidationRepairText(state),
-	].filter(
-		(value): value is string => Boolean(value),
-	);
-	const panelText = [status, ...sections].join("\n\n");
-	ctx.ui?.setStatus?.(status);
-	if (options?.deliverAs === "displayOnly") return;
-	await pi.sendMessage?.({ content: panelText, customType: "forge-stage", display: true }, options);
+	ctx.ui?.setStatus?.("forge-runtime", status);
 }

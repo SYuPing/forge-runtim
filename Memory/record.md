@@ -292,3 +292,15 @@ status: complete
 - 重大實作：READY_FOR_DEEP 使用 terminate 與 pending settled invocation，在 `agent_settled` 的下一個 task 送普通 user message，再重驗 identity／stage／tools；pending handoff 關閉 Deep tool gate；WAIT_USER publication await；`message_end` callback 帶 ctx；fallback 無 locked evidence 的 `needs_decision` 將兩個 accumulator keys 視為合法 evidence。
 - 驗證：Evidence 13/13、Session State 22/22、Extension 142/142、PI interactive 12/12、`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1，但 Forge Runtime 自身零錯誤，唯一失敗為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016）。
 - 狀態：ticket 已完成，目前無待做 production 項目，只剩上游 check baseline；未修改 `pi-main`。
+
+## 2026-08-30 Intent 到 Context 流程圖同步
+
+- 目標：依 current runtime 更新唯一衍生視圖 `forge-intent-context-flow.html`，維持九列 baseline 與既有架構邊界。
+- 重大變更：校正 RECEIVE shortcut／`missingAssets`／fail-closed、WAIT_USER `displayOnly`／`transcript`、Deep stale identity 與回流、Evidence `human_premise`／Finding-only `推論：`，並保留 CONTEXT_BUILD partial 與空包風險。
+- 驗證與狀態：靜態 parser、純 HTML/CSS、semantic classes、九 state 通過；獨立內容 review P0=0、P1=0。瀏覽器 instance 不可用，視覺 runtime 驗證未完成。未修改 `forge-runtime-flow.html`、runtime、`pi-main`；無新 ADR 決策。
+## 2026-08-30：Deep decision replay UI-only stage 完成
+
+- 目標：修正 `forge-stage` custom message 造成 provider context/steering 與重複 blocked，並讓 settled replay 在正確事件邊界繼續流程。
+- 重大實作：`publishState` 改為 `ui.setStatus("forge-runtime", text)`；Deep decision 與 Retrieval completion 使用 `pendingSettledDeepInvocation`；第一次 `needs_discovery` 使用獨立 settled marker，settled 後驗證上下文再送正常 user message。保留 exact message-start 清除與 fail-closed tool gate。
+- 驗證：fallback 1/1、PI 14/14、Extension 144/144、npm test 252/252；final review 無阻擋 finding。一般 typecheck 通過；整體 check 只受既有 pi-main highlight.js TS7016 阻擋。
+- 狀態：已完成。細節與可重用教訓見 [Memory/lesson_learn.md](lesson_learn.md)。

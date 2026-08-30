@@ -248,3 +248,18 @@ status: complete
 - **PI 測試必須 drain event loop 的 settled prompt**：只等待同步 assertion 會在 prompt 尚未 settle 時誤判。證據：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`、PI interactive 12/12。
 - **跨 bucket duplicate 懷疑已排除**：曾懷疑不同 bucket 可能產生 duplicate，但 ID prefix 與 `reusedEvidenceIds` invariant 證明正式 API 不可達，因此刪除測試，不增加 speculative guard。證據：`forge-runtime/src/evidence/evidence-engine.ts`、`forge-runtime/tests/evidence/evidence-engine.test.ts`、Session State 22/22。
 - **本輪未發現其他新 bug**；`npm run check` 的唯一失敗是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016），屬既有上游 baseline，不修改 `pi-main`。
+
+## 2026-08-30 流程圖衍生視圖漂移
+
+- **Bug／觀察**：舊文案將 `human_premise` 的最終整合與 WAIT_USER `transcript`／`displayOnly` 路徑描述錯誤；review 另發現 `推論：` 規則一度過寬，已修為 Finding-only。
+- **根因與修正**：衍生視圖未同步 current handler／evidence validator 契約；已只更新 `forge-intent-context-flow.html`，以實際程式碼與既有驗證結果校正，不修改 runtime。證據：`forge-intent-context-flow.html:28,31-32`、`forge-runtime/extensions/forge-runtime.ts:2356-2374`、`forge-runtime/src/evidence/evidence-engine.ts:66-148`、`forge-runtime/src/knowledge/context-builder.ts:11-19`。
+- **教訓**：流程圖不是第二真相來源；每輪要重新核對 transition 與 fragile junction，並把未接 production 的 Context Build、空包缺口與未證實 mixed-batch 細節標成風險，不標成完成。
+## 2026-08-30：本輪 bug 與教訓
+
+1. `forge-stage` custom message 會進 provider context，形成 steering 並造成重複 blocked。證據：`forge-runtime/extensions/forge-runtime.ts` 的 `publishState` 與 PI full/A2/B log；修復為 `ui.setStatus`，由 A1/A2 驗證。
+2. `tool_result` 內容不是 provider transport；在該邊界直接 follow-up 不會可靠 queue。證據：fallback 真 PI 首輪 needs_discovery 後無下一輪 provider call；修復為 settled marker + settled replay，由 fallback 1/1 驗證。
+3. settled discovery 若未設定 `pendingReplayInvocation`，active GRILL input handler 會回 handled 而不再發送。證據：fallback 重現 log；修復為 settled 後先設 marker 再送正常 user message。
+4. 真 PI fixture 必須同時具備 path 與 content 相關性，否則無法觸發預期工具流程。證據：`forge-runtime/tests/extensions/pi-grill-interactive.test.ts` A2 fixture 與測試結果。
+5. 測試命令必須帶正確 tsconfig；`waitForRender` 不是業務事件屏障，需等待實際 tool execution/settled。證據：PI 測試的事件等待修正與 14/14 結果。
+
+以上各項均已連結到本輪實作與測試；未將未驗證假設當作根因。

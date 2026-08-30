@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-29
+updated: 2026-08-30
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: design-approved-ready-for-red
+status: implementation-in-progress
 ---
 
 # Forge Runtime v4 Context
@@ -467,3 +467,35 @@ Ticket 已完成實作、驗證、初次 review fix 與最終雙軸 re-review，
 - 確認後建立新的 Knowledge Understanding identity，只允許 `forge_deep_complete`。Grill／Deep evidence 跨第一次 snapshot switch 累積，依 ID 去重，並在 cancel、switch、new workflow、reset 清除。human premise 含 goal、question、answer、`needsDiscoveryCount`、兩輪 `sourceRoundIds`，且 decision 會引用它。
 - READY_FOR_DEEP 使用 terminate 與 pending settled invocation，在 `agent_settled` 的下一個 task 送普通 user message，再重驗 identity、stage、tools；pending handoff 關閉 Deep tool gate；WAIT_USER publication 會 await；`message_end` callback 有 ctx；fallback 無 locked evidence 的 `needs_decision` 將兩個 accumulator keys 視為合法 evidence。
 - 最終證據：Evidence 13/13；Session State 22/22；Extension 142/142；PI interactive 12/12；`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1，Forge Runtime 自身零錯誤，唯一失敗是未修改的 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016），不修改 `pi-main`。
+
+## 2026-08-30 Decision replay 的 UI-only stage 修正交接
+
+Ticket `deep-decision-replay-ui-only-stage-20260830` 已完成設計核准，狀態為 `implementation-in-progress`；本段記錄目前已落地的最小修正與後續相容性補強。
+
+實測顯示，使用者回答 `needs_decision` 後，`publishState` 將純 UI 的 `forge-stage` 經 `pi.sendMessage` 放入 steer queue，排在新的 attempt identity 前；current run 又未終止，模型因此拿舊 identity 重試，fail-closed gate 連續回傳 `Tool execution was blocked`。同一 stage message 也可能進 provider context，讓模型誤把 `Forge CONTEXT_BUILD [active]` 當成使用者要求。
+
+核准的最小方向是：在唯一 `publishState` 出口讓所有 `forge-stage` 永遠 UI-only，使用 PI 正確契約 `ctx.ui.setStatus("forge-runtime", status)`（固定 key 加 status text），然後 return，不呼叫 `pi.sendMessage`；needs_decision 回答後終止 current run，沿用既有 `agent_settled`、next task 與 ordinary user message 交接，先送新 attempt identity，再開放後續 Deep call；保留 pending marker、matching `message_start` 與所有 fail-closed gate。只移除 `sendMessage` 而不傳入固定 key 與 text 會讓 footer provider 收到 undefined text 並刪除 stage，已列為被證偽的假設。
+
+本 ticket 不改 state machine、evidence、validator、Grill、第一次 `needs_discovery` restart、READY_FOR_DEEP 語意、Context Build、UI 視覺、`pi-main` 或任何既有流程的交接語意。既有決策驗證、stale identity 拒絕、WAIT_USER、cancel/retry/switch 與工具權限必須維持原行為；任何需要第二個 production 檔或 public API 的需求都視為 scope blocker，先停下回報。
+
+TDD 驗收分四個 seam：A1 Extension `observedStatuses` 驗證固定 key `forge-runtime` 與 `CONTEXT_BUILD` status text；A2 真 PI trace 必須真正到達 Context Build，不能只以「沒有 literal」假綠，且沒有 user-role `forge-stage`；B Retrieval accepted／terminate 後 `callCount=5` 且 idle，並驗證 needs_decision 回答後 fresh deep-2 首次成功且 blocked=0；C Extension 在 pending decision replay 期間仍阻擋舊 attempt（targeted 1/1 green）。預估 baseline 為 Extension 142、PI 12、全套 248，新增測試目標約為 Extension 144、PI 14、全套 252，實際以落地結果為準。
+
+Production 已落地 status key、`forge-stage` UI-only，以及兩個 settled producer：Retrieval completed 與 Deep `needs_decision` answer 都設定既有 `pendingSettledDeepInvocation`，等 `agent_settled` 後由既有 identity、active-tool 與 workflow guards 發送；這是 transport 修正，不改 state machine 或流程順序。實測另確認第一次 Deep `needs_discovery` 雖在 `tool_result` transform 完成 Light Discovery→Grill restart，把 invocation 拼進 tool-result content 卻不會產生下一個 provider user turn，真 PI 因而停在 accepted tool result 並留下 pending provider responses。核准的最小相容修正是保留既有 pendingDiscoveryRestart 與消費點，在 `toolCallId`、`toolName`、`isError=false` 及 workflow／identity 邊界全部相符時一次性消費，呼叫既有 `restartLightDiscoveryAndGrill`，改用既有 `pi.sendUserMessage(invocation, { deliverAs: "followUp" })` 排入下一 provider turn；sendUserMessage 缺失或不匹配時 fail-closed，不新增 `tool_execution_end` API、不改 `pi-main`。保留 pending replay matching `message_start` 與 fail-closed tool gate；不改 session-state、Grill WAIT_USER、needs_discovery 次數／人類確認規則、READY、validator、evidence、state machine、`pi-main` 或其他現有流程。
+
+驗收狀態：Extension full 144/144，A2／B／C targeted 均綠；PI full 因上述第一次 `needs_discovery` transport 缺口仍紅，維持 `implementation-in-progress`。相容修正後重跑 fallback targeted、PI full、Extension full、type/check 與 whole suite。
+
+## 2026-08-30 Intent 到 Context 流程圖同步
+
+### Decision replay transport 覆核（2026-08-30）
+
+前述 Discovery direct follow-up 方向已被真 PI test-only spy 否證：handler 雖呼叫 `sendUserMessage(..., { deliverAs: "followUp" })`，但沒有 `queue_update`，provider `callCount=4`、`pendingResponses=4`；whole-file targeted 為 13 pass/1 fail、blocked=0。進一步的 test-only Promise trace 已確認精確根因：`agent_end → agent_settled → sendUserMessage` 的 Promise 已 resolve，但 `pi.on("input")` 在沒有 marker且 stage=`GRILL` 時回 `handled`（已有 workflow），因此 invocation 被吃掉；只有精確等於 `pendingReplayInvocation` 時才回 `continue`。因此 Discovery timer 在所有 settled guards 通過後、呼叫 `sendUserMessage` 前，必須先設定 `pendingReplayInvocation = pendingDiscovery.invocation`；後續沿用既有 `message_start` full exact match 清除與 tool_call fail-closed gate，sendUserMessage 失敗時保留 marker。Deep 邏輯不改，其他輸入仍按原契約；status 維持 `implementation-in-progress`。
+
+- 已依目前 extension handler、session state、state-machine 與既有契約更新衍生視圖 `forge-intent-context-flow.html`；九列 baseline 不變，僅校正流程旁路、等待語意、Deep 回流與證據風險標示。
+- 圖中保留 RECEIVE 的 Intent shortcut／`missingAssets` 與 fail-closed、WAIT_USER 的 `displayOnly`／`transcript` 路徑、Deep stale identity／`needs_decision`／`needs_discovery` 回流，以及 CONTEXT_BUILD production wiring 的 partial 狀態。
+- Evidence Package 已標示 `human_premise` 與 Finding-only `推論：` 規則；空包仍可通過 validator 的缺口只作風險，不改 runtime。未修改 `forge-runtime-flow.html`、`pi-main` 或架構契約，無新 ADR 決策。
+- 靜態 parser、純 HTML/CSS、semantic classes、九 state 與獨立內容 review 通過（P0=0、P1=0）；因沒有可用 browser instance，1280×900／390×844、console、overflow 與截斷尚未實測。
+## 本 ticket 完成狀態（2026-08-30）
+
+本 ticket 已完成並驗證。`publishState` 僅透過 `ui.setStatus("forge-runtime", text)` 更新畫面；Deep decision answer 與 Retrieval completed 會透過 `pendingSettledDeepInvocation` 在 `agent_settled` 後重播。第一次 `needs_discovery` 在 tool result 精準匹配後重啟，並使用獨立 settled discovery marker；`agent_settled` 加上 0ms 重新驗證 workflow、GRILL、round、tool 與送訊息能力後，才設定 `pendingReplayInvocation` 並送出正常 user message。`message_start` 的 full exact 清除與 `tool_call` fail-closed gate 保留。
+
+本輪未修改 `pi-main`、`session-state`、state machine、evidence/validator，也未改變 `needs_discovery` 次數、人類確認、其他 `tool_result` 或 `WAIT_USER` 語意。驗證詳見 [docs/handoff.md](docs/handoff.md) 與 [Memory/record.md](Memory/record.md)；已知限制詳見 [Memory/lesson_learn.md](Memory/lesson_learn.md)。
