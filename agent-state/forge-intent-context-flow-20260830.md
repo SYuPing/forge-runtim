@@ -83,8 +83,44 @@ status: completed-with-caveats
 
 - CONTEXT_BUILD production wiring 尚未接上。
 - Evidence Package 全空目前不被 validator 拒絕。
-- 匿名 handler mixed-batch 細節未完全展開，未在圖上標成完成。
+- mixed batch 已在目前 HTML 明確記錄 call-ID、all-settled barrier 與單次 follow-up。
 
 ### 下一步
 
 - 另案設計、授權並實作 Context Build 與 Evidence 充足性修復；完成真實 PI 原始情境人工驗收。
+
+## 本輪 Markdown 同步更正
+
+### 已完成項目
+
+- 已依目前 HTML 更新 `Memory/record.md` 與 `Memory/lesson_learn.md`。
+- 已確認 WAIT_USER、Deep mixed batch／needs_decision 與 CONTEXT_BUILD 的現行描述一致。
+- 已確認本輪修改範圍只有 Markdown。
+
+### 重要決策
+
+- WAIT_USER 的 `publishState` 只更新 `ctx.ui.setStatus()`，不送 `pi.sendMessage`。
+- Deep mixed batch 以 call-ID 聚合，等待 all settled 後只送一次 follow-up；Deep `needs_decision` 回原 phase 前需 settled replay，stale identity 停止推進。
+- `CONTEXT_BUILD` 維持 partial 狀態，production builder 尚未接入；空 Evidence Package 風險維持明確標示。
+
+### 修改檔案
+
+- `Memory/record.md`
+- `Memory/lesson_learn.md`
+- `agent-state/forge-intent-context-flow-20260830.md`
+
+### 測試結果
+
+- 未執行 runtime、HTML 或瀏覽器測試；本輪只做 Markdown 維護。
+- 內容核對證據：`forge-intent-context-flow.html:28-32`。
+- 未修改 `forge-intent-context-flow.html`、`forge-runtime/` 或 `pi-main/`。
+
+### 未解問題
+
+- 空 Evidence Package 目前仍可能通過 validator 並抵達 `CONTEXT_BUILD`，見 `forge-intent-context-flow.html:31`。
+- `CONTEXT_BUILD` production builder 尚未接入，見 `forge-intent-context-flow.html:32`。
+
+### 下一步
+
+- 另案設計、授權並實作 Evidence 充足性與 Context Build production wiring。
+- 再次維護流程圖時，先核對目前 HTML 與可執行 handler，再同步本狀態檔及兩份 Memory。

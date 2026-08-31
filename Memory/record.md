@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-30
+updated: 2026-08-31
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
 status: complete
 ---
@@ -304,3 +304,34 @@ status: complete
 - 重大實作：`publishState` 改為 `ui.setStatus("forge-runtime", text)`；Deep decision 與 Retrieval completion 使用 `pendingSettledDeepInvocation`；第一次 `needs_discovery` 使用獨立 settled marker，settled 後驗證上下文再送正常 user message。保留 exact message-start 清除與 fail-closed tool gate。
 - 驗證：fallback 1/1、PI 14/14、Extension 144/144、npm test 252/252；final review 無阻擋 finding。一般 typecheck 通過；整體 check 只受既有 pi-main highlight.js TS7016 阻擋。
 - 狀態：已完成。細節與可重用教訓見 [Memory/lesson_learn.md](lesson_learn.md)。
+
+## 2026-08-30 流程圖維護紀錄
+
+- 本輪目標：依目前 `forge-intent-context-flow.html` 更新 Markdown 維護紀錄，固定 WAIT_USER、Deep 併發／重播與 CONTEXT_BUILD 的現況。
+- 重大變更：WAIT_USER 的 `publishState` 只更新 `ctx.ui.setStatus()`；mixed batch 已記錄 call-ID 聚合、all-settled barrier 與單次 follow-up；Deep `needs_decision` 已記錄 settled replay 與 stale identity；`CONTEXT_BUILD` 明確標示 production builder 尚未接入。
+- 驗證：核對 `forge-intent-context-flow.html:28-32`；本輪只修改 `Memory/record.md`、`Memory/lesson_learn.md` 與 `agent-state/forge-intent-context-flow-20260830.md`，未修改 HTML、`forge-runtime/` 或 `pi-main/`。
+- 狀態：Markdown 維護完成；空 Evidence Package 風險與 Context Build production wiring 仍是未解邊界，留待另案處理。
+
+## 2026-08-30 KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 交付契約設計確認
+
+- 使用者確認以單一 Forge-owned immutable package 原子交付 `decisions`、`findings`、`limitations`、`knowledgeSummary` 與 runtime 衍生的唯讀 evidence IDs；structured fields 是權威，summary 不得新增事實。完整決策見 [`ADR-0023`](../docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md)。
+- 狀態：設計已確認、尚未實作；自動啟動／排程 Context Build provider 明確保留為獨立 continuation gap。
+
+## 2026-08-31 knowledgeSummary 非權威邊界設計確認
+
+- 目標：固定 `knowledgeSummary` 僅供閱讀，並確保 Context Builder 正式輸出只依結構欄位與 runtime-derived evidence IDs。
+- 決策：摘要矛盾時仍接受 package；`decisions`、`findings`、`limitations` 為權威；不做語意 parser、阻擋重試、runtime 重寫、第二模型／DTO／依賴、`pi-main` 或自動續跑 Context Build。
+- 狀態：設計確認、尚未實作；下一步先做 schema description RED。詳見 [`ADR-0024`](../docs/adr/ADR-0024-knowledge-summary-authority-boundary.md)。
+## 2026-08-30 KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 單一交付物完成
+
+- 目標：讓 KNOWLEDGE_UNDERSTANDING 以單一 immutable EvidencePackage 交付 `decisions`、`findings`、`limitations`、`knowledgeSummary` 與 runtime-derived `evidenceIds` 給 Context Build。
+- 重大實作：summary trim／非空／4000 Unicode code points；EvidencePackage 與巢狀 metadata 深層 immutable；session validate/save-before-transition 並在 transition 失敗 rollback；getter 與 reset／cancel／new snapshot cleanup；Context Builder 保留同一 package identity。
+- 驗證：session 27/27、evidence 18/18、全套 265/265、`npx tsc --noEmit -p tsconfig.json` exit 0；Standards／Spec review PASS。`npm run check` 僅因未修改 pi-main 的 `highlight.js` declaration（TS7016）失敗。
+- 範圍：未接自動續跑或排程 Context Build provider；需另案設計與確認。未修改 `pi-main`，其他既有流程不變。
+
+## 2026-08-31 knowledgeSummary 非權威邊界完成
+
+- 目標：固定 `knowledgeSummary` 僅供人類閱讀，確保 Context Builder 正式輸出只依 `decisions`、`findings`、`limitations` 與 runtime-derived `evidenceIds`。
+- 重大實作：補上 schema description 的非權威契約，並維持摘要與結構欄位矛盾時仍接受 package；未新增語意 parser、第二 DTO、依賴、`pi-main` 修改或自動續跑。
+- 驗證：`forge-runtime/extensions/forge-runtime.ts:1256`、`forge-runtime/src/evidence/evidence-engine.ts:33`；兩個指定回歸測試（`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/evidence/evidence-engine.test.ts`）；`npm test` 266/266；Standards／Spec review PASS。`npm run check` 仍受既有 `pi-main` `highlight.js` declaration blocker 影響。
+- 狀態：本 ticket 已完成實作、驗證與 review；自動／排程 Context Build 仍是另案範圍。

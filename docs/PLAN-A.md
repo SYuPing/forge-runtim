@@ -2071,3 +2071,106 @@ npm test（180 秒有界）
 本計畫已完成。實作維持最小範圍：UI status 與 agent transport 分離；Deep decision / Retrieval completion 於 settled 後重播；第一次 discovery restart 使用獨立 settled marker，並在 settled 後重新驗證上下文再送正常 user message。既有 exact message-start 清除與 fail-closed tool gate 保留。
 
 驗證已涵蓋 A1、A2、B、C、fallback、Extension helper；fallback 1/1、PI full 14/14、Extension 144/144、npm test 252/252。未改動 pi-main、狀態機、session-state、evidence/validator 或既有 WAIT_USER 語意。整體 typecheck 僅受既有 pi-main highlight.js 型別宣告缺失阻擋。
+
+## Plan A：KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 單一交付物（2026-08-30）
+
+### 狀態
+
+`implemented-verified-reviewed`。本段定義並實作完整資料契約與 consumer seam；不宣稱自動啟動 Context Build provider 已接上。
+
+### Building
+
+- 以單一 Forge-owned immutable `KnowledgeUnderstandingPackage` 延伸既有 Evidence Package；`decisions`、`findings`、`limitations` 為權威，新增必填 `knowledgeSummary`。
+- summary trim 後非空、最多 4000 Unicode code points，不得增加結構化資料沒有的新事實。
+- evidence IDs 由 runtime 從 validated evidence records 衍生為唯讀 `evidenceIds`，模型不得另傳第二份 IDs。
+- 轉入 `CONTEXT_BUILD` 前完成建立、驗證、原子保存；失敗停留原 phase，不部分保存。
+- Session state 只提供一個 Forge-owned getter；Context Build 不讀 tool-result details、UI prose 或 transport marker；new workflow/reset/switch/cancel/full cleanup 清除 package。
+
+### Not Building
+
+不修改 `pi-main/`、不新增依賴、不建立重複 DTO／第二真相來源、不放寬引用驗證或 blocking limitation fail-closed。自動啟動／排程 Context Build provider 是後續 continuation scope。
+
+### Files
+
+| 類別 | 檔案 | 預計變動 |
+| --- | --- | --- |
+| Production | `forge-runtime/src/evidence/evidence-engine.ts` | package／summary 驗證與衍生 IDs |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | completion schema／handler 與原子 handoff |
+| Production | `forge-runtime/src/runtime/session-state.ts` | 保存、單一 getter、清理與 transition guard |
+| Production | `forge-runtime/src/knowledge/context-builder.ts` | 消費單一 package 的 seam |
+| Tests | `evidence-engine.test.ts`、`discovery-evidence.test.ts`、`forge-runtime-extension.test.ts` | schema、驗證、交付與清理回歸；cleanup 位置待 CodeGraph 窄查 |
+
+### TDD Execution Order
+
+1. RED：summary 必填／trim／4000 code points、derived IDs、blocking limitation 與引用驗證。
+2. GREEN：重用既有 Evidence Package，完成 summary validation。
+3. RED→GREEN：extension schema／handler；atomic session save + transition guard。
+4. RED→GREEN：Context Build 取得 `decisions`、`findings`、`limitations`、`knowledgeSummary`、evidence IDs；cleanup isolation。
+5. 由獨立角色驗證與 review；不得宣稱尚未執行的測試已通過。
+
+### 驗收與風險
+
+驗收必須證明五項資料完整交付且不可部分保存，舊 workflow package 不會出現在新 workflow。最脆弱假設是 provider 自動啟動且會讀取新 getter；本 Plan 不把這個後續缺口寫成已修復。
+## Plan A 收尾：KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 交付物（2026-08-30）
+
+狀態：`implemented-verified-reviewed`。已完成單一 immutable EvidencePackage handoff：`decisions`、`findings`、`limitations`、`knowledgeSummary` 與 runtime-derived `evidenceIds`；summary trim 後非空且限制 4000 Unicode code points，package 與巢狀 metadata 深層 immutable。Session 在 transition 前 validate/save，transition 失敗 rollback；getter、reset／cancel／new snapshot cleanup 與 Context Builder 同一 package identity 均已完成。
+
+驗證：session 27/27、evidence 18/18、全套 265/265、`npx tsc --noEmit -p tsconfig.json` exit 0；Standards／Spec 獨立 review 均 PASS。`npm run check` exit 1 僅因未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺少 `highlight.js` declaration（TS7016）。
+
+本 ticket 明確不接自動續跑或排程 Context Build provider；該 continuation 需另案設計與使用者確認。未改變其他既有流程。
+
+## Plan A：knowledgeSummary 非權威邊界（2026-08-31）
+
+### 狀態
+
+`implemented-verified-reviewed`。使用者已確認摘要矛盾時仍接受 package；實作、驗證與雙軸 review 均完成。無 Plan B，因本案沒有 UI。
+
+### Building
+
+- 在 `forge_deep_complete` schema 與 `EvidencePackage` 契約明確標示：`knowledgeSummary` 只能重述正式欄位，不得新增主張；矛盾時以 `decisions`、`findings`、`limitations` 為準。
+- Context Builder 維持使用同一 package；正式 `items` 不得由摘要內容決定。
+- 補兩個回歸測試：schema description 明確標示非權威用途；矛盾／新增主張摘要不改變正式 Context Builder items，且原摘要仍保留供閱讀。
+
+### Not Building
+
+不做自然語言語意 parser、矛盾阻擋或重試、runtime 重寫摘要、第二模型／DTO／依賴、自動續跑 Context Build、`pi-main` 修改或其他流程變更。
+
+### Approach
+
+沿用既有單一 immutable EvidencePackage 與 runtime-derived evidence IDs。先由測試代理建立 schema description RED，再加入最小 schema／型別說明；接著以固定結構欄位與兩個不同摘要建構 Context Builder，證明正式輸出相同。
+
+### Files
+
+| 類別 | 檔案 | 內容 |
+| --- | --- | --- |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | completion schema 的摘要邊界說明 |
+| Production | `forge-runtime/src/evidence/evidence-engine.ts` | EvidencePackage 非權威摘要契約註解 |
+| Tests | `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | schema description 回歸 |
+| Tests | `forge-runtime/tests/knowledge/discovery-evidence.test.ts` | 摘要矛盾不影響正式 items 回歸 |
+| Documents | `CONTEXT.md`、ADR、ticket、agent-state、Memory、handoff | 記錄決策、執行與狀態 |
+
+### Tests
+
+基線為 265；新增兩個測試，預估全套 267。第一個測試必須先 RED（目前 schema description 尚缺），第二個固定正式欄位相同但摘要含新增主張／矛盾時，Context Builder items 必須相同。
+
+### Execution Order
+
+1. 新 session 先讀 `docs/handoff.md`、`CONTEXT.md`、ADR-0024、ticket、agent-state 與 Memory，展示 context 摘要並等待使用者確認。
+2. 測試代理先新增 schema description 測試並執行 RED；主程式補最小 schema／型別契約。
+3. 測試代理新增 Context Builder 正式輸出不受摘要影響的回歸，執行 targeted GREEN。
+4. 執行相關測試、完整 suite 與 TypeScript 檢查；再做 Standards／Spec review。
+5. 驗證後更新全部 durable 文件；若新增自動 Context Build 需求，另案停止並重新設計。
+
+### Verification
+
+驗收須證明：矛盾摘要仍可接受；正式欄位與 evidence IDs 不變；Context Builder items 對不同摘要完全相同；摘要原文仍可讀取；既有流程、fail-closed、`pi-main` 與自動續跑邊界不變。不得把「摘要內容正確」宣稱為可由程式完全驗證。
+
+### 最脆弱假設
+
+最脆弱假設是所有下游程式都遵守「結構欄位優先」，不直接用摘要控制流程。schema 說明與回歸測試能固定目前邊界，但無法證明未來新 caller 不會誤用自然語言摘要。
+
+### 收尾驗證（2026-08-31）
+
+schema description 與 `EvidencePackage` JSDoc 已明定摘要僅供人類閱讀、非權威、不得新增主張或控制流程。Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` 的矛盾摘要證明 items 不受影響且摘要保留。
+
+RED 145/1 後 GREEN 146/0；單檔 Context 測試 4/0；完整 `npm test` 266/266；Standards 與 Spec review PASS。`npm run check` 唯一既有阻塞為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 的 `highlight.js` TS7016（21 個），與本輪無關；未修改 `pi-main`。自動排程 Context Build 與空 Evidence Package validation 仍 out of scope。狀態：`implemented-verified-reviewed`。

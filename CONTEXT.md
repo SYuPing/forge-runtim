@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-30
+updated: 2026-08-31
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: implementation-in-progress
+status: implemented-verified-reviewed
 ---
 
 # Forge Runtime v4 Context
@@ -484,6 +484,13 @@ Production 已落地 status key、`forge-stage` UI-only，以及兩個 settled p
 
 驗收狀態：Extension full 144/144，A2／B／C targeted 均綠；PI full 因上述第一次 `needs_discovery` transport 缺口仍紅，維持 `implementation-in-progress`。相容修正後重跑 fallback targeted、PI full、Extension full、type/check 與 whole suite。
 
+## 2026-08-30 KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 交付契約設計確認
+
+- 使用者已確認：`KNOWLEDGE_UNDERSTANDING` 完成時，必須原子化交付給 `CONTEXT_BUILD` 單一 Forge-owned immutable `KnowledgeUnderstandingPackage`，包含 `decisions`、`findings`、`limitations`、必填 `knowledgeSummary` 與 runtime 從 validated evidence records 衍生的唯讀 `evidenceIds`。
+- structured fields 是權威資料；summary 只做可讀綜合，不得引入新事實。summary trim 後非空，沿用 4000 Unicode code points 限制；既有引用驗證與 blocking limitation fail-closed 不變。
+- package 建立、驗證、保存必須先於 stage transition；失敗停留原 phase，不得部分保存。Session state 只提供一個 Forge-owned getter；workflow reset／cleanup 清除舊 package。
+- 不修改 `pi-main/`、不新增依賴、不建立重複 DTO／第二真相來源。Context Build provider 的自動啟動／排程是獨立 continuation gap，不宣稱由本設計修復。狀態已更新為 `implemented-verified-reviewed`，詳見 [`ADR-0023`](docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md)。
+
 ## 2026-08-30 Intent 到 Context 流程圖同步
 
 ### Decision replay transport 覆核（2026-08-30）
@@ -499,3 +506,24 @@ Production 已落地 status key、`forge-stage` UI-only，以及兩個 settled p
 本 ticket 已完成並驗證。`publishState` 僅透過 `ui.setStatus("forge-runtime", text)` 更新畫面；Deep decision answer 與 Retrieval completed 會透過 `pendingSettledDeepInvocation` 在 `agent_settled` 後重播。第一次 `needs_discovery` 在 tool result 精準匹配後重啟，並使用獨立 settled discovery marker；`agent_settled` 加上 0ms 重新驗證 workflow、GRILL、round、tool 與送訊息能力後，才設定 `pendingReplayInvocation` 並送出正常 user message。`message_start` 的 full exact 清除與 `tool_call` fail-closed gate 保留。
 
 本輪未修改 `pi-main`、`session-state`、state machine、evidence/validator，也未改變 `needs_discovery` 次數、人類確認、其他 `tool_result` 或 `WAIT_USER` 語意。驗證詳見 [docs/handoff.md](docs/handoff.md) 與 [Memory/record.md](Memory/record.md)；已知限制詳見 [Memory/lesson_learn.md](Memory/lesson_learn.md)。
+## 2026-08-30 KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 交付契約完成
+
+- 本 ticket 已實作並驗證。完成單一 immutable EvidencePackage handoff，保留 `decisions`、`findings`、`limitations`、`knowledgeSummary` 與 runtime-derived `evidenceIds`；summary trim／非空／4000 Unicode code points 與深層 metadata immutable 已固定。
+- Session 完成 validate/save-before-transition，transition 失敗 rollback；提供單一 getter，並在 reset、cancel、new snapshot 清除 package。Context Builder 保留同一 package，不讀 UI prose 或 transport marker。
+- 驗證：session 27/27、evidence 18/18、全套 265/265、`npx tsc --noEmit -p tsconfig.json` exit 0；Standards／Spec review PASS。`npm run check` 僅受未修改 `pi-main` 的 `highlight.js` declaration TS7016 阻擋。
+- 未接自動續跑 Context Build；provider continuation／排程屬本 ticket 非範圍，需另案設計與確認。其他既有流程未改變。
+
+## 2026-08-31 knowledgeSummary 非權威邊界設計確認
+
+- 使用者確認：摘要與結構欄位矛盾時仍接受 EvidencePackage；`decisions`、`findings`、`limitations` 是正式事實，`knowledgeSummary` 僅供閱讀。
+- Context Builder 的正式輸入與輸出只能依結構欄位及 runtime-derived evidence IDs，不得依摘要文字做流程判斷或產生新事實。
+- 本案只補 schema／型別契約與兩個回歸測試；不做語意 parser、阻擋重試、runtime 重寫、第二模型／DTO／依賴，也不接自動續跑 Context Build。
+- 狀態：`design-confirmed-not-implemented`；下一步先由測試建立 schema description 的 RED，再做最小 implementation。詳見 [`ADR-0024`](docs/adr/ADR-0024-knowledge-summary-authority-boundary.md)。
+
+## 2026-08-31 knowledgeSummary 非權威邊界完成驗證
+
+Ticket `knowledge-summary-authority-boundary-20260831` 已完成實作、驗證與 Standards／Spec review。`forge_deep_complete` schema description 與 `EvidencePackage` JSDoc 明定 `knowledgeSummary` 僅供人類閱讀、非權威、不得新增主張或控制流程；正式資料仍只來自 `decisions`、`findings`、`limitations` 與 runtime-derived `evidenceIds`。
+
+Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` 的矛盾摘要證明正式 `items` 不受摘要影響，且摘要原文仍保留。TDD RED 為 145/1，修正後 GREEN 為 146/0；單檔 Context 測試 4/0；完整 `npm test` 266/266；Standards 與 Spec review PASS。
+
+`npm run check` 唯一既有阻塞是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 的 `highlight.js` TS7016（21 個），與本輪無關；本輪未修改 `pi-main`。自動排程 Context Build 與空 Evidence Package validation 仍 out of scope。狀態：`implemented-verified-reviewed`。

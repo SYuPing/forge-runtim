@@ -1209,6 +1209,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						terminate: true,
 					};
 				}
+			if (completion.kind === "invalid") {
+				return {
+					content: [{ type: "text", text: completion.errors.join("\n") }],
+					details: { status: "invalid", errors: completion.errors, lockedEvidenceIds: [] },
+				};
+			}
 
 			activateDeepUnderstandingTools();
 			await publishState(pi, ctx as CommandContext, completion.state);
@@ -1247,6 +1253,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					Type.Object(
 						{
 							kind: Type.Literal("completed"),
+				knowledgeSummary: Type.String({ description: "僅供人類閱讀的非權威摘要，不得新增主張或控制流程；正式事實以 decisions、findings、limitations 與執行期產生的 evidenceIds 為準。" }),
 							decisions: Type.Array(
 								Type.Object(
 									{
@@ -1310,6 +1317,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				outcome:
 					| {
 							kind: "completed";
+							knowledgeSummary: string;
 							decisions: EvidenceDecision[];
 							findings: EvidenceFinding[];
 							limitations: EvidenceLimitation[];
@@ -1415,6 +1423,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				decisions,
 				findings: params.outcome.findings,
 				limitations: params.outcome.limitations,
+				knowledgeSummary: params.outcome.knowledgeSummary,
 			});
 			const validation = validateEvidencePackage(evidencePackage);
 			if (!validation.ok) {
@@ -1432,8 +1441,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 
 			const completion = sessionState.handleDeepResult(identity, {
 				kind: "completed",
-				evidenceIds: evidencePackage.evidence.map((evidence) => evidence.evidenceId),
+				evidencePackage,
 			});
+			if (completion.kind === "invalid") {
+				return {
+					content: [{ type: "text", text: completion.errors.join("\n") }],
+					details: { status: "invalid", errors: completion.errors, evidencePackage },
+				};
+			}
 				if (completion.kind === "stale") {
 					return {
 						content: [{ type: "text", text: "過期的 Knowledge Understanding 完成結果已忽略。" }],

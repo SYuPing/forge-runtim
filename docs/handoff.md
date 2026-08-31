@@ -1,10 +1,10 @@
 ---
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
-scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829、deep-decision-replay-ui-only-stage-20260830
-updated: 2026-08-30
-source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、agent-state/wait-user-ui-only-state-publication-20260829.md、docs/tickets/wait-user-ui-only-state-publication-20260829.md、scoped validation logs
-status: implementation-in-progress
+scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829、deep-decision-replay-ui-only-stage-20260830、knowledge-understanding-context-build-deliverable-20260830、knowledge-summary-authority-boundary-20260831
+updated: 2026-08-31
+source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、agent-state/knowledge-summary-authority-boundary-20260831.md、scoped validation logs
+status: implemented-verified-reviewed
 ---
 
 # Intent route-only LLM 交接
@@ -477,3 +477,34 @@ TDD vertical slices：A1) Extension `observedStatuses` 驗證固定 key `forge-r
 驗證：fallback 1/1；PI full 14/14（約 10.69 秒，無 blocked/pending/dispose async）；Extension 144/144（約 3.04 秒）；npm test 252/252（約 30.2 秒）；final review 無阻擋 finding。整體 `npm run check` 仍受既有 pi-main `syntax-highlight.ts` 的 highlight.js TS7016 共 21 筆阻擋，本 ticket 未修改上游。
 
 未解風險僅有：PI interactive typecheck 的既有上游阻塞，以及尚未做 `sendUserMessage` 故障注入；兩者皆非本 ticket 必要條件。下一步可選修復上游依賴型別，不屬本 ticket 範圍。
+
+## KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 交付契約交接（2026-08-30）
+
+Ticket `knowledge-understanding-context-build-deliverable-20260830` 已完成實作與驗證；狀態為 `implemented-verified-reviewed`。新 session 讀取 [`CONTEXT.md`](../CONTEXT.md)、[`docs/PLAN-A.md`](PLAN-A.md)、[`ADR-0023`](adr/ADR-0023-knowledge-understanding-context-build-deliverable.md)、ticket、agent-state 與 Memory 可接續後續工作。
+
+`KNOWLEDGE_UNDERSTANDING` 完成時，必須原子化交付單一 Forge-owned immutable package 給 Context Build，包含 `decisions`、`findings`、`limitations`、trim 後非空且最多 4000 Unicode code points 的 `knowledgeSummary`，以及 runtime 從 validated evidence records 衍生的唯讀 `evidenceIds`。structured fields 是權威，summary 不得新增事實；blocking limitation 與引用驗證維持 fail-closed。
+
+Package 必須在 stage transition 前建立、驗證、保存；失敗停留原 phase，不部分保存。Session state 只有一個 Forge-owned getter；Context Build 不讀 tool-result details、UI prose 或 transport marker。new workflow/reset/switch/cancel/full cleanup 必須清除舊 package。
+
+最小 production scope：`forge-runtime/src/evidence/evidence-engine.ts`、`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/src/knowledge/context-builder.ts`。測試候選：`evidence-engine.test.ts`、`discovery-evidence.test.ts`、`forge-runtime-extension.test.ts`；cleanup 測試位置待 CodeGraph 窄查。不得修改 `pi-main/`、新增依賴或建立重複 DTO。自動啟動／排程 Context Build provider 是獨立 continuation gap，若要納入須另案設計。
+
+## 2026-08-31 knowledgeSummary 非權威邊界設計交接
+
+Ticket `knowledge-summary-authority-boundary-20260831` 已由使用者確認 Plan A，狀態為 `design-confirmed-not-implemented`。摘要與結構欄位矛盾時仍接受 EvidencePackage；`decisions`、`findings`、`limitations` 是正式事實，`knowledgeSummary` 僅供閱讀。Context Builder 正式輸出不得受摘要影響。
+
+新 session 必須先讀本 handoff、`CONTEXT.md`、[`ADR-0024`](adr/ADR-0024-knowledge-summary-authority-boundary.md)、ticket、agent-state 與 Memory，向使用者展示 context 摘要並等待確認；確認後才使用 `execute-designed-plan` 開始實作。第一步由測試建立 schema description RED，再做最小 production 修正；本案不接自動續跑 Context Build。
+## KNOWLEDGE_UNDERSTANDING→CONTEXT_BUILD 交付契約完成（2026-08-30）
+
+Ticket `knowledge-understanding-context-build-deliverable-20260830` 已完成，狀態為 `implemented-verified-reviewed`。`KNOWLEDGE_UNDERSTANDING` 會交付單一 Forge-owned immutable EvidencePackage，包含 `decisions`、`findings`、`limitations`、`knowledgeSummary` 與 runtime-derived `evidenceIds`；summary trim 後非空且最多 4000 Unicode code points，巢狀 metadata 也會深層複製／凍結。
+
+Session 在進入 `CONTEXT_BUILD` 前完成 validate/save，transition 失敗會 rollback；getter 與 reset／cancel／new snapshot cleanup 已完成。Context Builder 保留同一 package identity。驗證為 session 27/27、evidence 18/18、全套 265/265、project tsc exit 0；Standards／Spec review PASS。`npm run check` exit 1 僅因未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺少 `highlight.js` declaration（TS7016）。
+
+本 ticket 沒有接自動續跑或排程 Context Build；這是明確的後續 continuation scope，不能從本 handoff 推論為已完成。未修改 `pi-main`，其他既有流程維持不變。
+
+## 2026-08-31 knowledgeSummary 非權威邊界完成
+
+Ticket `knowledge-summary-authority-boundary-20260831` 已完成實作與驗證。schema description 與 `EvidencePackage` JSDoc 明定 `knowledgeSummary` 僅供人類閱讀、非權威、不得新增主張或控制流程；`decisions`、`findings`、`limitations` 與 runtime-derived `evidenceIds` 維持正式來源。
+
+Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` 的矛盾摘要證明正式 items 不受影響且摘要保留。TDD RED 145/1 後 GREEN 146/0；單檔 Context 測試 4/0；完整 `npm test` 266/266；Standards 與 Spec review PASS。
+
+`npm run check` 唯一既有阻塞為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 的 `highlight.js` TS7016（21 個），與本輪無關；本輪未修改 `pi-main`。自動排程 Context Build 與空 Evidence Package validation 仍 out of scope。下一步不需再實作本 ticket。

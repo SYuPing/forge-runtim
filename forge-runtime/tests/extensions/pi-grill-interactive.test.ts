@@ -664,6 +664,7 @@ test("PiTui_WhenReadyForDeepCompletes_ShouldAdvanceWithoutContinue", async () =>
 						decisions: [],
 						findings: [],
 						limitations: [],
+						knowledgeSummary: "測試知識摘要",
 					},
 				}, { id: "call-deep-complete-1" }),
 			]),
@@ -816,7 +817,7 @@ test("PiProvider_WhenContextBuildStageIsPublished_ShouldKeepStageOutOfProviderCo
 					attemptId: "deep-1",
 					sourceRoundId: "grill-1",
 					phase: "KNOWLEDGE_UNDERSTANDING",
-					outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+					outcome: { kind: "completed", decisions: [], findings: [], limitations: [], knowledgeSummary: "測試知識摘要" },
 				}, { id: "call-stage-context-understanding-complete" })]);
 			},
 		]);
@@ -1003,7 +1004,7 @@ test("PiProvider_WhenDeepDecisionIsAnswered_ShouldCompleteFirstFreshAttemptWitho
 					attemptId: "deep-2",
 					sourceRoundId: "grill-1",
 					phase: "KNOWLEDGE_UNDERSTANDING",
-					outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+					outcome: { kind: "completed", decisions: [], findings: [], limitations: [], knowledgeSummary: "測試知識摘要" },
 				}, { id: "call-decision-replay-fresh-complete" })]);
 			},
 		]);

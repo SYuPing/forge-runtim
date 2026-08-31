@@ -1,6 +1,11 @@
 import { createOrchestrator, type Orchestrator } from "../workflow/orchestrator.ts";
 import { createForgeUiState, type ForgeUiState, type WaitUserState } from "../ui/ui-state.ts";
-import type { EvidenceDecision, EvidenceInput } from "../evidence/evidence-engine.ts";
+import {
+	validateEvidencePackage,
+	type EvidenceDecision,
+	type EvidenceInput,
+	type EvidencePackage,
+} from "../evidence/evidence-engine.ts";
 
 export interface WaitUserPayload extends WaitUserState {
 	decisionSummary?: string;
@@ -84,6 +89,11 @@ export type DeepCallResult =
 			readonly kind: "stale";
 			readonly expected?: DeepAttemptIdentity;
 		readonly received: DeepAttemptIdentity;
+	  }
+	| {
+			readonly kind: "invalid";
+			readonly state: ForgeUiState;
+			readonly errors: readonly string[];
 	};
 
 export interface LockedDeepEvidence {
@@ -95,11 +105,19 @@ function copyEvidenceDecision(decision: EvidenceDecision): EvidenceDecision {
 	return { ...decision, evidenceIds: [...decision.evidenceIds] };
 }
 
-export interface DeepCompletedResult {
-	readonly kind: "completed";
-	readonly evidenceIds: string[];
-	readonly decisionSummary?: string;
-}
+export type DeepCompletedResult =
+	| {
+			readonly kind: "completed";
+			readonly evidenceIds: string[];
+			readonly decisionSummary?: string;
+			readonly evidencePackage?: never;
+	  }
+	| {
+			readonly kind: "completed";
+			readonly evidencePackage: EvidencePackage;
+			readonly evidenceIds?: never;
+			readonly decisionSummary?: never;
+	  };
 
 export interface DeepNeedsDecisionResult {
 	readonly kind: "needs_decision";
@@ -145,6 +163,7 @@ export interface ForgeSessionState {
 	getFetchedEvidenceIds(): ReadonlySet<string>;
 	getLockedDeepEvidence(): LockedDeepEvidence | undefined;
 	getHumanDecisions(): readonly EvidenceDecision[];
+	getKnowledgeUnderstandingPackage(): EvidencePackage | undefined;
 		handleDeepResult(identity: DeepAttemptIdentity, result: DeepResult): DeepCallResult;
 	isFirstGrillRoundOfSnapshot(): boolean;
 	recordCompletionOmission(): boolean;
@@ -188,6 +207,7 @@ export function createForgeSessionState(): ForgeSessionState {
 	let deepRetryPhase: DeepAttemptPhase | undefined;
 	let resumableDeepPhase: DeepAttemptPhase | undefined;
 	let lockedDeepEvidence: LockedDeepEvidence | undefined;
+	let knowledgeUnderstandingPackage: EvidencePackage | undefined;
 		let completionOmissionRecorded = false;
 		let uiState = createForgeUiState("RECEIVE");
 
@@ -270,6 +290,7 @@ export function createForgeSessionState(): ForgeSessionState {
 				deepAttempt = undefined;
 				deepRetryPhase = undefined;
 				needsDiscoveryCount = 0;
+				knowledgeUnderstandingPackage = undefined;
 				resumableDeepPhase = phase;
 			orchestrator = createOrchestrator({ initialStage: phase });
 			uiState = { ...uiState, stage: phase, waitUser: undefined };
@@ -375,6 +396,9 @@ export function createForgeSessionState(): ForgeSessionState {
 		getHumanDecisions() {
 			return [...humanDecisions.values()].map(copyEvidenceDecision);
 		},
+		getKnowledgeUnderstandingPackage() {
+			return knowledgeUnderstandingPackage;
+		},
 		handleDeepResult(identity, result) {
 			if (result.kind === "needs_decision") {
 				if (
@@ -448,6 +472,9 @@ export function createForgeSessionState(): ForgeSessionState {
 			}
 
 			if (identity.phase === "DEEP_KNOWLEDGE_RETRIEVAL") {
+				if (!("evidenceIds" in result) || !result.evidenceIds) {
+					return { kind: "invalid", state: uiState, errors: ["Deep Retrieval 完成結果缺少 evidenceIds"] };
+				}
 				return this.completeDeepKnowledge(result.evidenceIds, result.decisionSummary, identity);
 			}
 
@@ -459,13 +486,29 @@ export function createForgeSessionState(): ForgeSessionState {
 			) {
 				return { kind: "stale", expected: deepAttempt, received: identity };
 			}
+			if (!("evidencePackage" in result) || !result.evidencePackage) {
+				return { kind: "invalid", state: uiState, errors: ["Knowledge Understanding 完成結果缺少 Evidence Package"] };
+			}
+			const validation = validateEvidencePackage(result.evidencePackage);
+			if (!validation.ok) {
+				return { kind: "invalid", state: uiState, errors: validation.errors };
+			}
 
-			orchestrator = ensureOrchestrator(orchestrator);
+		orchestrator = ensureOrchestrator(orchestrator);
+		const previousPackage = knowledgeUnderstandingPackage;
+		knowledgeUnderstandingPackage = result.evidencePackage;
+		const nextStage = (() => {
+			try {
+				return orchestrator.transitionTo("CONTEXT_BUILD");
+			} catch (error) {
+				knowledgeUnderstandingPackage = previousPackage;
+				throw error;
+			}
+		})();
 			uiState = {
 				...uiState,
-				decisionSummary: result.decisionSummary ?? uiState.decisionSummary,
-				lastEvidenceIds: result.evidenceIds,
-				stage: orchestrator.transitionTo("CONTEXT_BUILD"),
+				lastEvidenceIds: [...result.evidencePackage.evidenceIds],
+				stage: nextStage,
 				waitUser: undefined,
 			};
 			deepAttempt = undefined;
@@ -644,6 +687,7 @@ export function createForgeSessionState(): ForgeSessionState {
 			deepRetryPhase = undefined;
 		resumableDeepPhase = undefined;
 		lockedDeepEvidence = undefined;
+		knowledgeUnderstandingPackage = undefined;
 			orchestrator = undefined;
 			completionOmissionRecorded = false;
 				uiState = createForgeUiState("RECEIVE");
@@ -709,6 +753,7 @@ export function createForgeSessionState(): ForgeSessionState {
 			deepSupplementalEvidence.clear();
 			fetchedEvidenceIds.clear();
 			lockedDeepEvidence = undefined;
+			knowledgeUnderstandingPackage = undefined;
 		}
 			currentGrillRound = {
 				isFirstRoundOfSnapshot,

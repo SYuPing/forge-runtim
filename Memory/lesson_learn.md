@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-30
+updated: 2026-08-31
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: complete
 ---
@@ -263,3 +263,23 @@ status: complete
 5. 測試命令必須帶正確 tsconfig；`waitForRender` 不是業務事件屏障，需等待實際 tool execution/settled。證據：PI 測試的事件等待修正與 14/14 結果。
 
 以上各項均已連結到本輪實作與測試；未將未驗證假設當作根因。
+
+## 2026-08-30 流程圖維護核對
+
+- 本輪未發現新 bug；本輪只同步 Markdown 維護紀錄，沒有修改 runtime 或測試契約。
+- 可重用教訓：維護流程圖時，應把 UI status、transport barrier、settled replay、stale identity 與 production wiring 分開記錄，不能把顯示描述當成 runtime 已接線。
+- 證據：`forge-intent-context-flow.html:28-32`；其中空 Evidence Package 風險見 `forge-intent-context-flow.html:31`，`CONTEXT_BUILD` production builder 未接入見 `:32`。
+## 2026-08-30 KNOWLEDGE_UNDERSTANDING 交付物修正教訓
+
+- **derived evidenceIds 一致性驗證缺口**：初版 validator 未核對 `evidenceIds` 與 evidence records 的順序／內容，可能形成第二份可分歧真相；已補 runtime-derived IDs 與 validator regression。證據：`forge-runtime/src/evidence/evidence-engine.ts`、`forge-runtime/tests/evidence/evidence-engine.test.ts`（18/18）。
+- **巢狀 metadata shallow freeze**：初版只保護外層資料，巢狀 metadata 仍可變更；已改為深層複製／凍結並補 immutable regression。證據：同上 production/test 檔案（18/18）。
+- **save-after-transition 順序問題**：初版先 transition 再保存 package，transition 後保存失敗會留下不一致狀態；已改為 validate/save-before-transition，並在 transition 失敗 rollback。證據：`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/tests/runtime/session-state.test.ts`（27/27）。
+
+## 2026-08-31 knowledgeSummary 非權威邊界規劃教訓
+
+- **可重用教訓**：自然語言摘要格式合法，不代表語意忠實；正式流程資料必須維持結構欄位為唯一權威，摘要只能作閱讀輔助。證據：[`ADR-0024`](../docs/adr/ADR-0024-knowledge-summary-authority-boundary.md)、`forge-runtime/src/evidence/evidence-engine.ts` 的 EvidencePackage 契約；本規劃階段未發現新 bug。
+
+## 2026-08-31 knowledgeSummary 非權威邊界實作教訓
+
+- **測試 blocker**：RED 測試初版因 `completedSchema` 括號不平衡造成轉譯 blocker；修正括號後才取得有效 RED。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1839` 與本輪測試執行摘要。
+- **可重用教訓**：不得用錯誤 assertion 偽造 RED；既有正確行為應以 characterization regression 保護，避免測試失真。證據：同一回歸測試 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1839` 與測試執行摘要。

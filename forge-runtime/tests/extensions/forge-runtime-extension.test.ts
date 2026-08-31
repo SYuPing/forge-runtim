@@ -1550,6 +1550,48 @@ test("Extension_DeepSearchTargetWithoutTargetSource_ShouldRejectBeforeBudgetAndK
 	assert.deepEqual(retryResult.details.reusedEvidenceIds, [targetCandidateId]);
 });
 
+test("Extension_DeepCompleteCompletedSchema_ShouldRequireKnowledgeSummaryAndRejectEvidenceIds", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const deepCompleteTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(deepCompleteTool?.parameters, "Expected forge_deep_complete to expose its public schema");
+	const validator = Compile(deepCompleteTool.parameters as TSchema);
+	const completedInput = {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-1",
+		phase: "KNOWLEDGE_UNDERSTANDING" as const,
+		outcome: {
+			kind: "completed" as const,
+			decisions: [],
+			findings: [],
+			limitations: [],
+		},
+	};
+
+	assert.equal(validator.Check(completedInput), false, "completed outcome must require knowledgeSummary");
+	assert.equal(
+		validator.Check({
+			...completedInput,
+			outcome: { ...completedInput.outcome, knowledgeSummary: "已驗證的知識摘要" },
+		}),
+		true,
+		"completed outcome must accept a knowledgeSummary",
+	);
+	assert.equal(
+		validator.Check({
+			...completedInput,
+			outcome: {
+				...completedInput.outcome,
+				knowledgeSummary: "已驗證的知識摘要",
+				evidenceIds: [],
+			},
+		}),
+		false,
+		"completed outcome must reject model-authored evidenceIds",
+	);
+});
+
 async function prepareDeepRetrieval(
 	rootDir: string,
 	name: string,
@@ -1675,6 +1717,7 @@ test("Extension_DeepCompleteDuplicateDecision_ReturnsRetryableInvalidWithoutStat
 		...identity,
 		outcome: {
 			kind: "completed",
+			knowledgeSummary: "測試知識摘要",
 			decisions: [{ decisionId: "decision-unknown-evidence", statement: "未知證據決策", evidenceIds: ["ev-unknown"] }],
 			findings: [], limitations: [],
 		},
@@ -1686,6 +1729,7 @@ test("Extension_DeepCompleteDuplicateDecision_ReturnsRetryableInvalidWithoutStat
 		...identity,
 		outcome: {
 			kind: "completed",
+			knowledgeSummary: "測試知識摘要",
 			decisions: [
 				{ decisionId: "decision-duplicate", statement: "原始決策", evidenceIds: [candidateId] },
 				{ decisionId: "decision-duplicate", statement: "覆寫決策", evidenceIds: [candidateId] },
@@ -1709,6 +1753,7 @@ test("Extension_DeepCompleteCorrectedDecision_ReusesAttemptAndEntersContextBuild
 		...identity,
 		outcome: {
 			kind: "completed" as const,
+			knowledgeSummary: "測試知識摘要",
 			decisions: [
 				{ decisionId: "decision-corrected-duplicate", statement: "原始決策", evidenceIds: [candidateId] },
 				{ decisionId: "decision-corrected-duplicate", statement: "重複決策", evidenceIds: [candidateId] },
@@ -1723,6 +1768,7 @@ test("Extension_DeepCompleteCorrectedDecision_ReusesAttemptAndEntersContextBuild
 		...identity,
 		outcome: {
 			kind: "completed",
+			knowledgeSummary: "測試知識摘要",
 			decisions: [{ decisionId: "decision-corrected-unique", statement: "修正後唯一決策", evidenceIds: [candidateId] }],
 			findings: [], limitations: [],
 		},
@@ -1757,9 +1803,9 @@ test("Extension_DeepRecoverySequence_ReachesContextBuildWithoutWaitUserLoop", as
 	const understandingTool = harness.registeredTools.get("forge_deep_complete");
 	assert.ok(understandingTool?.execute);
 	const understandingIdentity = { attemptId: "deep-1", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING" as const };
-	const duplicate = await understandingTool.execute("call-recovery-sequence-duplicate", { ...understandingIdentity, outcome: { kind: "completed", decisions: [{ decisionId: "recovery-duplicate", statement: "A", evidenceIds: [candidateId] }, { decisionId: "recovery-duplicate", statement: "B", evidenceIds: [candidateId] }], findings: [], limitations: [] } }, undefined, undefined, harness.buildContext());
+	const duplicate = await understandingTool.execute("call-recovery-sequence-duplicate", { ...understandingIdentity, outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [{ decisionId: "recovery-duplicate", statement: "A", evidenceIds: [candidateId] }, { decisionId: "recovery-duplicate", statement: "B", evidenceIds: [candidateId] }], findings: [], limitations: [] } }, undefined, undefined, harness.buildContext());
 	assert.equal(duplicate.details.status, "invalid");
-	const corrected = await understandingTool.execute("call-recovery-sequence-corrected", { ...understandingIdentity, outcome: { kind: "completed", decisions: [{ decisionId: "recovery-unique", statement: "修正後決策", evidenceIds: [candidateId] }], findings: [], limitations: [] } }, undefined, undefined, harness.buildContext());
+	const corrected = await understandingTool.execute("call-recovery-sequence-corrected", { ...understandingIdentity, outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [{ decisionId: "recovery-unique", statement: "修正後決策", evidenceIds: [candidateId] }], findings: [], limitations: [] } }, undefined, undefined, harness.buildContext());
 	assert.equal(corrected.details.status, "accepted");
 	assert.match(harness.observedStatuses.at(-1) ?? "", /CONTEXT_BUILD/);
 	assert.doesNotMatch(harness.observedStatuses.join("\n"), /WAIT_USER/);
@@ -1781,6 +1827,46 @@ async function prepareKnowledgeUnderstanding(rootDir: string, name: string) {
 		identity: { attemptId: "deep-1", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING" as const },
 	};
 }
+
+test("Extension_DeepCompleteCompletedOutcome_ShouldReturnSummaryAndDerivedEvidenceIds", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(rootDir, "summary-evidence-ids");
+	const understandingDefinition = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingDefinition?.parameters, "應公開 forge_deep_complete schema");
+	const completedSchema = ((understandingDefinition.parameters as {
+		properties: { outcome: { anyOf: Array<{ properties?: Record<string, { const?: string; description?: string }> }> } };
+	}).properties.outcome.anyOf.find((branch) => branch.properties?.kind?.const === "completed"));
+	assert.match(
+		completedSchema?.properties?.knowledgeSummary?.description ?? "",
+		/(?=.*僅供人類閱讀)(?=.*非權威)/,
+		"knowledgeSummary schema 必須同時標示僅供人類閱讀且非權威",
+	);
+	const result = await understandingTool(
+		"call-summary-evidence-ids",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "已驗證的知識摘要",
+				decisions: [],
+				findings: [],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(result.details.status, "accepted");
+	const evidencePackage = result.details.evidencePackage as {
+		knowledgeSummary: string;
+		evidenceIds: string[];
+	};
+	assert.equal(evidencePackage.knowledgeSummary, "已驗證的知識摘要");
+	assert.deepEqual(evidencePackage.evidenceIds, [candidateId]);
+});
 
 test("Extension_DeepSearchWikiAndCodeBase_ShouldRemainUnaffected", async (t) => {
 	for (const source of ["wiki", "code_base"] as const) {
@@ -2310,6 +2396,7 @@ test("Integration_WhenDeepAttemptIsStale_ShouldRejectCompletion", async (t) => {
 			phase: "KNOWLEDGE_UNDERSTANDING",
 			outcome: {
 				kind: "completed",
+				knowledgeSummary: "測試知識摘要",
 				decisions: [],
 				findings: [{ statement: "候選支持目前判斷。", evidenceIds: [candidateId] }],
 				limitations: [{ statement: "目前沒有阻擋限制。", blocking: false }],
@@ -2458,6 +2545,7 @@ test("Integration_WhenStaleUnderstandingNeedsDecisionReferencesUnknownEvidence_S
 			phase: "KNOWLEDGE_UNDERSTANDING",
 			outcome: {
 				kind: "completed",
+				knowledgeSummary: "測試知識摘要",
 				decisions: [],
 				findings: [{ statement: "ok", evidenceIds: [candidateId] }],
 				limitations: [],
@@ -2597,7 +2685,7 @@ test("Integration_WhenUnderstandingUsesLockedEvidence_ShouldProducePackage", asy
 			attemptId: "deep-1",
 			sourceRoundId: "grill-1",
 			phase: "KNOWLEDGE_UNDERSTANDING",
-			outcome: { kind: "completed", decisions, findings, limitations },
+			outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions, findings, limitations },
 		},
 		undefined,
 		undefined,
@@ -2683,6 +2771,7 @@ test("Integration_WhenPackageIsValid_ShouldTransferToContextBuild", async (t) =>
 			phase: "KNOWLEDGE_UNDERSTANDING",
 			outcome: {
 				kind: "completed",
+				knowledgeSummary: "測試知識摘要",
 				decisions: [],
 				findings: [{ statement: "候選支持目前判斷。", evidenceIds: [candidateId] }],
 				limitations: [],
@@ -4063,7 +4152,7 @@ test("Integration_WhenGrillHumanDecisionIsAnswered_ShouldInjectImmutableDecision
 			attemptId: "deep-1",
 			sourceRoundId: "grill-2",
 			phase: "KNOWLEDGE_UNDERSTANDING",
-			outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+			outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [], limitations: [] },
 		},
 		undefined,
 		undefined,
@@ -4133,7 +4222,7 @@ test("Extension_WhenSourceChangesAfterEvidenceFetch_ShouldCompleteDeepFromSnapsh
 			attemptId: "deep-1",
 			sourceRoundId: "grill-1",
 			phase: "KNOWLEDGE_UNDERSTANDING",
-			outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+			outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [], limitations: [] },
 		},
 		undefined,
 		undefined,
@@ -6143,7 +6232,7 @@ test("Extension_DeepDiscoveryFallback_WhenSnapshotSwitches_ShouldCarryFetchedEvi
 		attemptId: understandingAttemptId,
 		sourceRoundId: "grill-2",
 		phase: "KNOWLEDGE_UNDERSTANDING",
-		outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+		outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [], limitations: [] },
 	}, undefined, undefined, harness.buildContext());
 	const details = result.details as { evidencePackage?: { evidence?: Array<{ evidenceId: string; content: string }> } };
 	const evidence = details.evidencePackage?.evidence ?? [];
@@ -6211,7 +6300,7 @@ test("Extension_DeepDiscoveryFallback_WhenSnapshotSwitches_ShouldCarryDeepSupple
 		attemptId: understandingAttemptId,
 		sourceRoundId: "grill-2",
 		phase: "KNOWLEDGE_UNDERSTANDING",
-		outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+		outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [], limitations: [] },
 	}, undefined, undefined, harness.buildContext());
 	const details = result.details as {
 		evidencePackage?: { evidence?: Array<{ evidenceId: string; content: string; origin: string }> };
@@ -6282,6 +6371,7 @@ test("Extension_DeepDiscoveryFallback_WhenConfirmed_ShouldRecordHumanPremiseAndD
 		phase: "KNOWLEDGE_UNDERSTANDING",
 		outcome: {
 			kind: "completed",
+			knowledgeSummary: "測試知識摘要",
 			decisions: [],
 			findings: [],
 			limitations: [],
@@ -6366,7 +6456,7 @@ test("Extension_ContextBuildStatus_ShouldUseForgeRuntimeKeyAndStatusText", async
 	assert.ok(understandingTool?.execute);
 	await understandingTool.execute("call-context-status-understanding-complete", {
 		attemptId: understandingAttemptId, sourceRoundId: "grill-2", phase: "KNOWLEDGE_UNDERSTANDING",
-		outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+		outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [], limitations: [] },
 	}, undefined, undefined, harness.buildContext({
 	}));
 	const contextBuildStatus = harness.observedStatusCalls.at(-1);
@@ -6559,7 +6649,7 @@ test("Extension_SuccessfulSwitchBeforeNewWorkflow_ShouldClearFallbackEvidenceAnd
 		"call-new-workflow-understanding-complete",
 		{
 			...understandingIdentity,
-			outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+			outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [], limitations: [] },
 		},
 		undefined,
 		undefined,
@@ -6834,7 +6924,7 @@ test("Extension_WhenDeepContinueRuns_ShouldCreateNewAttemptAndPreservePhaseAndSo
 	await harness.runCommand("continue");
 	const understandingRetry = await deepCompleteTool.execute("call-understanding-retry", {
 		attemptId: "deep-3", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING",
-		outcome: { kind: "completed", decisions: [], findings: [{ statement: "ok", evidenceIds: [candidateId] }], limitations: [] },
+		outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [{ statement: "ok", evidenceIds: [candidateId] }], limitations: [] },
 	}, undefined, undefined, harness.buildContext());
 	assert.equal(understandingRetry.details.status, "accepted");
 });
@@ -7254,7 +7344,7 @@ test("Integration_WhenDeepCompleteExceedsPackageCountLimit_ShouldRejectWithoutCh
 			attemptId: "deep-1",
 			sourceRoundId: "grill-1",
 			phase: "KNOWLEDGE_UNDERSTANDING",
-			outcome: { kind: "completed", decisions: [], findings: tooManyFindings, limitations: [] },
+			outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: tooManyFindings, limitations: [] },
 		},
 		undefined,
 		undefined,
@@ -7270,7 +7360,7 @@ test("Integration_WhenDeepCompleteExceedsPackageCountLimit_ShouldRejectWithoutCh
 			attemptId: "deep-1",
 			sourceRoundId: "grill-1",
 			phase: "KNOWLEDGE_UNDERSTANDING",
-			outcome: { kind: "completed", decisions: [], findings: [{ statement: "合法發現", evidenceIds: [candidateId] }], limitations: [] },
+			outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [{ statement: "合法發現", evidenceIds: [candidateId] }], limitations: [] },
 		},
 		undefined,
 		undefined,
@@ -7459,7 +7549,7 @@ test("Extension_WhenUnderstandingNeedsDecisionRepeatsAcrossFreshAttempts_ShouldI
 	const beforeTools = harness.getActiveTools();
 	const stale = await understandingTool.execute("call-old-understanding-completion", {
 		attemptId: "deep-1", sourceRoundId: "grill-1", phase: "KNOWLEDGE_UNDERSTANDING",
-		outcome: { kind: "completed", decisions: [], findings: [], limitations: [] },
+		outcome: { kind: "completed", knowledgeSummary: "測試知識摘要", decisions: [], findings: [], limitations: [] },
 	}, undefined, undefined, harness.buildContext());
 	assert.equal(stale.details.status, "stale");
 	assert.equal(stale.terminate, true);
@@ -7504,7 +7594,7 @@ test("Integration_WhenStaleUnderstandingOutcomeIsCompletedOrNeedsDiscovery_Shoul
 	const beforeStatus = harness.observedStatuses.at(-1);
 	const beforeTools = harness.getActiveTools();
 	for (const outcome of [
-		{ kind: "completed" as const, decisions: [{ decisionId: "unknown", statement: "x", evidenceIds: ["ev-unknown"] }], findings: [], limitations: [] },
+		{ kind: "completed" as const, knowledgeSummary: "測試知識摘要", decisions: [{ decisionId: "unknown", statement: "x", evidenceIds: ["ev-unknown"] }], findings: [], limitations: [] },
 		{ kind: "needs_discovery" as const },
 	]) {
 		const result = await understandingExecute("call-stale-understanding-outcome", {

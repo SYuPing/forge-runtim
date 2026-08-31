@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createForgeSessionState } from "../../src/runtime/session-state.ts";
+import { createEvidencePackage } from "../../src/evidence/evidence-engine.ts";
 
 test("SessionState_WhenAnswerRecorded_ShouldEnterUserConfirmedThenGrill", () => {
 	const session = createForgeSessionState();
@@ -318,6 +319,220 @@ test("SessionState_WhenDeepAttemptIdentityChanges_ShouldRejectStaleCall", () => 
 
 	assert.equal(result.kind, "stale");
 	assert.equal(session.current().stage, "DEEP_KNOWLEDGE_RETRIEVAL");
+});
+
+test("SessionState_WhenKnowledgeUnderstandingCompletes_ShouldStoreFullPackageBeforeContextBuild", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("交付完整 Knowledge Understanding", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+
+	const retrievalResult = session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	assert.equal(retrievalResult.kind, "accepted");
+
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-knowledge-understanding",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "Knowledge Understanding 規格",
+		content: "已驗證的規格內容",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [
+			{
+				decisionId: "decision-knowledge-understanding",
+				statement: "採用已驗證的規格",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+		findings: [
+			{
+				statement: "已確認規格可供 Context Build 使用",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+		limitations: [{ statement: "尚未接上自動續跑 Context Build", blocking: false }],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+
+	const result = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+
+	assert.equal(result.kind, "accepted");
+	assert.equal(result.state.stage, "CONTEXT_BUILD");
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), evidencePackage);
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedPackage);
+	assert.equal(storedPackage.knowledgeSummary, "已驗證的完整知識摘要");
+	assert.deepEqual(storedPackage.decisions, evidencePackage.decisions);
+	assert.deepEqual(storedPackage.findings, evidencePackage.findings);
+	assert.deepEqual(storedPackage.limitations, evidencePackage.limitations);
+	assert.deepEqual(storedPackage.evidenceIds, [evidence.evidenceId]);
+});
+
+test("SessionState_WhenKnowledgeUnderstandingPackageIsInvalid_ShouldRemainInUnderstandingWithoutPartialSave", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("拒絕無效 Knowledge Understanding", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-invalid-knowledge-summary",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "無效摘要測試",
+		content: "已驗證的規格內容",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [
+			{
+				decisionId: "decision-invalid-knowledge-summary",
+				statement: "採用已驗證的規格",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+		findings: [
+			{
+				statement: "已確認規格可供 Context Build 使用",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+		limitations: [{ statement: "尚未接上自動續跑 Context Build", blocking: false }],
+		knowledgeSummary: "   ",
+	});
+	const stateBefore = session.current();
+	const identityBefore = session.currentDeepAttempt();
+
+	const result = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+
+	assert.equal(result.kind, "invalid");
+	assert.ok(result.errors.includes("knowledgeSummary 不可為空白"));
+	assert.deepEqual(session.current(), stateBefore);
+	assert.strictEqual(session.currentDeepAttempt(), identityBefore);
+	assert.equal(session.getKnowledgeUnderstandingPackage(), undefined);
+	assert.equal(session.current().stage, "KNOWLEDGE_UNDERSTANDING");
+});
+
+test("SessionState_WhenResetStartsNewWorkflow_ShouldClearKnowledgeUnderstandingPackage", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("重設 Knowledge Understanding 工作流程", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidencePackage = createEvidencePackage({
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已完成且可供 Context Build 使用的知識摘要",
+	});
+	const result = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+
+	assert.equal(result.kind, "accepted");
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), evidencePackage);
+
+	const resetState = session.reset();
+
+	assert.equal(resetState.stage, "RECEIVE");
+	assert.equal(session.getKnowledgeUnderstandingPackage(), undefined);
+});
+
+test("SessionState_WhenDeepKnowledgeIsCancelled_ShouldClearKnowledgeUnderstandingPackage", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("取消 Knowledge Understanding 工作流程", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidencePackage = createEvidencePackage({
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已完成且可供 Context Build 使用的知識摘要",
+	});
+	const result = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+
+	assert.equal(result.kind, "accepted");
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), evidencePackage);
+
+	session.cancelDeepKnowledge();
+
+	assert.equal(session.getKnowledgeUnderstandingPackage(), undefined);
+});
+
+test("SessionState_WhenNewEvidenceSnapshotStarts_ShouldClearKnowledgeUnderstandingPackage", () => {
+	const session = createForgeSessionState();
+	const snapshotA = Object.freeze({ candidates: {}, manifest: [] });
+	const snapshotB = Object.freeze({
+		candidates: Object.freeze({
+			"ev-candidate-b": Object.freeze({
+				candidateId: "ev-candidate-b" as const,
+				kind: "wiki" as const,
+				source: "wiki/spec-b",
+				title: "snapshot B 規格",
+				content: "snapshot B 的候選證據",
+				metadata: Object.freeze({}),
+			}),
+		}),
+		manifest: Object.freeze([
+			{
+				candidateId: "ev-candidate-b" as const,
+				kind: "wiki" as const,
+				source: "wiki/spec-b",
+				title: "snapshot B 規格",
+			},
+		]),
+	});
+	session.startGrillRound("完成 snapshot A 的 Knowledge Understanding", snapshotA);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidencePackage = createEvidencePackage({
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "snapshot A 的完整知識摘要",
+	});
+	const result = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+
+	assert.equal(result.kind, "accepted");
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), evidencePackage);
+
+	session.startGrillRound("開始不同的 snapshot B", snapshotB);
+
+	assert.equal(session.getKnowledgeUnderstandingPackage(), undefined);
 });
 
 test("SessionState_WhenContinueRetriesDeep_ShouldIssueNewAttemptId", () => {

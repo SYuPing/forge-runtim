@@ -57,6 +57,7 @@ test("StateMachine_WhenRetrievalCompletes_ShouldEnterKnowledgeUnderstanding", as
 
 test("StateMachine_WhenUnderstandingCompletes_ShouldEnterContextBuild", async () => {
 	const { createForgeSessionState } = await import("../../src/runtime/session-state.ts");
+	const { createEvidencePackage } = await import("../../src/evidence/evidence-engine.ts");
 	const session = createForgeSessionState();
 	const snapshot = Object.freeze({
 		candidates: Object.freeze({}),
@@ -78,16 +79,24 @@ test("StateMachine_WhenUnderstandingCompletes_ShouldEnterContextBuild", async ()
 	const understandingIdentity = session.currentDeepAttempt();
 	assert.ok(understandingIdentity);
 	assert.equal(understandingIdentity.phase, "KNOWLEDGE_UNDERSTANDING");
+	const evidencePackage = createEvidencePackage({
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "Understanding 完成",
+	});
 
 	const result = session.handleDeepResult(understandingIdentity, {
 		kind: "completed",
-		evidenceIds: ["ev-1"],
-		decisionSummary: "Understanding 完成",
+		evidencePackage,
 	});
 
 	assert.equal(result.kind, "accepted");
 	assert.equal(result.state.stage, "CONTEXT_BUILD");
 	assert.equal(session.current().stage, "CONTEXT_BUILD");
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), evidencePackage);
 });
 
 test("StateMachine_WhenDeepNeedsDecision_ShouldCreateWaitUserRound", async () => {

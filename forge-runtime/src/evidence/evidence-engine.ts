@@ -1,48 +1,52 @@
 export type EvidenceOrigin = "grill" | "deep_retrieval" | "human_premise";
 
 export interface EvidenceInput {
-	evidenceId: string;
-	kind: string;
-	source: string;
-	title: string;
-	content: string;
-	metadata: Record<string, unknown>;
+	readonly evidenceId: string;
+	readonly kind: string;
+	readonly source: string;
+	readonly title: string;
+	readonly content: string;
+	readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export interface Evidence extends EvidenceInput {
-	origin: EvidenceOrigin;
+	readonly origin: EvidenceOrigin;
 }
 
 export interface EvidenceDecision {
-	decisionId: string;
-	statement: string;
-	evidenceIds: string[];
+	readonly decisionId: string;
+	readonly statement: string;
+	readonly evidenceIds: readonly string[];
 }
 
 export interface EvidenceFinding {
-	statement: string;
-	evidenceIds: string[];
+	readonly statement: string;
+	readonly evidenceIds: readonly string[];
 }
 
 export interface EvidenceLimitation {
-	statement: string;
-	blocking: boolean;
+	readonly statement: string;
+	readonly blocking: boolean;
 }
 
 export interface EvidencePackage {
-	evidence: Evidence[];
-	decisions: EvidenceDecision[];
-	findings: EvidenceFinding[];
-	limitations: EvidenceLimitation[];
+	/** 僅供人類閱讀的非權威摘要，不得新增主張或控制流程；正式事實以結構欄位與執行期產生的證據識別碼為準。 */
+	readonly knowledgeSummary: string;
+	readonly evidence: readonly Evidence[];
+	readonly evidenceIds: readonly string[];
+	readonly decisions: readonly EvidenceDecision[];
+	readonly findings: readonly EvidenceFinding[];
+	readonly limitations: readonly EvidenceLimitation[];
 }
 
 export interface EvidencePackageInput {
-	inherited: EvidenceInput[];
-	supplemental: EvidenceInput[];
-	humanPremise?: EvidenceInput[];
-	decisions: EvidenceDecision[];
-	findings: EvidenceFinding[];
-	limitations: EvidenceLimitation[];
+	readonly inherited: readonly EvidenceInput[];
+	readonly supplemental: readonly EvidenceInput[];
+	readonly humanPremise?: readonly EvidenceInput[];
+	readonly decisions: readonly EvidenceDecision[];
+	readonly findings: readonly EvidenceFinding[];
+	readonly limitations: readonly EvidenceLimitation[];
+	readonly knowledgeSummary: string;
 }
 
 export type EvidencePackageValidationResult = { ok: true } | { ok: false; errors: string[] };
@@ -50,20 +54,61 @@ export type EvidencePackageValidationResult = { ok: true } | { ok: false; errors
 export const EVIDENCE_PACKAGE_MAX_ITEMS = 50;
 export const EVIDENCE_PACKAGE_MAX_STATEMENT_CODE_POINTS = 4000;
 
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+	if (value === null || typeof value !== "object" || seen.has(value)) return value;
+	seen.add(value);
+	for (const key of Reflect.ownKeys(value)) {
+		deepFreeze(Reflect.get(value, key), seen);
+	}
+	return Object.freeze(value);
+}
+
 export function createEvidencePackage(input: EvidencePackageInput): EvidencePackage {
-	return {
-		evidence: [
-			...input.inherited.map((evidence) => ({ ...evidence, origin: "grill" as const })),
-			...input.supplemental.map((evidence) => ({ ...evidence, origin: "deep_retrieval" as const })),
-			...(input.humanPremise ?? []).map((evidence) => ({ ...evidence, origin: "human_premise" as const })),
-		],
-		decisions: input.decisions,
-		findings: input.findings,
-		limitations: input.limitations,
-	};
+	const freezeEvidence = (item: EvidenceInput, origin: EvidenceOrigin): Evidence =>
+		Object.freeze({ ...item, metadata: deepFreeze(structuredClone(item.metadata)), origin });
+	const evidence = Object.freeze([
+		...input.inherited.map((item) => freezeEvidence(item, "grill")),
+		...input.supplemental.map((item) => freezeEvidence(item, "deep_retrieval")),
+		...(input.humanPremise ?? []).map((item) => freezeEvidence(item, "human_premise")),
+	]);
+	const decisions = Object.freeze(
+		input.decisions.map((item) => Object.freeze({ ...item, evidenceIds: Object.freeze([...item.evidenceIds]) })),
+	);
+	const findings = Object.freeze(
+		input.findings.map((item) => Object.freeze({ ...item, evidenceIds: Object.freeze([...item.evidenceIds]) })),
+	);
+	const limitations = Object.freeze(input.limitations.map((item) => Object.freeze({ ...item })));
+
+	return Object.freeze({
+		knowledgeSummary: input.knowledgeSummary,
+		evidence,
+		evidenceIds: Object.freeze(evidence.map((item) => item.evidenceId)),
+		decisions,
+		findings,
+		limitations,
+	});
 }
 
 export function validateEvidencePackage(evidencePackage: EvidencePackage): EvidencePackageValidationResult {
+	const knowledgeSummary = evidencePackage.knowledgeSummary?.trim();
+	if (!knowledgeSummary) {
+		return { ok: false, errors: ["knowledgeSummary 不可為空白"] };
+	}
+	if (Array.from(knowledgeSummary).length > EVIDENCE_PACKAGE_MAX_STATEMENT_CODE_POINTS) {
+		return {
+			ok: false,
+			errors: [`knowledgeSummary 內容超過 ${EVIDENCE_PACKAGE_MAX_STATEMENT_CODE_POINTS} 個 Unicode 字元`],
+		};
+	}
+	const derivedEvidenceIds = evidencePackage.evidence.map((item) => item.evidenceId);
+	if (
+		!Array.isArray(evidencePackage.evidenceIds) ||
+		evidencePackage.evidenceIds.length !== derivedEvidenceIds.length ||
+		evidencePackage.evidenceIds.some((evidenceId, index) => evidenceId !== derivedEvidenceIds[index])
+	) {
+		return { ok: false, errors: ["evidenceIds 必須由 evidence 衍生且順序一致"] };
+	}
+
 	const evidenceIds = new Set<string>();
 	const evidenceOrigins = new Map<string, EvidenceOrigin>();
 
