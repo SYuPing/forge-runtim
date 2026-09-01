@@ -2174,3 +2174,36 @@ npm test（180 秒有界）
 schema description 與 `EvidencePackage` JSDoc 已明定摘要僅供人類閱讀、非權威、不得新增主張或控制流程。Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` 的矛盾摘要證明 items 不受影響且摘要保留。
 
 RED 145/1 後 GREEN 146/0；單檔 Context 測試 4/0；完整 `npm test` 266/266；Standards 與 Spec review PASS。`npm run check` 唯一既有阻塞為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 的 `highlight.js` TS7016（21 個），與本輪無關；未修改 `pi-main`。自動排程 Context Build 與空 Evidence Package validation 仍 out of scope。狀態：`implemented-verified-reviewed`。
+
+## 2026-08-31 Grill 軟上限與人類 checkpoint（direct Plan A）
+
+使用者已核准 [`ADR-0025`](adr/ADR-0025-grill-soft-cap-human-checkpoint.md)；狀態 `implementation-complete-verified`。只沿用既有 WAIT_USER，沒有獨立 View/UI gap，故不建立 Plan B。
+
+執行／TDD 狀態：`implementation-complete-verified`。兩條 converge 驗收、checkpoint、cancel、skill 與全套驗證均已完成。
+
+精確 implementation files：`forge-runtime/skills/grilling/SKILL.md`、`forge-runtime/src/ui/ui-state.ts`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/runtime/session-state.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/grill/grill-skill.test.ts`。durable docs 是 repo-required status tracking，不是 runtime scope；`.pi` 僅可能是本機忽略的舊 mirror，不是來源。
+
+契約：每條 chain 只計成功接受的人類 `grill_confirmation` 回答，`MAX_AUTOMATIC_GRILL_ROUNDS = 8`；retry、mismatch、stale/duplicate、checkpoint 選擇不計數，新 chain／READY／cancel/reset 清零。第 8 題先保存，隨後以既有 WAIT_USER 發布 `kind: "grill_checkpoint"`，不新增 state。固定 `continue_one`、`converge`、`cancel`；continue 只放行一題後再 checkpoint。converge 只啟動一次 convergence invocation：無真正知識盲點時模型提交 `READY_FOR_DEEP`，runtime 沿 `continueDeepKnowledge` 進入 `DEEP_KNOWLEDGE_RETRIEVAL`；有真正知識盲點時最多問一題，保存回答後直接沿 `continueDeepKnowledge` 進 Deep，不回 checkpoint、不再 Grill、不問第二題，且不得偽造 READY。真正知識盲點是 Deep Retrieval 所缺客觀知識／證據，不含可採用預設的 implementation detail。cancel 重用既有非 Deep cancel 回 RECEIVE；late/stale/duplicate 一律 fail-closed。`NEEDS_CONFIRMATION` 僅限 material boundary，非阻塞細節 READY_FOR_DEEP。
+
+測試固定 12 個：Session-state 4（baseline 27→31）、Extension 6（146→152）、Skill 2（6→8）；其後補上 cancel、relevance bypass、blank/stale/duplicate 與 package path 回歸，最終完整 281/281。兩條 converge 驗收分別固定無盲點 0 題 READY→Deep，以及一個真正知識盲點問 1 題後直接 Deep；普通 empty-candidate 仍 `WAIT_USER`。
+
+執行順序：不同測試子代理先補測試逐 slice 打紅，主代理看見精確紅燈後才改 production／skill；implementation 與 final review 由不同角色負責，每個 milestone 更新 agent-state。從 `forge-runtime/` 執行 targeted 三命令、`npm test`、`npm run check`；保留既有 pi-main `highlight.js` TS7016，禁止修改 pi-main 或新增 local TS error。
+
+最脆弱假設：8 輪足以在一般案例前不干擾；模型能正確辨識真正知識盲點。runtime 只限制一次 invocation／一題上限，不替模型偽造 READY 或替人類做 material decision。
+
+### Verification
+
+```text
+# 僅由獨立驗證子代理執行，從 forge-runtime/ 執行
+npm exec -- tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/runtime/session-state.test.ts
+npm exec -- tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/extensions/forge-runtime-extension.test.ts
+npm exec -- tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/grill/grill-skill.test.ts
+npm test
+npm run check
+```
+
+### 最終收尾（2026-09-01）
+
+Plan A 已完成。checkpoint bare `cancel` 與既有 cancel 共用完整 cleanup；session 對 blank answer no-op、舊 round replay no-op、cross-round duplicate fail-closed。converge 的明確兩入口跳過 relevance：0 題直接 Deep，1 題回答後直接 Deep；普通 empty-candidate 仍等待使用者。canonical skill 為 `forge-runtime/skills/grilling/SKILL.md`。
+
+驗證：完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、`git diff --check` exit 0。`npm run check` 只剩未修改 `pi-main` 的 `highlight.js` TS7016 baseline；package 仍含約 213 個 `.log`，true knowledge gap 仍由 prompt/skill 契約約束，未加入 runtime NLP classifier。

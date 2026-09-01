@@ -2,7 +2,7 @@
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
 scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829、deep-decision-replay-ui-only-stage-20260830、knowledge-understanding-context-build-deliverable-20260830、knowledge-summary-authority-boundary-20260831
-updated: 2026-08-31
+updated: 2026-09-01
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、agent-state/knowledge-summary-authority-boundary-20260831.md、scoped validation logs
 status: implemented-verified-reviewed
 ---
@@ -508,3 +508,17 @@ Ticket `knowledge-summary-authority-boundary-20260831` 已完成實作與驗證�
 Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` 的矛盾摘要證明正式 items 不受影響且摘要保留。TDD RED 145/1 後 GREEN 146/0；單檔 Context 測試 4/0；完整 `npm test` 266/266；Standards 與 Spec review PASS。
 
 `npm run check` 唯一既有阻塞為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 的 `highlight.js` TS7016（21 個），與本輪無關；本輪未修改 `pi-main`。自動排程 Context Build 與空 Evidence Package validation 仍 out of scope。下一步不需再實作本 ticket。
+
+## 2026-08-31 Grill 軟上限與人類 checkpoint 交接
+
+最終規則：選 `converge` 後 0 題直接進 Deep；有真正知識盲點最多 1 題，回答後直接進 Deep，不回 checkpoint、不再 Grill。兩個 convergence 入口都跳過 relevance；普通 empty-candidate 仍 `WAIT_USER`。bare cancel 與既有 cancel 共用完整 cleanup。canonical skill 為 `forge-runtime/skills/grilling/SKILL.md`，`.pi` 不再是來源。
+
+### 最終收尾（2026-09-01）
+
+另補上 blank answer no-op、舊 round replay no-op 與 cross-round duplicate fail-closed。驗證為完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、diff check 0。`npm run check` 僅剩未修改 `pi-main` `highlight.js` TS7016 baseline；package 約 213 個 `.log` 的既有債務未擴大處理，semantic true-gap 仍由 prompt/skill 契約而非 runtime NLP classifier 約束。
+
+使用者已確認 [`ADR-0025`](adr/ADR-0025-grill-soft-cap-human-checkpoint.md) 與 direct [`PLAN-A`](PLAN-A.md)。Ticket 為 [`grill-soft-cap-human-checkpoint-20260831`](tickets/grill-soft-cap-human-checkpoint-20260831.md)，狀態 `implementation-complete-verified`；durable state 見 [`agent-state`](../agent-state/grill-soft-cap-human-checkpoint-20260831.md)。
+
+每條 chain 只計成功接受的人類回答，8 輪後先保存答案再以既有 WAIT_USER 發布 `grill_checkpoint`；固定 `continue_one`、`converge`、`cancel`，late/stale/duplicate fail-closed。選 `converge` 後只啟動一次 convergence invocation：無真正知識盲點時模型提交 `READY_FOR_DEEP`，runtime 沿 `continueDeepKnowledge` 進入 `DEEP_KNOWLEDGE_RETRIEVAL`；有真正知識盲點時最多問一題，保存回答後直接進 Deep，不回 checkpoint、不再 Grill、不問第二題，也不偽造 READY。真正知識盲點是 Deep Retrieval 所缺客觀知識／證據，不含可採用預設的 implementation detail。`cancel` 重用非 Deep cancel cleanup，回到 `RECEIVE`；只允許 material decision boundary 的 NEEDS_CONFIRMATION，非阻塞細節 READY_FOR_DEEP。只沿用既有 WAIT_USER，沒有 UI gap，故無 Plan B。
+
+本 ticket 已完成 final review，可交付。測試驗收為無盲點 READY→Deep，以及一個盲點問一題後直接 Deep；並已完成其餘 checkpoint、full suite 與 skill 驗證。未解風險為 check 僅保留 pi-main highlight.js TS7016 baseline、package 約 213 個 `.log` 的既有債務，以及 true knowledge gap 仍由 prompt/skill 契約約束；禁止修改 pi-main。

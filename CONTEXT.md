@@ -2,7 +2,7 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-08-31
+updated: 2026-09-01
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
 status: implemented-verified-reviewed
 ---
@@ -527,3 +527,29 @@ Ticket `knowledge-summary-authority-boundary-20260831` 已完成實作、驗證�
 Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` 的矛盾摘要證明正式 `items` 不受摘要影響，且摘要原文仍保留。TDD RED 為 145/1，修正後 GREEN 為 146/0；單檔 Context 測試 4/0；完整 `npm test` 266/266；Standards 與 Spec review PASS。
 
 `npm run check` 唯一既有阻塞是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 的 `highlight.js` TS7016（21 個），與本輪無關；本輪未修改 `pi-main`。自動排程 Context Build 與空 Evidence Package validation 仍 out of scope。狀態：`implemented-verified-reviewed`。
+
+## 2026-08-31 Grill 軟上限與人類 checkpoint 設計核准
+
+使用者已核准 [`ADR-0025`](docs/adr/ADR-0025-grill-soft-cap-human-checkpoint.md) 與 [`docs/PLAN-A.md`](docs/PLAN-A.md) 的 direct Plan A。每條 active Grill chain 只計成功接受的人類 `grill_confirmation` 回答，`MAX_AUTOMATIC_GRILL_ROUNDS = 8`；第 8 題先持久化，之後轉既有 WAIT_USER 的 `kind: "grill_checkpoint"`，固定 `continue_one`、`converge`、`cancel`，不新增 workflow state。
+
+本案只沿用既有 WAIT_USER 呈現，沒有獨立 View/UI gap，因此不建立 Plan B。`NEEDS_CONFIRMATION` 收斂至 material decision boundaries；非阻塞 implementation detail 必須 READY_FOR_DEEP。狀態：`implementation-complete-verified`。詳見 [`ticket`](docs/tickets/grill-soft-cap-human-checkpoint-20260831.md) 與 [`agent-state`](agent-state/grill-soft-cap-human-checkpoint-20260831.md)。
+
+## 2026-09-01 converge 行為決策
+
+使用者已明確決定：選擇 `converge` 後只啟動一次 convergence invocation。若沒有真正知識盲點，模型必須提交 `READY_FOR_DEEP`，runtime 沿既有 `continueDeepKnowledge` 進入正式 `DEEP_KNOWLEDGE_RETRIEVAL`；runtime 不得偽造 `READY_FOR_DEEP`。真正知識盲點只指完成 Deep Retrieval 所缺的客觀知識或證據，不包含可採用預設的 implementation detail。
+
+若有真正知識盲點，最多向人類問一題；保存回答後直接沿既有 `continueDeepKnowledge` 進入 Deep，不回 `grill_checkpoint`、不再啟動 Grill 或第二題，也不偽造 `READY_FOR_DEEP`。這不改變人類對 material decision 的最終裁決權。實作前先補兩條 converge 驗收測試並確認 RED，再做最小 production 修正。
+
+## 2026-09-01 Grill 軟上限與 checkpoint 完成驗證
+
+本 ticket 已完成實作與驗證。第 8 個有效人類回答後進入既有 `grill_checkpoint`；`continue_one` 只允許恰一個正常 round；`converge` 無盲點時接受模型提交的 `READY_FOR_DEEP` 並直接進 `DEEP_KNOWLEDGE_RETRIEVAL`，有真正知識盲點時最多問一題，回答保存後直接進 Deep；`cancel` 回 `RECEIVE` 並恢復工具。
+
+實作涵蓋 `ui-state` 的 `grill_checkpoint`、`session-state` 的回答計數／重設／正式 `beginGrill` transition、extension 的 `pendingConvergenceRoundId`、convergence prompt 與 final-answer guard，以及 grilling skill 的 frontmatter／文案。驗證為 GrillCheckpoint 4/4、三檔 189/189、grill skill 8/8、`quick_validate` valid、完整 `npm test` 276/276、`git diff --check` exit 0；`npm run check` 僅剩未修改 `pi-main` 的 `highlight.js` TS7016 baseline。
+
+狀態：`implementation-complete-verified`；不修改 `pi-main`。使用者 2026-09-01 決策已取代前段「等待確認／implementation pending」描述。
+
+## 2026-09-01 Grill checkpoint 最終收尾
+
+- converge 選擇後最多一題真正知識盲點：0 題直接進 `DEEP_KNOWLEDGE_RETRIEVAL`，1 題回答後直接進 Deep；兩個明確 convergence 入口跳過 relevance，普通 empty-candidate 仍 `WAIT_USER`。
+- bare `cancel` 與既有 cancel 共用完整 cleanup；session 對 blank、stale 與 cross-round duplicate 防護；canonical skill 為 `forge-runtime/skills/grilling/SKILL.md`，`.pi` 不再是來源。
+- 驗證：完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、diff check 0。`npm run check` 僅剩未修改 `pi-main` `highlight.js` TS7016 baseline；package 約 213 個 `.log` 與 prompt/skill semantic gap classifier 屬已知風險。

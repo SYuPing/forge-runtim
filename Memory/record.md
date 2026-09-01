@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-08-31
+updated: 2026-09-01
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
 status: complete
 ---
@@ -335,3 +335,24 @@ status: complete
 - 重大實作：補上 schema description 的非權威契約，並維持摘要與結構欄位矛盾時仍接受 package；未新增語意 parser、第二 DTO、依賴、`pi-main` 修改或自動續跑。
 - 驗證：`forge-runtime/extensions/forge-runtime.ts:1256`、`forge-runtime/src/evidence/evidence-engine.ts:33`；兩個指定回歸測試（`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/evidence/evidence-engine.test.ts`）；`npm test` 266/266；Standards／Spec review PASS。`npm run check` 仍受既有 `pi-main` `highlight.js` declaration blocker 影響。
 - 狀態：本 ticket 已完成實作、驗證與 review；自動／排程 Context Build 仍是另案範圍。
+
+## 2026-08-31 Grill 軟上限與人類 checkpoint 設計核准
+
+- 目標：終止 Grill 自動續問無上限問題，以成功接受的人類 `grill_confirmation` 回答計算 8 輪 soft cap，達上限後交給既有 WAIT_USER checkpoint。
+- 重大決策：第 8 題先保存；checkpoint 固定 `continue_one`、`converge`、`cancel`；不新增 workflow state；`NEEDS_CONFIRMATION` 僅限 material decision boundaries。詳見 [`ADR-0025`](../docs/adr/ADR-0025-grill-soft-cap-human-checkpoint.md) 與 [`docs/PLAN-A.md`](../docs/PLAN-A.md)。
+- 目前狀態：implementation-complete-verified；runtime、test、skill 與 durable docs 均已同步。
+
+## 2026-09-01 Grill 軟上限與人類 checkpoint 完成
+
+- 目標：終止 Grill 無上限自動續問，並讓 converge 在最多一題真正知識盲點後直接交接 Deep。
+- 重大實作：新增 `grill_checkpoint` UI state；session-state 完成有效回答計數、重設與正式 `beginGrill` transition；extension 完成 `pendingConvergenceRoundId`、convergence prompt 與 final-answer guard；grilling skill 更新 frontmatter／material decision 文案。
+- 規則：第 8 個有效回答後 checkpoint；`continue_one` 恰一正常 round；無盲點需模型 `READY_FOR_DEEP` 後進 `DEEP_KNOWLEDGE_RETRIEVAL`；有盲點最多一題且答完直接進 Deep；`cancel` 回 RECEIVE／恢復工具。
+- 驗證：GrillCheckpoint 4/4；三檔 189/189；grill skill 8/8；`quick_validate` valid；完整 `npm test` 276/276；`git diff --check` exit 0。check 僅剩未修改 pi-main 的 highlight.js TS7016 baseline。
+- 狀態：complete；final review／交付所需驗證已完成。
+
+## 2026-09-01 Grill checkpoint 最終收尾
+
+- 目標：終止 Grill 無上限續問，讓 converge 在 0 題或最多 1 題真正知識盲點後直接交接 Deep。
+- 重大實作：兩個 convergence 入口跳過 relevance；普通 empty-candidate 保留 `WAIT_USER`；bare cancel 重用完整 cleanup；session 加入 blank/stale/duplicate 防護；canonical skill 改為 `forge-runtime/skills/grilling/SKILL.md`。
+- 驗證：完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、diff check 0。check 僅剩未修改 `pi-main` baseline。
+- 狀態：complete。package 約 213 個 `.log` 與 semantic true-gap classifier 是已知後續風險，未納入本輪。

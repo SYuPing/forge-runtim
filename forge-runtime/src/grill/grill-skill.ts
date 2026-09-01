@@ -1,14 +1,12 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GrillEvidenceManifestEntry } from "../runtime/session-state.ts";
 import { parseStructuredGrillResult, type StructuredGrillResult } from "./grill-result.ts";
 
 const JSON_BLOCK_PATTERN = /```(?:json)?\s*([\s\S]*?)```/i;
 const FRONTMATTER_PATTERN = /^---\s*\n[\s\S]*?\n---\s*\n?/;
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const GRILLING_SKILL_PATH = resolve(__dirname, "../../../.pi/skills/grilling/SKILL.md");
+const GRILLING_SKILL_PATH = fileURLToPath(new URL("../../skills/grilling/SKILL.md", import.meta.url));
 
 export function buildGrillingSkillInvocation(
 	request: string,

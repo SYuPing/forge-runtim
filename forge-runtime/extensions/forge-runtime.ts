@@ -240,6 +240,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let activeWorkflow: ActiveWorkflowContext | undefined;
 	let savedActiveTools: string[] | undefined;
 	let pendingReplayInvocation: string | undefined;
+	let pendingConvergenceRoundId: string | undefined;
 	let pendingSettledDeepInvocation: PendingSettledDeepInvocation | undefined;
 	let pendingSettledDeepInvocationTimer: ReturnType<typeof setTimeout> | undefined;
 	let pendingSettledDiscoveryInvocation: PendingSettledDiscoveryInvocation | undefined;
@@ -388,8 +389,62 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			snapshotManifest: round.snapshot.manifest,
 		});
 	};
+	const cancelWorkflow = async (ctx: CommandContext): Promise<void> => {
+		const current = sessionState.current();
+		const deepCancel =
+			current.stage === "DEEP_KNOWLEDGE_RETRIEVAL" ||
+			current.stage === "KNOWLEDGE_UNDERSTANDING" ||
+			(current.stage === "WAIT_USER" &&
+				(current.waitUser?.kind === "deep_decision" || current.waitUser?.kind === "deep_discovery_fallback"));
+		pendingConvergenceRoundId = undefined;
+		clearPendingState();
+		clearFallbackWorkflowState();
+		restoreActiveTools();
+		if (deepCancel) {
+			pendingGrillRun = false;
+			await publishState(pi, ctx, sessionState.cancelDeepKnowledge());
+			return;
+		}
+		activeWorkflow = undefined;
+		await publishState(pi, ctx, sessionState.reset());
+	};
 	const resumeGrillWithAnswer = async (answer: string, ctx: CommandContext): Promise<string | undefined> => {
 		const currentRound = sessionState.continueGrillRound();
+		const currentState = sessionState.current();
+		if (currentState.waitUser?.kind === "grill_checkpoint" && answer.trim() === "cancel") {
+			await cancelWorkflow(ctx);
+			return undefined;
+		}
+		const isConvergenceSelection =
+			currentState.waitUser?.kind === "grill_checkpoint" && answer.trim() === "converge";
+		const isConvergenceAnswer =
+			currentState.stage === "WAIT_USER" &&
+			currentState.waitUser?.kind === "grill_confirmation" &&
+			currentState.waitUser.roundId === pendingConvergenceRoundId;
+		if (isConvergenceAnswer) {
+			const answeredState = sessionState.recordAnswer(answer);
+			if (answeredState.stage !== "GRILL" || answeredState.waitUser !== undefined) {
+				await publishState(pi, ctx, answeredState);
+				return undefined;
+			}
+			pendingConvergenceRoundId = undefined;
+			const enteredDeep = await continueDeepKnowledge(
+				pi,
+				ctx,
+				sessionState,
+				activeWorkflow,
+				publishWaitUser,
+				requireDeepToolBoundary,
+				() => undefined,
+				answeredState.decisionSummary,
+				undefined,
+				activateDeepRetrievalTools,
+				"settled",
+				true,
+			);
+			await publishState(pi, ctx, sessionState.current());
+			return enteredDeep.invocation;
+		}
 		const state = sessionState.recordAnswer(answer);
 		if (state.stage === "USER_CONFIRMED") {
 			activeWaitUserUiLeaseKey = undefined;
@@ -398,6 +453,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				await publishState(pi, ctx, state);
 				return undefined;
 			}
+			pendingConvergenceRoundId = undefined;
 			pendingGrillRun = false;
 			restoreActiveTools();
 			const clarifiedRequest = [currentRound.request, answer].join("\n\n");
@@ -426,11 +482,18 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return undefined;
 		}
 		const nextRound = sessionState.startGrillRound(currentRound.request, currentRound.snapshot);
+		if (isConvergenceSelection) {
+			pendingConvergenceRoundId = nextRound.roundId;
+		}
 		pendingGrillRun = true;
 		activateGrillTools();
 		await publishState(pi, ctx, state);
+		const convergenceInstruction = isConvergenceSelection
+			? "\n\n這是明確收斂 round。只辨識完成 Deep Retrieval 所缺的客觀知識或證據；不得把可採預設值的 implementation detail 當問題。無真正盲點必須提交 READY_FOR_DEEP；有真正盲點時最多提出一題。"
+			: "";
 		return buildGrillingSkillInvocation(
-			[currentRound.request, state.decisionSummary].filter((value): value is string => Boolean(value)).join("\n\n"),
+			[currentRound.request, state.decisionSummary].filter((value): value is string => Boolean(value)).join("\n\n") +
+			convergenceInstruction,
 			nextRound.roundId,
 			nextRound.snapshot.manifest,
 		);
@@ -504,20 +567,20 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				return true;
 			}
 			const deepAnswer = prepareDeepKnowledgeAnswer(answer);
-	if (deepAnswer.kind === "handled") {
-		await publishState(pi, ctx, deepAnswer.state);
-		if (deepAnswer.invocation) {
-			const nextAttempt = sessionState.currentDeepAttempt();
-			if (activeWorkflow && nextAttempt) {
-				pendingSettledDeepInvocation = {
-					activeWorkflow,
-					invocation: deepAnswer.invocation,
-					identity: nextAttempt,
-				};
+			if (deepAnswer.kind === "handled") {
+				await publishState(pi, ctx, deepAnswer.state);
+				if (deepAnswer.invocation) {
+					const nextAttempt = sessionState.currentDeepAttempt();
+					if (activeWorkflow && nextAttempt) {
+						pendingSettledDeepInvocation = {
+							activeWorkflow,
+							invocation: deepAnswer.invocation,
+							identity: nextAttempt,
+						};
+					}
+				}
+				return true;
 			}
-		}
-		return true;
-	}
 			if (!pi.sendUserMessage) {
 				return false;
 			}
@@ -644,7 +707,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		},
 	});
 	pi.registerTool?.({
-		name: "forge_grill_complete",
+			name: "forge_grill_complete",
 			label: "Forge Grill 完成",
 			description: "提交目前 Forge Grill 回合的結構化結果。",
 			parameters: GrillCompletionSchema,
@@ -657,12 +720,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					if (completion.requiresUserConfirmation) {
 						const waitUser = toWaitUserPayload(completion);
 							void publishWaitUser(waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
-						(ctx as CommandContext).ui?.notify?.(
-							`Forge WAIT_USER UI 失敗：${error instanceof Error ? error.message : String(error)}`,
-							"error",
-						);
-					});
+							(ctx as CommandContext).ui?.notify?.(
+								`Forge WAIT_USER UI 失敗：${error instanceof Error ? error.message : String(error)}`,
+								"error",
+							);
+						});
 				} else {
+					const isConvergenceRound = pendingConvergenceRoundId === completion.roundId;
+					pendingConvergenceRoundId = undefined;
 					const enteredDeep = await continueDeepKnowledge(
 						pi,
 						ctx as CommandContext,
@@ -677,6 +742,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							completion,
 							activateDeepRetrievalTools,
 							"settled",
+							isConvergenceRound,
 					);
 					if (!enteredDeep.entered) {
 						return {
@@ -1893,10 +1959,11 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					grillResult.roundId === state.waitUser.roundId &&
 					grillResult.roundId === state.waitUser.decisionId;
 					if (isWaitUserReplay && !isSameConfirmationReplay && !isSameRelevanceReplay) {
-						return;
-					}
-					if (!grillResult.requiresUserConfirmation) {
-						const enteredDeep = await continueDeepKnowledge(
+					return;
+				}
+				if (!grillResult.requiresUserConfirmation) {
+					pendingConvergenceRoundId = undefined;
+					const enteredDeep = await continueDeepKnowledge(
 							pi,
 							ctx,
 							sessionState,
@@ -2006,25 +2073,10 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					return;
 				}
 
-				if (command === "cancel") {
-					const current = sessionState.current();
-					const deepCancel =
-						current.stage === "DEEP_KNOWLEDGE_RETRIEVAL" ||
-						current.stage === "KNOWLEDGE_UNDERSTANDING" ||
-						(current.stage === "WAIT_USER" &&
-							(current.waitUser?.kind === "deep_decision" || current.waitUser?.kind === "deep_discovery_fallback"));
-					clearPendingState();
-					clearFallbackWorkflowState();
-					restoreActiveTools();
-					if (deepCancel) {
-						pendingGrillRun = false;
-						await publishState(pi, ctx, sessionState.cancelDeepKnowledge());
-						return;
-					}
-					activeWorkflow = undefined;
-					await publishState(pi, ctx, sessionState.reset());
-					return;
-				}
+			if (command === "cancel") {
+				await cancelWorkflow(ctx);
+				return;
+			}
 
 			if (command.startsWith("switch ")) {
 				const request = command.slice("switch ".length).trim();
@@ -2048,6 +2100,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				}
 				activeWorkflow = undefined;
 				clearFallbackWorkflowState();
+				pendingConvergenceRoundId = undefined;
 				clearPendingState();
 				restoreActiveTools();
 				sessionState.reset();
@@ -2344,14 +2397,15 @@ async function continueDeepKnowledge(
 		requireDeepToolBoundary: (ctx: CommandContext) => boolean,
 		setPendingReplayInvocation: (invocation: string) => void,
 		decisionSummary?: string,
-		_grillResult?: StructuredGrillResult,
-			onProceedToDeepKnowledge?: () => void,
-		deliveryMode: "settled" | "followUp" = "followUp",
-		): Promise<{ entered: boolean; invocation?: string }> {
-	const workflow = activeWorkflow;
-	const candidates = workflow?.lightDiscovery.codeBaseCandidates ?? [];
-	const relevance = evaluateCandidateRelevance(candidates);
-	if (workflow && relevance.decision !== "proceed_deep") {
+			_grillResult?: StructuredGrillResult,
+				onProceedToDeepKnowledge?: () => void,
+			deliveryMode: "settled" | "followUp" = "followUp",
+			bypassRelevance = false,
+			): Promise<{ entered: boolean; invocation?: string }> {
+		const workflow = activeWorkflow;
+		const candidates = workflow?.lightDiscovery.codeBaseCandidates ?? [];
+		const relevance = evaluateCandidateRelevance(candidates);
+		if (workflow && !bypassRelevance && relevance.decision !== "proceed_deep") {
 		const round = sessionState.continueGrillRound();
 		const evidenceIds = [...sessionState.getFetchedEvidenceIds()];
 		const waitUserPayload = {

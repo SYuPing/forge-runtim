@@ -58,6 +58,7 @@ export const DEEP_SEARCH_MAX_QUERY_CODE_POINTS = 1500;
 export const DEEP_SEARCH_MAX_PER_SOURCE_ROUND = 8;
 export const DEEP_EVIDENCE_MAX_BYTES = 256 * 1024;
 export const DEEP_EVIDENCE_ROUND_MAX_BYTES = 2 * 1024 * 1024;
+const GRILL_ANSWER_CHECKPOINT = 8;
 
 export function getDeepEvidenceContentBytes(
 	evidence: readonly Pick<EvidenceInput, "evidenceId" | "source" | "content">[],
@@ -195,8 +196,10 @@ export function createForgeSessionState(): ForgeSessionState {
 	const deepSupplementalEvidenceIds = new Set<string>();
 	const deepSupplementalEvidence = new Map<string, EvidenceInput>();
 	const fetchedEvidenceIds = new Set<string>();
-		let currentGrillRound: GrillRound | undefined;
-		let orchestrator: Orchestrator | undefined;
+			let currentGrillRound: GrillRound | undefined;
+			let grillAcceptedAnswerCount = 0;
+			let continueGrillCheckpointPending = false;
+			let orchestrator: Orchestrator | undefined;
 	let nextRoundId = 1;
 	let nextDeepAttemptId = 1;
 		let deepAttempt: DeepAttemptIdentity | undefined;
@@ -641,12 +644,31 @@ export function createForgeSessionState(): ForgeSessionState {
 				if (!uiState.waitUser) {
 					throw new Error("WAIT_USER requires a pending decision");
 				}
-				if (uiState.waitUser.kind === "deep_discovery_fallback" && !["同意", "確認"].includes(answer.trim())) {
+				const normalizedAnswer = answer.trim();
+				if (normalizedAnswer.length === 0) {
 					return uiState;
 				}
+					const pendingWaitUser = uiState.waitUser;
+					if (
+						(pendingWaitUser.kind === "grill_confirmation" || pendingWaitUser.kind === "grill_checkpoint") &&
+						(!currentGrillRound || pendingWaitUser.roundId !== currentGrillRound.roundId)
+					) {
+						return uiState;
+					}
+					if (uiState.waitUser.kind === "deep_discovery_fallback" && !["同意", "確認"].includes(normalizedAnswer)) {
+						return uiState;
+					}
 				const decisionId = uiState.waitUser.decisionId;
-			const decisionKey = waitUserDecisionKey(uiState.waitUser);
-			const isDeepDiscoveryFallback = uiState.waitUser.kind === "deep_discovery_fallback";
+				const isGrillConfirmation = uiState.waitUser.kind === "grill_confirmation";
+					const decisionKey = waitUserDecisionKey(uiState.waitUser);
+					if (pendingWaitUser.kind === "grill_checkpoint") {
+						if (normalizedAnswer !== "continue_one" && normalizedAnswer !== "converge") return uiState;
+						orchestrator.handleUserConfirmation();
+						continueGrillCheckpointPending = normalizedAnswer === "continue_one";
+						uiState = { ...uiState, waitUser: undefined };
+						return this.beginGrill();
+					}
+				const isDeepDiscoveryFallback = uiState.waitUser.kind === "deep_discovery_fallback";
 			const isRelevanceClarification = uiState.waitUser.kind === "relevance_clarification";
 			if (answeredDecisionKeys.has(decisionKey)) {
 				return uiState;
@@ -664,6 +686,29 @@ export function createForgeSessionState(): ForgeSessionState {
 					}),
 				);
 			}
+			if (isGrillConfirmation) {
+				grillAcceptedAnswerCount += 1;
+					if (grillAcceptedAnswerCount === GRILL_ANSWER_CHECKPOINT || continueGrillCheckpointPending) {
+						const round = currentGrillRound;
+					if (!round) throw new Error("Grill checkpoint requires an active round");
+					orchestrator = createOrchestrator({ initialStage: "GRILL" });
+					uiState = {
+						...uiState,
+						stage: orchestrator.handleGrillResult({ requiresUserConfirmation: true }),
+						waitUser: {
+							kind: "grill_checkpoint",
+							roundId: round.roundId,
+							decisionId: `grill-checkpoint-${round.roundId}`,
+							evidenceIds: [...pendingWaitUser.evidenceIds],
+							options: ["continue_one", "converge", "cancel"],
+							question: "Grill 已完成 8 次使用者確認，請選擇下一步。",
+							recommendation: "continue_one",
+						},
+					};
+					continueGrillCheckpointPending = false;
+					return uiState;
+				}
+			}
 			uiState = {
 				...uiState,
 				decisionSummary: `使用者已回答決策 ${JSON.stringify(decisionId)}：${JSON.stringify(answer)}。`,
@@ -679,6 +724,8 @@ export function createForgeSessionState(): ForgeSessionState {
 		deepSupplementalEvidence.clear();
 		fetchedEvidenceIds.clear();
 			currentGrillRound = undefined;
+			grillAcceptedAnswerCount = 0;
+			continueGrillCheckpointPending = false;
 			deepSearchBudgetRoundId = undefined;
 			deepSearchCount = 0;
 			deepSearchReservations.clear();
@@ -699,6 +746,10 @@ export function createForgeSessionState(): ForgeSessionState {
 		reject(selection) {
 			const recommended = uiState.waitUser?.recommendation;
 			const rejectedTo = selection ?? "reject";
+			if (orchestrator?.getStage() === "WAIT_USER") {
+				orchestrator.handleUserConfirmation();
+				orchestrator.transitionTo("GRILL");
+			}
 			uiState = {
 				...uiState,
 				decisionSummary: `User rejected recommendation ${JSON.stringify(recommended ?? "unknown")} and selected ${JSON.stringify(rejectedTo)}.`,
@@ -711,7 +762,7 @@ export function createForgeSessionState(): ForgeSessionState {
 			};
 			return uiState;
 		},
-		requireWaitUser(payload) {
+			requireWaitUser(payload) {
 			if (typeof payload.decisionId !== "string" || payload.decisionId.trim().length === 0) {
 				throw new Error("wait user payload requires decisionId");
 			}
@@ -719,7 +770,10 @@ export function createForgeSessionState(): ForgeSessionState {
 				throw new Error("wait user payload requires roundId");
 			}
 			const decisionKey = waitUserDecisionKey(payload);
-			if (payload.roundId !== currentGrillRound?.roundId && !answeredDecisionKeys.has(decisionKey)) {
+			if (answeredDecisionKeys.has(decisionKey) || humanDecisions.has(payload.decisionId)) {
+				return uiState;
+			}
+			if (payload.roundId !== currentGrillRound?.roundId) {
 				throw new Error("wait user payload roundId was not issued by runtime");
 			}
 			if (!orchestrator || orchestrator.getStage() === "RECEIVE") {
@@ -748,6 +802,8 @@ export function createForgeSessionState(): ForgeSessionState {
 			const isFirstRoundOfSnapshot = currentGrillRound?.snapshot !== snapshot;
 			deepAttempt = undefined;
 		if (isFirstRoundOfSnapshot) {
+			grillAcceptedAnswerCount = 0;
+			continueGrillCheckpointPending = false;
 			humanDecisions.clear();
 			deepSupplementalEvidenceIds.clear();
 			deepSupplementalEvidence.clear();

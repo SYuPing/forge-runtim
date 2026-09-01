@@ -40,8 +40,10 @@ test("SessionState_WhenDecisionAlreadyAnswered_ShouldRejectDuplicate", () => {
 		recommendation: "選擇 A",
 	});
 	session.recordAnswer("選擇 A");
+	const beforeReplay = structuredClone(session.current());
+	assert.equal(beforeReplay.stage, "GRILL");
 
-	session.requireWaitUser({
+	const replayedState = session.requireWaitUser({
 		kind: "grill_confirmation",
 		roundId: round.roundId,
 		decisionId: "decision-1",
@@ -51,16 +53,13 @@ test("SessionState_WhenDecisionAlreadyAnswered_ShouldRejectDuplicate", () => {
 		question: "是否要改採另一個方案？",
 		recommendation: "選擇 B",
 	});
-	const beforeDuplicate = structuredClone(session.current());
-	assert.equal(beforeDuplicate.stage, "WAIT_USER");
 
-	const rejectedState = session.recordAnswer("選擇 B");
-
-	assert.deepEqual(rejectedState, beforeDuplicate);
-	assert.deepEqual(session.current(), beforeDuplicate);
+	assert.deepEqual(replayedState, beforeReplay);
+	assert.deepEqual(session.current(), beforeReplay);
+	assert.equal(session.getHumanDecisions().length, 1);
 });
 
-test("SessionState_WhenSameDecisionIdAppearsInNewGrillRound_ShouldAnswerAgain", () => {
+test("SessionState_WhenSameDecisionIdAppearsInNewGrillRound_ShouldRejectWholeChainDuplicate", () => {
 	const session = createForgeSessionState();
 	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
 
@@ -77,7 +76,8 @@ test("SessionState_WhenSameDecisionIdAppearsInNewGrillRound_ShouldAnswerAgain", 
 	assert.equal(session.recordAnswer("採用").stage, "GRILL");
 
 	const secondRound = session.startGrillRound("第二輪普通確認", snapshot);
-	session.requireWaitUser({
+	const beforeDuplicate = structuredClone(session.current());
+	const duplicateState = session.requireWaitUser({
 		kind: "grill_confirmation",
 		roundId: secondRound.roundId,
 		decisionId: "decision-reused-across-rounds",
@@ -87,11 +87,57 @@ test("SessionState_WhenSameDecisionIdAppearsInNewGrillRound_ShouldAnswerAgain", 
 		recommendation: "改採用",
 	});
 
-	const finalState = session.recordAnswer("改採用");
+	assert.deepEqual(duplicateState, beforeDuplicate);
+	assert.deepEqual(session.current(), beforeDuplicate);
+	assert.equal(session.current().stage, "GRILL");
+	assert.equal(session.getHumanDecisions().length, 1);
+	assert.match(session.getHumanDecisions()[0]?.statement ?? "", /採用/);
+});
 
-	assert.equal(finalState.stage, "GRILL");
-	assert.equal(finalState.waitUser, undefined);
-	assert.ok(finalState.decisionSummary?.includes("改採用"));
+test("SessionState_WhenAnsweredOldRoundPayloadIsReplayed_ShouldNoOp", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	const firstRound = session.startGrillRound("第一輪確認", snapshot);
+	const payload = {
+		kind: "grill_confirmation" as const,
+		roundId: firstRound.roundId,
+		decisionId: "answered-old-round",
+		evidenceIds: [],
+		options: ["採用"],
+		question: "是否採用？",
+		recommendation: "採用",
+	};
+
+	session.requireWaitUser(payload);
+	session.recordAnswer("採用");
+	session.startGrillRound("第二輪確認", snapshot);
+	const beforeReplay = structuredClone(session.current());
+
+	assert.deepEqual(session.requireWaitUser(payload), beforeReplay);
+	assert.deepEqual(session.requireGrillResult(payload), beforeReplay);
+	assert.deepEqual(session.current(), beforeReplay);
+	assert.equal(session.getHumanDecisions().length, 1);
+});
+
+test("SessionState_WhenBlankAnswerIsRecorded_ShouldRemainWaitingWithoutSaving", () => {
+	const session = createForgeSessionState();
+	const round = session.startGrillRound("空白回答確認", Object.freeze({ candidates: {}, manifest: [] }));
+	session.requireWaitUser({
+		kind: "grill_confirmation",
+		roundId: round.roundId,
+		decisionId: "blank-answer",
+		evidenceIds: [],
+		options: ["採用"],
+		question: "是否採用？",
+		recommendation: "採用",
+	});
+	const beforeBlankAnswer = structuredClone(session.current());
+
+	const afterBlankAnswer = session.recordAnswer("   ");
+
+	assert.deepEqual(afterBlankAnswer, beforeBlankAnswer);
+	assert.deepEqual(session.current(), beforeBlankAnswer);
+	assert.equal(session.getHumanDecisions().length, 0);
 });
 
 test("SessionState_WhenContinueRequested_ShouldRetainRoundAndSnapshot", () => {
@@ -882,4 +928,162 @@ test("SessionState_WhenDeepEvidenceIdRepeats_ShouldKeepFirstSameContentAndReject
 	assert.deepEqual(session.getDeepSupplementalEvidence(), [firstEvidence]);
 	assert.deepEqual(session.current(), stateBeforeConflict);
 	assert.deepEqual(session.currentDeepAttempt(), identityBeforeConflict);
+});
+
+test("GrillRoundBudget_WhenAcceptedAnswersReachEight_ShouldRequireCheckpoint", () => {
+	const state = createForgeSessionState();
+	const snapshot = { candidates: {}, manifest: [] };
+	const round = state.startGrillRound("需要測試 Forge runtime", snapshot);
+
+	for (let answerNumber = 1; answerNumber <= 8; answerNumber += 1) {
+		state.requireGrillResult({
+			kind: "grill_confirmation",
+			roundId: round.roundId,
+			decisionId: `decision-${answerNumber}`,
+			evidenceIds: [],
+			options: ["確認"],
+			question: `第 ${answerNumber} 題`,
+			recommendation: "確認",
+		});
+		state.recordAnswer("確認");
+	}
+
+	assert.equal(state.getHumanDecisions().length, 8);
+	assert.equal(state.getHumanDecisions()[7]?.decisionId, "decision-8");
+	assert.equal(state.current().stage, "WAIT_USER");
+	assert.equal(state.current().waitUser?.kind, "grill_checkpoint");
+	assert.equal(state.current().waitUser?.roundId, round.roundId);
+});
+
+test("GrillRoundBudget_WhenAcceptedAnswersAreBelowEight_ShouldAllowNextRound", () => {
+	const state = createForgeSessionState();
+	const snapshot = { candidates: {}, manifest: [] };
+	const firstRound = state.startGrillRound("需要測試少於八次回答", snapshot);
+
+	for (let answerNumber = 1; answerNumber <= 7; answerNumber += 1) {
+		state.requireGrillResult({
+			kind: "grill_confirmation",
+			roundId: firstRound.roundId,
+			decisionId: `decision-${answerNumber}`,
+			evidenceIds: [],
+			options: ["確認"],
+			question: `第 ${answerNumber} 題`,
+			recommendation: "確認",
+		});
+		state.recordAnswer("確認");
+	}
+
+	const nextRound = state.startGrillRound("少於八次回答後開始下一輪", snapshot);
+
+	assert.notEqual(nextRound.roundId, firstRound.roundId);
+	assert.equal(nextRound.request, "少於八次回答後開始下一輪");
+	assert.equal(state.current().waitUser, undefined);
+	assert.notEqual(state.current().waitUser?.kind, "grill_checkpoint");
+});
+
+test("GrillRoundBudget_WhenCompletionIsRejectedOrRetried_ShouldNotConsumeBudget", () => {
+	const snapshot = { candidates: {}, manifest: [] };
+
+	const rejected = createForgeSessionState();
+	const rejectedRound = rejected.startGrillRound("拒絕完成後仍需完整回答", snapshot);
+	rejected.requireGrillResult({
+		kind: "grill_confirmation",
+		roundId: rejectedRound.roundId,
+		decisionId: "rejected-completion",
+		evidenceIds: [],
+		options: ["確認"],
+		question: "是否完成？",
+		recommendation: "確認",
+	});
+	rejected.reject("重新評估");
+	assert.equal(rejected.current().stage, "GRILL");
+	const rejectedRetry = rejected.continueGrillRound();
+
+	for (let answerNumber = 1; answerNumber <= 7; answerNumber += 1) {
+		rejected.requireGrillResult({
+			kind: "grill_confirmation",
+			roundId: rejectedRetry.roundId,
+			decisionId: `rejected-retry-${answerNumber}`,
+			evidenceIds: [],
+			options: ["確認"],
+			question: `拒絕後第 ${answerNumber} 題`,
+			recommendation: "確認",
+		});
+		rejected.recordAnswer("確認");
+	}
+	assert.equal(rejected.current().stage, "GRILL");
+	rejected.requireGrillResult({
+		kind: "grill_confirmation",
+		roundId: rejectedRetry.roundId,
+		decisionId: "rejected-retry-8",
+		evidenceIds: [],
+		options: ["確認"],
+		question: "拒絕後第 8 題",
+		recommendation: "確認",
+	});
+	rejected.recordAnswer("確認");
+	assert.equal(rejected.getHumanDecisions().length, 8);
+	assert.equal(rejected.current().waitUser?.kind, "grill_checkpoint");
+
+	const retried = createForgeSessionState();
+	const retriedRound = retried.startGrillRound("重試完成後仍需完整回答", snapshot);
+	retried.recordCompletionOmission();
+	const retryRound = retried.retryGrillRound();
+	assert.ok(retryRound);
+
+	for (let answerNumber = 1; answerNumber <= 7; answerNumber += 1) {
+		retried.requireGrillResult({
+			kind: "grill_confirmation",
+			roundId: retriedRound.roundId,
+			decisionId: `completion-retry-${answerNumber}`,
+			evidenceIds: [],
+			options: ["確認"],
+			question: `重試後第 ${answerNumber} 題`,
+			recommendation: "確認",
+		});
+		retried.recordAnswer("確認");
+	}
+	assert.equal(retried.current().stage, "GRILL");
+	retried.requireGrillResult({
+		kind: "grill_confirmation",
+		roundId: retriedRound.roundId,
+		decisionId: "completion-retry-8",
+		evidenceIds: [],
+		options: ["確認"],
+		question: "重試後第 8 題",
+		recommendation: "確認",
+	});
+	retried.recordAnswer("確認");
+	assert.equal(retried.getHumanDecisions().length, 8);
+	assert.equal(retried.current().waitUser?.kind, "grill_checkpoint");
+});
+
+test("GrillCheckpoint_WhenAnswerIsStaleOrDuplicated_ShouldRemainWaiting", () => {
+	const state = createForgeSessionState();
+	const snapshot = { candidates: {}, manifest: [] };
+	const round = state.startGrillRound("驗證 checkpoint 的過期回答", snapshot);
+
+	for (let answerNumber = 1; answerNumber <= 8; answerNumber += 1) {
+		state.requireGrillResult({
+			kind: "grill_confirmation",
+			roundId: round.roundId,
+			decisionId: `checkpoint-decision-${answerNumber}`,
+			evidenceIds: [],
+			options: ["確認"],
+			question: `第 ${answerNumber} 題`,
+			recommendation: "確認",
+		});
+		state.recordAnswer("確認");
+	}
+
+	const beforeStaleAnswer = structuredClone(state.current());
+	const staleAnswerState = state.recordAnswer("確認");
+
+	assert.deepEqual(staleAnswerState, beforeStaleAnswer);
+	assert.deepEqual(state.current(), beforeStaleAnswer);
+	assert.equal(state.current().stage, "WAIT_USER");
+	assert.equal(state.current().waitUser?.kind, "grill_checkpoint");
+	assert.equal(state.current().waitUser?.roundId, round.roundId);
+	assert.equal(state.getHumanDecisions().length, 8);
+	assert.equal(state.continueGrillRound().roundId, round.roundId);
 });

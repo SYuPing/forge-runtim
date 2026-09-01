@@ -2,7 +2,7 @@
 title: Grill 到 Deep Knowledge 的階段邊界與知識交接
 type: adr
 scope: Forge Runtime v4 Grill／Deep Knowledge handoff
-updated: 2026-08-27
+updated: 2026-09-01
 source: FORGE_RUNTIME_Arch_v4.md、ADR-0004、ADR-0006、ADR-0011、ADR-0014、docs/PLAN-A.md
 status: accepted/implemented
 ---
@@ -129,3 +129,21 @@ Implemented-and-automated-verified-awaiting-real-session。只修正本 amendmen
 ### 邊界
 
 未修改 `pi-main/`，無暫時 debug probe，review 僅針對指定 scope。blocked tool result `terminate=false` 與其他 Deep `/continue` panel 可能形成 steer 是殘餘風險，未宣稱已修；Grill `message_end` sibling risk 仍不在本 amendment。
+
+## Dated amendment：converge 後的單次 Deep handoff（2026-09-01）
+
+使用者明確決定：checkpoint 選擇 `converge` 後只啟動一次 convergence invocation。無真正知識盲點時，模型提交 `READY_FOR_DEEP`，runtime 沿既有 `continueDeepKnowledge` 進入 `DEEP_KNOWLEDGE_RETRIEVAL`；runtime 不得偽造 READY。真正知識盲點是完成 Deep Retrieval 所缺的客觀知識或證據，不包含可採用預設的 implementation detail。
+
+若存在真正知識盲點，最多問人類一題；保存回答後直接沿 `continueDeepKnowledge` 進 Deep，不回 `grill_checkpoint`、不再 Grill 或問第二題，也不偽造 READY。這是 Grill checkpoint 後的明確例外；material decision 仍必須由人類裁決。兩條測試驗收固定為無盲點 READY→Deep，以及一個盲點問一題後直接 Deep。
+
+## Dated amendment：Grill checkpoint handoff 完成（2026-09-01）
+
+上述 converge handoff 已完成實作與驗證：第 8 個有效回答後進 `grill_checkpoint`；`continue_one` 恰一正常 round；`converge` 無盲點由模型提交 `READY_FOR_DEEP` 後沿既有 `continueDeepKnowledge` 進 `DEEP_KNOWLEDGE_RETRIEVAL`，有盲點最多一題且回答後直接進 Deep。`pendingConvergenceRoundId` 與 final-answer guard 保持 round／答案邊界，不由 runtime 偽造 READY。
+
+證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`；GrillCheckpoint 4/4、三檔 189/189、完整 `npm test` 276/276。`npm run check` 僅剩未修改 `pi-main` `syntax-highlight.ts` 的 `highlight.js` TS7016 baseline。
+
+### Final correction（2026-09-01）
+
+converge 的兩個入口都明確跳過 relevance gate：無真正知識盲點 0 題直接進 `DEEP_KNOWLEDGE_RETRIEVAL`；有 1 題時回答後直接進 Deep。普通 empty-candidate 流程仍維持 `WAIT_USER`。checkpoint bare `cancel` 與既有 cancel 共用完整 cleanup；session 另防 blank、stale 與 cross-round duplicate answer。package 的 canonical skill 是 `forge-runtime/skills/grilling/SKILL.md`，`.pi` 不再是來源。
+
+最終證據：完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、diff check 0。`npm run check` 僅有未修改 `pi-main` `highlight.js` TS7016 baseline；package 仍含約 213 個 `.log`，屬既有 packaging debt。

@@ -3116,6 +3116,529 @@ async function settlePendingDeepPrompt(harness: ExtensionHarness): Promise<strin
 	return prompts[0]?.content ?? "";
 }
 
+test("GrillCheckpoint_WhenLimitIsReached_ShouldNotQueueFollowUp", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/grill-checkpoint.ts", "// GrillCheckpointNeedle evidence.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, intentRoute: "start_forge" });
+	const grillComplete = harness.registeredTools.get("forge_grill_complete");
+	const grillEvidence = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(grillComplete, "Expected forge_grill_complete tool");
+	assert.ok(grillEvidence, "Expected forge_grill_evidence tool");
+	const grillCompleteExecute = grillComplete.execute;
+	assert.ok(grillCompleteExecute);
+	const grillEvidenceExecute = grillEvidence.execute;
+	assert.ok(grillEvidenceExecute);
+
+	const initialResult = await harness.sendInput("請幫我釐清 GrillCheckpointNeedle grill-checkpoint.ts");
+	const initialInvocation = (initialResult as { text?: string }).text ?? "";
+	assert.equal((initialResult as { action?: string }).action, "transform");
+	assert.ok(initialInvocation, "Expected initial Grill invocation");
+	assert.match(initialInvocation, /grill-1/);
+	let invocation = initialInvocation;
+	const firstRoundId = /目前 Grill roundId:\s*(\S+)/.exec(initialInvocation)?.[1];
+	assert.ok(firstRoundId, "Expected initial Grill roundId");
+	const candidateId = /\bev-[0-9a-f]{64}\b/.exec(initialInvocation)?.[0];
+	if (!candidateId) assert.fail("Expected a Grill evidence candidate");
+	assert.equal(harness.observedUserMessageCalls.length, 0);
+	await grillEvidenceExecute("evidence-1", { candidateId }, undefined, undefined, harness.buildContext() as never);
+
+	const completeRound = async (roundId: string) => {
+		await grillCompleteExecute(
+			`complete-${roundId}`,
+			{
+				evidence: [candidateId],
+				questions: [{ id: `decision-${roundId}`, options: ["接受", "調整"], question: `第 ${roundId} 題決定` }],
+				recommendation: { value: "接受", reason: "需要使用者確認" },
+				requiresUserConfirmation: true,
+				roundId,
+				status: "NEEDS_CONFIRMATION",
+			},
+			undefined,
+			undefined,
+			harness.buildContext() as never,
+		);
+		await Promise.resolve();
+	};
+
+	for (let answerIndex = 1; answerIndex <= 8; answerIndex += 1) {
+		const roundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1] ?? firstRoundId;
+		await completeRound(roundId);
+		const followUpCountBeforeAnswer: number = harness.observedUserMessageCalls.length;
+		const answerResult = await harness.sendInput(`回答 ${answerIndex}`);
+		if (answerIndex < 8) {
+			assert.equal((answerResult as { action?: string }).action, "transform");
+			const nextInvocation = (answerResult as { text?: string }).text ?? "";
+			assert.ok(nextInvocation, `Expected follow-up invocation after answer ${answerIndex}`);
+			assert.match(nextInvocation, new RegExp(`grill-${answerIndex + 1}`));
+			invocation = nextInvocation;
+		} else {
+			assert.equal((answerResult as { action?: string }).action, "handled");
+			assert.doesNotMatch((answerResult as { text?: string }).text ?? "", /grill-9/);
+			assert.equal(
+				harness.observedUserMessageCalls.length,
+				followUpCountBeforeAnswer,
+				"The checkpoint answer must not queue a pending replay invocation",
+			);
+		}
+	}
+
+	assert.ok(harness.observedStatuses.some((status) => status.includes("WAIT_USER")), "Expected WAIT_USER state");
+});
+
+test("GrillCheckpoint_WhenContinueOneIsSelected_ShouldQueueExactlyOneNormalRound", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/grill-checkpoint.ts", "// GrillCheckpointNeedle evidence.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, intentRoute: "start_forge" });
+	const grillComplete = harness.registeredTools.get("forge_grill_complete");
+	const grillEvidence = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(grillComplete, "Expected forge_grill_complete tool");
+	assert.ok(grillEvidence, "Expected forge_grill_evidence tool");
+	const grillCompleteExecute = grillComplete.execute;
+	assert.ok(grillCompleteExecute);
+	const grillEvidenceExecute = grillEvidence.execute;
+	assert.ok(grillEvidenceExecute);
+
+	const initialResult = await harness.sendInput("請幫我釐清 GrillCheckpointNeedle grill-checkpoint.ts");
+	const initialInvocation = (initialResult as { text?: string }).text ?? "";
+	assert.equal((initialResult as { action?: string }).action, "transform");
+	assert.ok(initialInvocation, "Expected initial Grill invocation");
+	assert.match(initialInvocation, /grill-1/);
+	let invocation = initialInvocation;
+	const firstRoundId = /目前 Grill roundId:\s*(\S+)/.exec(initialInvocation)?.[1];
+	assert.ok(firstRoundId, "Expected initial Grill roundId");
+	const candidateId = /\bev-[0-9a-f]{64}\b/.exec(initialInvocation)?.[0];
+	if (!candidateId) assert.fail("Expected a Grill evidence candidate");
+	assert.equal(harness.observedUserMessageCalls.length, 0);
+	await grillEvidenceExecute("evidence-1", { candidateId }, undefined, undefined, harness.buildContext() as never);
+
+	const completeRound = async (roundId: string) => {
+		await grillCompleteExecute(
+			`complete-${roundId}`,
+			{
+				evidence: [candidateId],
+				questions: [{ id: `decision-${roundId}`, options: ["接受", "調整"], question: `第 ${roundId} 題決定` }],
+				recommendation: { value: "接受", reason: "需要使用者確認" },
+				requiresUserConfirmation: true,
+				roundId,
+				status: "NEEDS_CONFIRMATION",
+			},
+			undefined,
+			undefined,
+			harness.buildContext() as never,
+		);
+		await Promise.resolve();
+	};
+
+	for (let answerIndex = 1; answerIndex <= 8; answerIndex += 1) {
+		const roundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1] ?? firstRoundId;
+		await completeRound(roundId);
+		const answerResult = await harness.sendInput(`回答 ${answerIndex}`);
+		if (answerIndex < 8) {
+			assert.equal((answerResult as { action?: string }).action, "transform");
+			const nextInvocation = (answerResult as { text?: string }).text ?? "";
+			assert.ok(nextInvocation, `Expected follow-up invocation after answer ${answerIndex}`);
+			assert.match(nextInvocation, new RegExp(`grill-${answerIndex + 1}`));
+			invocation = nextInvocation;
+		} else {
+			assert.equal((answerResult as { action?: string }).action, "handled");
+			assert.doesNotMatch((answerResult as { text?: string }).text ?? "", /grill-9/);
+		}
+	}
+
+	const continueResult = await harness.sendInput("continue_one");
+	const continueInvocation = (continueResult as { text?: string }).text ?? "";
+	assert.equal((continueResult as { action?: string }).action, "transform");
+	assert.ok(continueInvocation, "Expected exactly one normal Grill round");
+	assert.match(continueInvocation, /grill-9/);
+	assert.doesNotMatch(continueInvocation, /這是明確收斂 round。/);
+	const continueRoundId = /目前 Grill roundId:\s*(\S+)/.exec(continueInvocation)?.[1];
+	assert.ok(continueRoundId, "Expected continue_one Grill roundId");
+	const followUpCountBeforeContinueRound = harness.observedUserMessageCalls.length;
+
+	await completeRound(continueRoundId);
+	const finalResult = await harness.sendInput("回答 continue_one 後的一輪");
+	assert.equal((finalResult as { action?: string }).action, "handled");
+	assert.doesNotMatch((finalResult as { text?: string }).text ?? "", /grill-10/);
+	assert.equal(
+		harness.observedUserMessageCalls.length,
+		followUpCountBeforeContinueRound,
+		"The completed continue_one round must not queue another normal round",
+	);
+	assert.ok(harness.observedStatuses.some((status) => status.includes("WAIT_USER")), "Expected WAIT_USER state");
+});
+
+test("GrillCheckpoint_WhenCancelIsSelected_ShouldResetToReceiveAndRestoreTools", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/grill-checkpoint.ts", "// GrillCheckpointNeedle evidence.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, intentRoute: "start_forge", initialActiveTools: ["read", "write"] });
+	const grillComplete = harness.registeredTools.get("forge_grill_complete");
+	const grillEvidence = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(grillComplete, "Expected forge_grill_complete tool");
+	assert.ok(grillEvidence, "Expected forge_grill_evidence tool");
+	const grillCompleteExecute = grillComplete.execute;
+	assert.ok(grillCompleteExecute);
+	const grillEvidenceExecute = grillEvidence.execute;
+	assert.ok(grillEvidenceExecute);
+
+	const initialResult = await harness.sendInput("請幫我釐清 GrillCheckpointNeedle grill-checkpoint.ts");
+	let invocation = (initialResult as { text?: string }).text ?? "";
+	assert.equal((initialResult as { action?: string }).action, "transform");
+	const firstRoundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1];
+	assert.ok(firstRoundId, "Expected initial Grill roundId");
+	const candidateId = /\bev-[0-9a-f]{64}\b/.exec(invocation)?.[0];
+	if (!candidateId) assert.fail("Expected a Grill evidence candidate");
+	await grillEvidenceExecute("cancel-checkpoint-evidence", { candidateId }, undefined, undefined, harness.buildContext() as never);
+
+	for (let answerIndex = 1; answerIndex <= 8; answerIndex += 1) {
+		const roundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1] ?? firstRoundId;
+		await grillCompleteExecute(
+			`cancel-checkpoint-complete-${roundId}`,
+			{
+				evidence: [candidateId],
+				questions: [{ id: `cancel-checkpoint-decision-${roundId}`, options: ["接受", "調整"], question: `第 ${roundId} 題決定` }],
+				recommendation: { value: "接受", reason: "需要使用者確認" },
+				requiresUserConfirmation: true,
+				roundId,
+				status: "NEEDS_CONFIRMATION",
+			},
+			undefined,
+			undefined,
+			harness.buildContext() as never,
+		);
+		const answerResult = await harness.sendInput(`取消測試前的第 ${answerIndex} 題`);
+		if (answerIndex < 8) {
+			assert.equal((answerResult as { action?: string }).action, "transform");
+			invocation = (answerResult as { text?: string }).text ?? "";
+			assert.match(invocation, new RegExp(`grill-${answerIndex + 1}`));
+		} else {
+			assert.equal((answerResult as { action?: string }).action, "handled");
+		}
+	}
+
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
+	const messageCountBeforeCancel = harness.observedUserMessageCalls.length;
+	const statusCountBeforeCancel = harness.observedStatuses.length;
+
+	await harness.sendInput("cancel");
+	assert.equal(harness.observedStatuses.at(-1), "Forge RECEIVE [active]");
+	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
+	assert.equal(harness.observedUserMessageCalls.length, messageCountBeforeCancel);
+	assert.equal(
+		harness.observedStatuses.slice(statusCountBeforeCancel).some((status) => /GRILL|DEEP_KNOWLEDGE_RETRIEVAL|WAIT_USER/.test(status)),
+		false,
+		"取消 checkpoint 後不得保留 waitUser 或建立 follow-up / 新 Grill",
+	);
+});
+
+test("GrillCheckpoint_WhenConvergeIsSelected_ShouldQueueExactlyOneConvergenceRound", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "code_base/src/grill-checkpoint.ts", "// GrillCheckpointNeedle evidence.\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, intentRoute: "start_forge" });
+	const grillComplete = harness.registeredTools.get("forge_grill_complete");
+	const grillEvidence = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(grillComplete, "Expected forge_grill_complete tool");
+	assert.ok(grillEvidence, "Expected forge_grill_evidence tool");
+	const grillCompleteExecute = grillComplete.execute;
+	assert.ok(grillCompleteExecute);
+	const grillEvidenceExecute = grillEvidence.execute;
+	assert.ok(grillEvidenceExecute);
+
+	const initialResult = await harness.sendInput("請幫我釐清 GrillCheckpointNeedle grill-checkpoint.ts");
+	const initialInvocation = (initialResult as { text?: string }).text ?? "";
+	assert.equal((initialResult as { action?: string }).action, "transform");
+	assert.ok(initialInvocation, "Expected initial Grill invocation");
+	assert.match(initialInvocation, /grill-1/);
+	let invocation = initialInvocation;
+	const firstRoundId = /目前 Grill roundId:\s*(\S+)/.exec(initialInvocation)?.[1];
+	assert.ok(firstRoundId, "Expected initial Grill roundId");
+	const candidateId = /\bev-[0-9a-f]{64}\b/.exec(initialInvocation)?.[0];
+	if (!candidateId) assert.fail("Expected a Grill evidence candidate");
+	await grillEvidenceExecute("evidence-1", { candidateId }, undefined, undefined, harness.buildContext() as never);
+
+	const completeRound = async (roundId: string, question = `第 ${roundId} 題決定`) => {
+		await grillCompleteExecute(
+			`complete-${roundId}`,
+			{
+				evidence: [candidateId],
+				questions: [{ id: `decision-${roundId}`, options: ["接受", "調整"], question }],
+				recommendation: { value: "接受", reason: "需要使用者確認" },
+				requiresUserConfirmation: true,
+				roundId,
+				status: "NEEDS_CONFIRMATION",
+			},
+			undefined,
+			undefined,
+			harness.buildContext() as never,
+		);
+		await Promise.resolve();
+	};
+
+	for (let answerIndex = 1; answerIndex <= 8; answerIndex += 1) {
+		const roundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1] ?? firstRoundId;
+		await completeRound(roundId);
+		const answerResult = await harness.sendInput(`回答 ${answerIndex}`);
+		if (answerIndex < 8) {
+			assert.equal((answerResult as { action?: string }).action, "transform");
+			const nextInvocation = (answerResult as { text?: string }).text ?? "";
+			assert.ok(nextInvocation, `Expected follow-up invocation after answer ${answerIndex}`);
+			assert.match(nextInvocation, new RegExp(`grill-${answerIndex + 1}`));
+			invocation = nextInvocation;
+		} else {
+			assert.equal((answerResult as { action?: string }).action, "handled");
+			assert.doesNotMatch((answerResult as { text?: string }).text ?? "", /grill-9/);
+		}
+	}
+
+	const convergeResult = await harness.sendInput("converge");
+	const convergeInvocation = (convergeResult as { text?: string }).text ?? "";
+	assert.equal((convergeResult as { action?: string }).action, "transform");
+	assert.ok(convergeInvocation, "Expected exactly one convergence Grill round");
+	assert.match(convergeInvocation, /grill-9/);
+	assert.match(convergeInvocation, /明確收斂 round/);
+	assert.match(convergeInvocation, /Deep Retrieval|DEEP_KNOWLEDGE_RETRIEVAL/i);
+	assert.match(convergeInvocation, /objective knowledge|客觀知識/i);
+	assert.match(convergeInvocation, /evidence|證據/i);
+	assert.match(convergeInvocation, /(?:不得|不應|不可|不能|不要)/i);
+	assert.match(convergeInvocation, /implementation detail|實作細節|實現細節/i);
+	assert.match(convergeInvocation, /問題|阻塞|blocker/i);
+	const convergeRoundId = /目前 Grill roundId:\s*(\S+)/.exec(convergeInvocation)?.[1];
+	assert.ok(convergeRoundId, "Expected converge roundId");
+
+	const deepPromptCountBeforeCompletion = harness.observedUserMessageCalls.length;
+	const completionResult = await grillCompleteExecute(
+		`complete-${convergeRoundId}`,
+		{
+			evidence: [candidateId],
+			questions: [],
+			recommendation: {
+				value: "READY_FOR_DEEP",
+				reason: "沒有真正知識盲點，只缺 Deep Retrieval 的客觀知識或證據。",
+			},
+			requiresUserConfirmation: false,
+			roundId: convergeRoundId,
+			status: "READY_FOR_DEEP",
+		},
+		undefined,
+		undefined,
+		harness.buildContext() as never,
+	);
+	assert.equal((completionResult as { terminate?: boolean }).terminate, true);
+	assert.equal((completionResult as { details?: { status?: string } }).details?.status, "READY_FOR_DEEP");
+	assert.equal(harness.observedUserMessageCalls.length, deepPromptCountBeforeCompletion);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+
+	const deepInvocation = await settlePendingDeepPrompt(harness);
+	assert.match(deepInvocation, /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.equal(harness.observedUserMessageCalls.length, deepPromptCountBeforeCompletion + 1);
+	assert.doesNotMatch(deepInvocation, /grill-10|grill_checkpoint|WAIT_USER/);
+	assert.equal(
+		harness.observedUserMessageCalls.filter(({ content }) => content.includes("DEEP_KNOWLEDGE_RETRIEVAL")).length,
+		1,
+		"Convergence READY_FOR_DEEP must start exactly one Deep Retrieval invocation",
+	);
+
+	const blindSpotRootDir = createTempRoot();
+	writeWorkspaceFile(blindSpotRootDir, "code_base/src/grill-checkpoint.ts", "// GrillCheckpointNeedle evidence.\n");
+	t.after(() => rmSync(blindSpotRootDir, { force: true, recursive: true }));
+	const blindSpotHarness = await createExtensionHarness({ cwd: blindSpotRootDir, intentRoute: "start_forge" });
+	const blindSpotComplete = blindSpotHarness.registeredTools.get("forge_grill_complete");
+	const blindSpotEvidence = blindSpotHarness.registeredTools.get("forge_grill_evidence");
+	assert.ok(blindSpotComplete, "Expected forge_grill_complete tool for knowledge blind spot");
+	assert.ok(blindSpotEvidence, "Expected forge_grill_evidence tool for knowledge blind spot");
+	const blindSpotCompleteExecute = blindSpotComplete.execute;
+	assert.ok(blindSpotCompleteExecute);
+	const blindSpotEvidenceExecute = blindSpotEvidence.execute;
+	assert.ok(blindSpotEvidenceExecute);
+	const blindSpotInitial = await blindSpotHarness.sendInput("請幫我釐清 GrillCheckpointNeedle grill-checkpoint.ts");
+	let blindSpotInvocation = (blindSpotInitial as { text?: string }).text ?? "";
+	assert.equal((blindSpotInitial as { action?: string }).action, "transform");
+	const blindSpotFirstRoundId = /目前 Grill roundId:\s*(\S+)/.exec(blindSpotInvocation)?.[1];
+	assert.ok(blindSpotFirstRoundId, "Expected knowledge blind spot initial Grill roundId");
+	const blindSpotCandidateId = /\bev-[0-9a-f]{64}\b/.exec(blindSpotInvocation)?.[0];
+	if (!blindSpotCandidateId) assert.fail("Expected a Grill evidence candidate for knowledge blind spot");
+	await blindSpotEvidenceExecute(
+		"blind-spot-evidence-1",
+		{ candidateId: blindSpotCandidateId },
+		undefined,
+		undefined,
+		blindSpotHarness.buildContext() as never,
+	);
+	for (let answerIndex = 1; answerIndex <= 8; answerIndex += 1) {
+		const roundId = /目前 Grill roundId:\s*(\S+)/.exec(blindSpotInvocation)?.[1] ?? blindSpotFirstRoundId;
+		await blindSpotCompleteExecute(
+			`blind-spot-complete-${roundId}`,
+			{
+				evidence: [blindSpotCandidateId],
+				questions: [{ id: `blind-spot-decision-${roundId}`, options: ["接受", "調整"], question: `第 ${roundId} 題決定` }],
+				recommendation: { value: "接受", reason: "需要使用者確認" },
+				requiresUserConfirmation: true,
+				roundId,
+				status: "NEEDS_CONFIRMATION",
+			},
+			undefined,
+			undefined,
+			blindSpotHarness.buildContext() as never,
+		);
+		const answerResult = await blindSpotHarness.sendInput(`回答知識盲點前的第 ${answerIndex} 題`);
+		if (answerIndex < 8) {
+			assert.equal((answerResult as { action?: string }).action, "transform");
+			blindSpotInvocation = (answerResult as { text?: string }).text ?? "";
+			assert.match(blindSpotInvocation, new RegExp(`grill-${answerIndex + 1}`));
+		} else {
+			assert.equal((answerResult as { action?: string }).action, "handled");
+		}
+	}
+
+	const blindSpotConvergeResult = await blindSpotHarness.sendInput("converge");
+	const blindSpotConvergenceInvocation = (blindSpotConvergeResult as { text?: string }).text ?? "";
+	assert.equal((blindSpotConvergeResult as { action?: string }).action, "transform");
+	assert.match(blindSpotConvergenceInvocation, /grill-9/);
+	assert.match(blindSpotConvergenceInvocation, /明確收斂 round/);
+	assert.match(blindSpotConvergenceInvocation, /Deep Retrieval|DEEP_KNOWLEDGE_RETRIEVAL/i);
+	assert.match(blindSpotConvergenceInvocation, /objective knowledge|客觀知識/i);
+	assert.match(blindSpotConvergenceInvocation, /evidence|證據/i);
+	assert.match(blindSpotConvergenceInvocation, /(?:不得|不應|不可|不能|不要)/i);
+	assert.match(blindSpotConvergenceInvocation, /implementation detail|實作細節|實現細節/i);
+	assert.match(blindSpotConvergenceInvocation, /問題|阻塞|blocker/i);
+	const blindSpotRoundId = /目前 Grill roundId:\s*(\S+)/.exec(blindSpotConvergenceInvocation)?.[1];
+	assert.ok(blindSpotRoundId, "Expected knowledge blind spot convergence roundId");
+	const deepPromptCountBeforeBlindSpotAnswer = blindSpotHarness.observedUserMessageCalls.length;
+	const blindSpotCompletion = await blindSpotCompleteExecute(
+		`blind-spot-converge-${blindSpotRoundId}`,
+		{
+			evidence: [blindSpotCandidateId],
+			questions: [{ id: "objective-knowledge-gap", options: ["補充客觀知識"], question: "缺少哪一項客觀知識證據？" }],
+			recommendation: { value: "需要一項客觀知識證據", reason: "真正知識盲點：缺少客觀知識或證據" },
+			requiresUserConfirmation: true,
+			roundId: blindSpotRoundId,
+			status: "NEEDS_CONFIRMATION",
+		},
+		undefined,
+		undefined,
+		blindSpotHarness.buildContext() as never,
+	);
+	await Promise.resolve();
+	assert.equal((blindSpotCompletion as { terminate?: boolean }).terminate, true);
+	assert.equal((blindSpotCompletion as { details?: { status?: string } }).details?.status, "NEEDS_CONFIRMATION");
+
+	const blindSpotAnswer = await blindSpotHarness.sendInput("補充：客觀知識證據是官方規格中的限制");
+	assert.equal((blindSpotAnswer as { action?: string }).action, "transform");
+	const blindSpotDeepInvocation = (blindSpotAnswer as { text?: string }).text ?? "";
+	assert.match(blindSpotDeepInvocation, /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.doesNotMatch(blindSpotDeepInvocation, /grill-10|grill_checkpoint|WAIT_USER/);
+	assert.equal(blindSpotHarness.observedUserMessageCalls.length, deepPromptCountBeforeBlindSpotAnswer);
+	assert.deepEqual(blindSpotHarness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+});
+
+test("GrillCheckpoint_WhenConvergeReadyHasOnlyWiki_ShouldEnterDeepWithoutRelevanceQuestion", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "wiki/ConvergenceOnlyWikiNeedle.md", "ConvergenceOnlyWikiNeedle 的客觀知識來源。\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, intentRoute: "start_forge" });
+	const grillComplete = harness.registeredTools.get("forge_grill_complete");
+	const grillEvidence = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(grillComplete?.execute);
+	assert.ok(grillEvidence?.execute);
+	const grillCompleteExecute = grillComplete.execute;
+	const grillEvidenceExecute = grillEvidence.execute;
+	const initialResult = await harness.sendInput("請幫我釐清 ConvergenceOnlyWikiNeedle");
+	let invocation = (initialResult as { text?: string }).text ?? "";
+	const firstRoundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1];
+	assert.ok(firstRoundId);
+	const candidateId = /\bev-[0-9a-f]{64}\b/.exec(invocation)?.[0];
+	assert.ok(candidateId);
+	await grillEvidenceExecute("convergence-only-wiki-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+	for (let answerIndex = 1; answerIndex <= 8; answerIndex += 1) {
+		const roundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1] ?? firstRoundId;
+		await grillCompleteExecute(`convergence-only-wiki-complete-${roundId}`, {
+			evidence: [candidateId],
+			questions: [{ id: `convergence-only-wiki-${roundId}`, options: ["接受"], question: `第 ${roundId} 題決定` }],
+			recommendation: { value: "接受", reason: "需要使用者確認" },
+			requiresUserConfirmation: true,
+			roundId,
+			status: "NEEDS_CONFIRMATION",
+		}, undefined, undefined, harness.buildContext());
+		const answerResult = await harness.sendInput(`回答 ${answerIndex}`);
+		if (answerIndex < 8) invocation = (answerResult as { text?: string }).text ?? "";
+	}
+
+	const convergeResult = await harness.sendInput("converge");
+	const convergeInvocation = (convergeResult as { text?: string }).text ?? "";
+	const convergeRoundId = /目前 Grill roundId:\s*(\S+)/.exec(convergeInvocation)?.[1];
+	assert.ok(convergeRoundId);
+	const convergenceStatusStartIndex = harness.observedStatuses.length;
+	const completionResult = await grillCompleteExecute(`convergence-only-wiki-ready-${convergeRoundId}`, {
+		evidence: [candidateId],
+		questions: [],
+		recommendation: { value: "READY_FOR_DEEP", reason: "沒有真正知識盲點，只缺客觀知識或證據。" },
+		requiresUserConfirmation: false,
+		roundId: convergeRoundId,
+		status: "READY_FOR_DEEP",
+	}, undefined, undefined, harness.buildContext());
+	assert.equal((completionResult as { details?: { status?: string } }).details?.status, "READY_FOR_DEEP");
+	const convergenceStatuses = harness.observedStatuses.slice(convergenceStatusStartIndex);
+	assert.match(convergenceStatuses.at(-1) ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.doesNotMatch(convergenceStatuses.join("\n"), /relevance_clarification|WAIT_USER/);
+	assert.doesNotMatch((await settlePendingDeepPrompt(harness)), /relevance_clarification|WAIT_USER/);
+});
+
+test("GrillCheckpoint_WhenConvergeHasOneKnowledgeGapWithOnlyWiki_ShouldEnterDeepAfterAnswer", async (t) => {
+	const rootDir = createTempRoot();
+	writeWorkspaceFile(rootDir, "wiki/ConvergenceKnowledgeGapNeedle.md", "ConvergenceKnowledgeGapNeedle 的客觀知識來源。\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, intentRoute: "start_forge" });
+	const grillComplete = harness.registeredTools.get("forge_grill_complete");
+	const grillEvidence = harness.registeredTools.get("forge_grill_evidence");
+	assert.ok(grillComplete?.execute);
+	assert.ok(grillEvidence?.execute);
+	const grillCompleteExecute = grillComplete.execute;
+	const grillEvidenceExecute = grillEvidence.execute;
+	const initialResult = await harness.sendInput("請幫我釐清 ConvergenceKnowledgeGapNeedle");
+	let invocation = (initialResult as { text?: string }).text ?? "";
+	const firstRoundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1];
+	assert.ok(firstRoundId);
+	const candidateId = /\bev-[0-9a-f]{64}\b/.exec(invocation)?.[0];
+	assert.ok(candidateId);
+	await grillEvidenceExecute("convergence-knowledge-gap-evidence", { candidateId }, undefined, undefined, harness.buildContext());
+	for (let answerIndex = 1; answerIndex <= 8; answerIndex += 1) {
+		const roundId = /目前 Grill roundId:\s*(\S+)/.exec(invocation)?.[1] ?? firstRoundId;
+		await grillCompleteExecute(`convergence-knowledge-gap-complete-${roundId}`, {
+			evidence: [candidateId],
+			questions: [{ id: `convergence-knowledge-gap-${roundId}`, options: ["接受"], question: `第 ${roundId} 題決定` }],
+			recommendation: { value: "接受", reason: "需要使用者確認" },
+			requiresUserConfirmation: true,
+			roundId,
+			status: "NEEDS_CONFIRMATION",
+		}, undefined, undefined, harness.buildContext());
+		const answerResult = await harness.sendInput(`回答 ${answerIndex}`);
+		if (answerIndex < 8) invocation = (answerResult as { text?: string }).text ?? "";
+	}
+
+	const convergeResult = await harness.sendInput("converge");
+	const convergeInvocation = (convergeResult as { text?: string }).text ?? "";
+	const convergeRoundId = /目前 Grill roundId:\s*(\S+)/.exec(convergeInvocation)?.[1];
+	assert.ok(convergeRoundId);
+	const completionResult = await grillCompleteExecute(`convergence-knowledge-gap-${convergeRoundId}`, {
+		evidence: [candidateId],
+		questions: [{ id: "objective-knowledge-gap", options: ["補充客觀知識"], question: "缺少哪一項客觀知識證據？" }],
+		recommendation: { value: "需要一項客觀知識證據", reason: "真正知識盲點：缺少客觀知識或證據" },
+		requiresUserConfirmation: true,
+		roundId: convergeRoundId,
+		status: "NEEDS_CONFIRMATION",
+	}, undefined, undefined, harness.buildContext());
+	assert.equal((completionResult as { details?: { status?: string } }).details?.status, "NEEDS_CONFIRMATION");
+	const answerResult = await harness.sendInput("補充：客觀知識證據是官方規格中的限制");
+	const deepInvocation = (answerResult as { text?: string }).text ?? "";
+	assert.equal((answerResult as { action?: string }).action, "transform");
+	assert.match(deepInvocation, /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.doesNotMatch(deepInvocation, /relevance_clarification|WAIT_USER/);
+});
+
 async function transformNeedsDiscoveryToolResult(
 	harness: ExtensionHarness,
 	toolCallId: string,
@@ -4509,7 +5032,7 @@ test("Extension_WhenUserConfirmed_ShouldResumeDeepKnowledge", async (t) => {
 	assert.match(nextInvocation, /grill-2/);
 	assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
 	assert.match(nextInvocation, /使用者已回答決策 "confirm"："confirm"。/);
-	assert.doesNotMatch(nextInvocation, /DEEP_KNOWLEDGE_RETRIEVAL|KNOWLEDGE_UNDERSTANDING/);
+	assert.doesNotMatch(nextInvocation, /Deep Knowledge 已開始。|Knowledge Understanding 已開始。/);
 });
 
 test("Extension_DeepRetrievalFollowUp_ShouldCarryTargetManifestIncludingEmptyList", async (t) => {
@@ -4623,7 +5146,7 @@ test("Extension_WhenUiSelectAvailable_ShouldUseSelectorToResumeWaitUser", async 
 	const nextInvocation = harness.observedUserMessageCalls[0]?.content ?? "";
 	assert.match(nextInvocation, /grill-2/);
 	assert.match(nextInvocation, new RegExp(escapeRegExp(manifestCandidate)));
-	assert.doesNotMatch(nextInvocation, /DEEP_KNOWLEDGE_RETRIEVAL|KNOWLEDGE_UNDERSTANDING/);
+	assert.doesNotMatch(nextInvocation, /Deep Knowledge 已開始。|Knowledge Understanding 已開始。/);
 });
 
 test("Extension_WhenSelectorCannotFollowUp_ShouldRemainWaitUser", async (t) => {

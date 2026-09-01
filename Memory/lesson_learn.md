@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-08-31
+updated: 2026-09-01
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: complete
 ---
@@ -283,3 +283,24 @@ status: complete
 
 - **測試 blocker**：RED 測試初版因 `completedSchema` 括號不平衡造成轉譯 blocker；修正括號後才取得有效 RED。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1839` 與本輪測試執行摘要。
 - **可重用教訓**：不得用錯誤 assertion 偽造 RED；既有正確行為應以 characterization regression 保護，避免測試失真。證據：同一回歸測試 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts:1839` 與測試執行摘要。
+
+## 2026-08-31 Grill 自動續問未收斂
+
+- **已驗證 bug／根因**：使用者提供的 session HTML 顯示 50 rounds 全為 `NEEDS_CONFIRMATION`、48 個 unique questions；`resumeGrillWithAnswer()` 在 `forge-runtime/extensions/forge-runtime.ts:391-437` 回答後持續建立下一 round，而 `forge-runtime/src/runtime/session-state.ts:744-764` 的 round ID 僅遞增，沒有 chain 自動收斂條件。根因已由 runtime + source 證據驗證，修正尚未實作。
+- **教訓**：`terminate: true` 只結束當前 agent turn，不能當作 Grill chain 完成；需要由 runtime 計數成功人類回答，在既有 WAIT_USER 建立 soft checkpoint，並對 stale／duplicate fail-closed。設計決策見 [`ADR-0025`](../docs/adr/ADR-0025-grill-soft-cap-human-checkpoint.md)。
+- **狀態**：本項已由本 ticket 修復；證據見 `forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts` 與 GrillCheckpoint／完整 suite 驗證。
+
+## 2026-09-01 Grill checkpoint 實作教訓
+
+- **狀態機 transition 根因**：checkpoint 只改 UI projection，未做 `USER_CONFIRMED → GRILL`，造成 `Invalid transition: USER_CONFIRMED -> WAIT_USER`；修正為 `session-state.beginGrill`，由 session-state regression 證實。
+- **convergence answer guard 根因**：guard 錯誤要求 `USER_CONFIRMED`，但正常 `recordAnswer` 後 state 是 `GRILL` 且無 `waitUser`；改以 `GRILL`／無 `waitUser` 判斷，convergence 回歸證實回答後直接進 Deep。
+- **測試與 skill 教訓**：harness direct input 的正常回傳是 `transform`，TUI 路徑才是 `handled`；skill 關鍵詞會讓舊測試過廣匹配，改用 runtime-only marker。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/grill/grill-skill.test.ts`。
+- **本輪未發現新 bug**：上述皆為本輪已驗證並修復的既有問題；剩餘唯一 check 風險為未修改 `pi-main` 的 `highlight.js` TS7016 baseline。
+
+## 2026-09-01 Grill checkpoint 最終回歸教訓
+
+- **bare cancel 未走 cleanup**：checkpoint 的文字輸入原先只接受兩個 option，直接輸入 `cancel` 會停在 `WAIT_USER`；修法是讓它重用既有 cancel cleanup。證據：`forge-runtime/extensions/forge-runtime.ts`、cancel 8/8。
+- **convergence 被 relevance gate 擋住**：空 code candidates 會觸發普通 relevance clarification；明確 convergence 入口應繞過該 gate，但普通 empty-candidate 仍須等待。證據：`forge-runtime/extensions/forge-runtime.ts`、精準 convergence/cancel/relevance 5/5。
+- **session 邊界缺口**：blank answer 原先會保存，舊 round replay 原先重建等待，跨 round duplicate decisionId 原先可能被接受；修法為 blank no-op、已回答 payload no-op、duplicate fail-closed。證據：`forge-runtime/src/runtime/session-state.ts`、session 33/33。
+- **package skill 路徑漂移**：`.pi/skills` 是被忽略的本機 mirror，無法可靠進 package；canonical source 改為 `forge-runtime/skills/grilling/SKILL.md`，並以 pack dry-run 與 isolated install/path resolution 驗證。證據：package 260 files 與 isolated install 結果。
+- **可重用教訓**：限制「最多一題」必須同時覆蓋 0 題與 1 題兩條入口；語意上的 true knowledge gap 目前只能由 prompt/skill 契約要求，沒有 runtime NLP classifier，不能宣稱已做程式化語意驗證。

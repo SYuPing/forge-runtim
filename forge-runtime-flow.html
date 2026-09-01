@@ -355,7 +355,7 @@
   <header>
     <p class="eyebrow">FORGE RUNTIME / 流程與進度</p>
     <h1>目前流程做到哪裡，從收到需求一路看到交接</h1>
-    <p>這張圖把目前真的做完、只做一部分，以及還沒做完的工作放在一起。進度更新到 2026/08/30；綠色是已完成，橘色是部分完成，灰色虛線是後續工作。</p>
+    <p>這張圖把目前真的做完、只做一部分，以及還沒做完的工作放在一起。進度更新到 2026/08/31；綠色是已完成，橘色是部分完成，灰色虛線是後續工作。</p>
   </header>
 
   <main>
@@ -451,13 +451,15 @@
               <li>同一批搜尋會先收齊，再只接續一次；只用來顯示的訊息不會誤開新的模型回合。</li>
               <li>第一次資料不足會自動重找；第二次仍不足時，會等待使用者明確確認再繼續。</li>
               <li>使用者明確同意的前提會和已查證資料一起保存；資料包的格式與交接已完成。</li>
-              <li>最新完整測試 248/248 通過，兩輪獨立審查也都通過。</li>
+              <li><code>knowledgeSummary</code> 只作白話摘要，不是正式依據；正式欄位與執行期證據仍由結構化資料包負責。</li>
+              <li>最新完整測試 266/266 通過，兩輪獨立審查也都通過。</li>
             </ul>
           </article>
           <article class="future">
             <h3>這一輪還沒做完</h3>
             <ul>
               <li>空白資料包目前仍可能通過最後檢查；「資料是否真的足夠」還需要另案補強。</li>
+              <li>由資料包自動啟動或排程後續的 Context Build，仍未納入本輪範圍。</li>
               <li>整理背景文件，以及後面的設計決定、規格、工作單、實作、測試與審查。</li>
               <li>完整控制面板與固定畫面配置。</li>
               <li>多來源摘要、知識卡、長期保存、第二次獨立查核與外部來源。</li>
@@ -626,10 +628,21 @@
             <p><strong>驗證：</strong>資料包 13/13、流程狀態 22/22、擴充功能 142/142、實際操作測試 12/12、完整測試 248/248，兩輪獨立審查都通過。整體程式檢查只剩未修改的上游 <code>highlight.js</code> 既有問題；Forge Runtime 本身沒有錯誤。</p>
           </article>
         </div>
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">08/31</p>
+            <h3>摘要可以幫人看懂，但不能替正式資料做決定</h3>
+            <p><strong>做了什麼：</strong>把 <code>knowledgeSummary</code> 的邊界說清楚：它是給人閱讀的白話摘要，不能新增主張，也不能控制 Context Build 的流程；正式工作只使用結構化欄位和執行期產生的證據編號。</p>
+            <p class="detail bug"><strong>當天 Bug：</strong>測試一開始因完成項目的 schema 括號不平衡，沒有取得有效的失敗結果，無法直接證明新規則真的被測到；本輪未發現新的 Forge Runtime 執行錯誤。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>修正 schema 括號後重新跑有效的先失敗、再通過測試，並確認互相矛盾的摘要不會改變正式 Context Builder 項目；沒有新增第二套資料格式，也沒有修改上游 <code>pi-main/</code>。</p>
+            <p><strong>驗證：</strong>有效測試由 145/1 變成 146/0，Context 單項測試 4/0，完整測試 266/266；規格與標準審查通過。整體程式檢查仍只被未修改的上游 <code>highlight.js</code> 宣告問題擋住。</p>
+          </article>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer>更新日期：2026/08/30。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、CONTEXT.md、docs/PLAN-A.md、docs/handoff.md、docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、agent-state/deep-discovery-fallback-human-premise-20260829.md。這是人工整理的進度快照，只反映文件已證實的範圍，不會自動讀取程式狀態。</footer>
+  <footer>更新日期：2026/08/31。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、CONTEXT.md、docs/PLAN-A.md、docs/handoff.md、docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、docs/adr/ADR-0022-forge-stage-ui-only-settled-decision-replay.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、agent-state/deep-discovery-fallback-human-premise-20260829.md、agent-state/knowledge-summary-authority-boundary-20260831.md。這是人工整理的進度快照，只反映文件已證實的範圍，不會自動讀取程式狀態。</footer>
 </body>
 </html>
