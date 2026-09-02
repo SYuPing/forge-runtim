@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-09-01
+updated: 2026-09-02
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: complete
 ---
@@ -304,3 +304,18 @@ status: complete
 - **session 邊界缺口**：blank answer 原先會保存，舊 round replay 原先重建等待，跨 round duplicate decisionId 原先可能被接受；修法為 blank no-op、已回答 payload no-op、duplicate fail-closed。證據：`forge-runtime/src/runtime/session-state.ts`、session 33/33。
 - **package skill 路徑漂移**：`.pi/skills` 是被忽略的本機 mirror，無法可靠進 package；canonical source 改為 `forge-runtime/skills/grilling/SKILL.md`，並以 pack dry-run 與 isolated install/path resolution 驗證。證據：package 260 files 與 isolated install 結果。
 - **可重用教訓**：限制「最多一題」必須同時覆蓋 0 題與 1 題兩條入口；語意上的 true knowledge gap 目前只能由 prompt/skill 契約要求，沒有 runtime NLP classifier，不能宣稱已做程式化語意驗證。
+
+## 2026-09-02 Deep Discovery fallback cancel lifecycle
+
+- **已驗證 bug／根因**：`deep_discovery_fallback` 原先將「同意」作為可見選項，且取消路徑沿用保留資料的 fallback cancel 契約，無法滿足回初始狀態的需求。證據：`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts` 與本輪 selector／typed input 回歸。
+- **修復方式**：可見選項改為「確認／取消」，共用 UI 保留「自行輸入…」；shared resume ingress 對精確 trim「取消」重用 fallback-specific cleanup、`sessionState.reset()` 與 active workflow 清除，回 `RECEIVE`；隱藏 trim「同意」維持相容確認，一般 `deep_decision` cancel 不變。
+- **可重用教訓**：涉及正式 workflow state 的取消，不可只改 label；必須驗證 selector、typed ingress、session input／evidence、extension markers 與 active workflow 的完整清理，並以 stale／duplicate regression 證明不重複 reset。證據：`forge-runtime/tests/runtime/session-state.test.ts`（33/33）、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`（153/153）、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`（14/14）、完整 `npm test` 282/282、`.tmp-deep-fallback-full-test-rerun.log`。
+- **已知驗證限制**：isolated verification 已在 detached worktree 完成，僅套用本 ticket 五個 code/test 檔；`npm test` 282/282、0 fail/skip，junction／worktree／patch 已清理。`npm run check` 與第二段獨立 tsc 仍 exit 2，因未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺少 `highlight.js` 語言模組型別 TS7016；不得修改上游或將此 blocker 寫成 runtime regression。
+
+## 2026-09-02 Spec Gap 驗證教訓
+
+- **malformed scenarios 錯誤放行**：初版 validator 讓 exploratory Spec Gap 的 `scenarios` 非陣列或含非字串元素回傳 `ok: true`；修正為共同 validator 驗證字串陣列，black-box 另要求非空。證據：`EvidencePackage_WhenBlackBoxScenariosInputChanges_ShouldKeepImmutableSnapshot`、`EvidencePackage_WhenSpecGapTargetIsMalformed_ShouldRejectWithoutThrowing` 及中間階段 evidence 29/29 GREEN（最終 evidence 為 28/28）。
+- **formalSpecReference `.trim()` throw**：非字串 target 等 malformed reference 造成 TypeError；修正為型別安全 `nonEmptyString`，壞型別／空白回 validation error。不應讓驗證器以 throw 取代 fail-closed。證據：`EvidencePackage_WhenSpecVerifiedHasFormalReference_ShouldValidate` 相關 malformed cases、中間階段 evidence 30/30 GREEN（最終 evidence 為 28/28）。
+- **公開 structural trusted context 可偽造**：公開 `TrustedFormalSpecContext` 只靠結構型別與相同 evidenceId 即可能被 caller 偽造；修正為移除公開 context 與第二 validator 參數，current runtime 的 `spec_verified` 固定 fail-closed，等待可信 importer／來源綁定。證據：第三輪 code review 與 S4e 30/30 GREEN。
+- **API 收窄後 typecheck 遺留**：移除第二 validator 參數後，source 過時比較與 tests 舊 fixture 造成 4 個本 ticket typecheck errors；修正 fixture／source 後才可重跑。證據：S4e 後 typecheck RED 紀錄及最終 `npm run check` 無本 ticket 診斷。
+- **output shape regression**：新增 optional `scenarios` 初版在缺失時輸出 `scenarios: undefined`，使既有 exploratory `deepStrictEqual` 失敗；修正為 optional 欄位缺失時不輸出。證據：S4b 首次 27 tests、26 pass／1 fail，後續 27/27 GREEN。

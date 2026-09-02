@@ -2207,3 +2207,174 @@ npm run check
 Plan A 已完成。checkpoint bare `cancel` 與既有 cancel 共用完整 cleanup；session 對 blank answer no-op、舊 round replay no-op、cross-round duplicate fail-closed。converge 的明確兩入口跳過 relevance：0 題直接 Deep，1 題回答後直接 Deep；普通 empty-candidate 仍等待使用者。canonical skill 為 `forge-runtime/skills/grilling/SKILL.md`。
 
 驗證：完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、`git diff --check` exit 0。`npm run check` 只剩未修改 `pi-main` 的 `highlight.js` TS7016 baseline；package 仍含約 213 個 `.log`，true knowledge gap 仍由 prompt/skill 契約約束，未加入 runtime NLP classifier。
+
+## Plan A：Deep Discovery fallback 選項與 full reset（2026-09-02）
+
+### 狀態
+
+（歷史狀態）設計完成後已獲核准並完成實作；本變更只建立單一 Plan A，未建立 Plan B。
+
+### Building
+
+- `deep_discovery_fallback` 可見 selector 僅「確認／取消」，共用 UI 追加「自行輸入…」。舊「同意」不顯示，但保留 trim 後精確相容輸入，等同確認。
+- 選擇「取消」或自行輸入精確「取消」時，清除本輪所有輸入與證據，回初始 `RECEIVE`。
+- 重用 `sessionState.reset()`（`forge-runtime/src/runtime/session-state.ts:720-741`）及 extension 外層既有清理；一般 `deep_decision` 的保留輸入取消契約不變。
+
+### Not Building
+
+不改 `pi-main/`、不重新定義自由輸入、不新增 state／tool schema／依賴、不沿用 `cancelDeepKnowledge()` 作 fallback 取消、不改一般 `deep_decision` 取消、不建立 Plan B。
+
+### Approach
+
+先由測試子代理新增 session option contract、extension selector full reset、typed input 精確「取消」reset、確認路徑不回歸，以及 stale／duplicate 不重複 reset 的 regression，執行第一個 RED；主代理確認紅燈後，才在兩個預期 production 檔做最小修正。沿用既有 reset 與 cleanup，不新增替代清理流程。
+
+### Files
+
+| 類別 | 檔案 | 內容 |
+| --- | --- | --- |
+| Production | `forge-runtime/src/runtime/session-state.ts` | fallback options 與 cancel/reset 分流 |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | selector／typed input cancel 的外層 cleanup 與 reset 呼叫 |
+| Tests | `forge-runtime/tests/runtime/session-state.test.ts` | option contract、full reset、確認與一般 deep cancel 不變 |
+| Tests | `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | selector／自行輸入精確取消、stale／duplicate guard |
+| Documents | `CONTEXT.md`、ADR-0021、ticket、agent-state、`docs/handoff.md` | durable status |
+| 不修改 | `pi-main/` | 上游原始碼維持不變 |
+
+### Tests
+
+至少涵蓋：session option 只公開「確認／取消」且共用 UI 有「自行輸入…」；selector「取消」清空輸入／evidence 並回 `RECEIVE`；自行輸入 trim 後精確「取消」同樣 reset；「確認」仍建立 fresh Understanding；一般 `deep_decision` 取消仍保留資料；stale／duplicate input 不重複 reset。第一個測試必須由測試子代理先打 RED。
+
+### Execution Order
+
+1. 下一 session 先讀 `docs/handoff.md`、展示 context 摘要並等待使用者確認。
+2. 使用者確認後，測試子代理先新增上述 regression 並執行第一個 RED；未見精確紅燈不得修改 production。
+3. production worker 只修改兩個預期檔，重用 `sessionState.reset()` 與既有 extension cleanup。
+4. 獨立驗證代理執行 targeted、完整 suite 與 check；再由獨立 review 代理檢查 scope、fail-closed 與一般 deep cancel 不變。
+5. 驗證後更新 durable 文件與 handoff；不得把未執行結果寫成通過。
+
+### Verification
+
+由獨立驗證子代理從 `forge-runtime/` 沿用 repo 現有命令：
+
+```text
+npm exec -- tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/runtime/session-state.test.ts
+npm exec -- tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/extensions/forge-runtime-extension.test.ts
+npm test
+npm run check
+```
+
+驗收須證明 full reset 清除 session input、evidence、fallback accumulator 與 extension markers，狀態為 `RECEIVE`；確認路徑與一般 `deep_decision` cancel 不回歸；stale／duplicate 不產生第二次 reset。保留既有 `pi-main` baseline error，不修改上游。
+
+### Fragile assumption
+
+最脆弱假設是共用 UI 的「自行輸入…」會將文字送入既有 typed input ingress，且外層 cleanup 可在 reset 前後安全重複呼叫；測試需以實際 selector／ingress 與 stale identity 證明，不以 mock 取代流程。
+
+### Execution complete（2026-09-02）
+
+Plan A 已完成 execution。production 檔案為 `forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`；測試檔案為 `forge-runtime/tests/runtime/session-state.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。可見 options 為「確認／取消」，共用 UI 保留「自行輸入…」；fallback cancel 與精確 typed cancel 清除所有輸入／證據並回 `RECEIVE`，確認及一般 `deep_decision` cancel 不變。
+
+驗證：session-state 33/33、extension 153/153、真實 TUI 14/14、完整 `npm test` 282/282；完整 log `.tmp-deep-fallback-full-test-rerun.log`。review 已完成且無阻擋 finding，`git diff -- pi-main` 無輸出。`npm run check` 與第二段獨立 tsc 均 exit 2，僅因未修改的 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺少 `highlight.js` 語言模組型別 TS7016；不得寫成 check 通過。isolated verification 已完成：以 HEAD `fdccbd62403e40ba3400761bc0468668820a8059` 建 detached worktree，僅套用本 ticket 五個 code/test 檔 patch，未 install、未改 `pi-main`，`npm test` exit 0，282/282、0 fail/skip；worktree、junction 與 patch 已安全清理。
+
+## Plan A：Spec Gap 探索性開發與驗證層級（2026-09-02）
+
+### 狀態
+
+`design-confirmed-not-implemented`。使用者已核准；只建立一份 Plan A，因本案是 Evidence／Workflow 契約，沒有獨立 UI 視圖或視覺驗收，故不拆 Plan B。
+
+### Building
+
+- 在既有 Evidence Package／limitation 契約中表達 `Spec Gap`：`target`、可選 `version`、`reason`、`missingEvidence`、`impact`。
+- 固定 `exploratory`、`black_box_verified`、`spec_verified` 三層驗證；探索層允許本機實作、mock、模擬器與唯讀驗證，但不得宣稱相容／符合 spec。
+- 黑箱層只有在目標、版本、環境、情境、日期齊全時成立，主張限定為指定環境實測；正式 spec 可核對時才成立 spec verified。
+- 高風險真實操作在正式 spec 或對應真實驗證前標示禁止；本案只建立契約，不假稱具備任意 shell／外部操作 execution guard。
+- 復用非 blocking limitation／`human_premise`，不新增完整 state，不修改 `pi-main/`。
+
+### Not Building
+
+- 不自動取得、繞過權限或推測正式 spec；不把 mock、推論或單次成功測試升格為完整相容性。
+- 不新增完整 `SPEC_GAP` state、第二份 Evidence DTO、第二模型、依賴、UI 或 NLP classifier。
+- 不實作任意 shell／外部操作 capability guard；可靠 enforcement 另案設計。
+- 不放寬既有 fail-closed validator，不修改 `pi-main/`。
+
+### Files
+
+| 類別 | 檔案 | 預計變動 |
+| --- | --- | --- |
+| Production | `forge-runtime/src/evidence/evidence-engine.ts` | 延伸既有 limitation／Evidence Package 契約，保存 Spec Gap 與驗證層級並維持 immutable／引用驗證。 |
+| Production | `forge-runtime/extensions/forge-runtime.ts` | 在 Knowledge completion schema／handler 接入 Spec Gap，保留探索型完成與主張限制。 |
+| Tests | `forge-runtime/tests/evidence/evidence-engine.test.ts` | Spec Gap 欄位、層級、immutable 與升級條件。 |
+| Tests | `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | schema／handler、exploratory completion、black-box binding 與 spec evidence regression。 |
+| Documents | `CONTEXT.md`、本文件、ADR、ticket、agent-state、`docs/handoff.md` | 記錄決策、執行與狀態。 |
+| 不修改 | `pi-main/` | 維持上游原始碼不變。 |
+
+### 最小可獨立合併 slices
+
+1. **S1 Evidence RED→GREEN**：先驗證五欄位、三層級與 immutable／引用邊界，再做最小 engine mapping。
+2. **S2 Claim boundary RED→GREEN**：先驗證 exploratory 可完成但不可宣稱相容、black-box 欄位不完整拒絕升級、欄位完整限定指定環境實測，再接 extension schema／handler。
+3. **S3 Regression／cleanup RED→GREEN**：先驗證 reset／new workflow／switch 不殘留 Spec Gap，確認既有 human premise、blocking limitation、正常 Deep 流程不回歸。
+
+每個 slice 先由獨立測試角色新增測試並執行第一個 RED；確認後才由 production worker 做最小修改，最後由獨立驗證與 review 角色執行。主 context 不直接執行測試。
+
+### Tests 與命令
+
+第一個紅燈從 Evidence seam 開始；實際測試名稱與 API 以 CodeGraph 窄查結果為準，不先臆測：
+
+```text
+cd forge-runtime
+npx tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/evidence/evidence-engine.test.ts
+npx tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/extensions/forge-runtime-extension.test.ts
+npm run check
+npm test
+```
+
+驗收需證明：探索型 Knowledge 可完成但保留 Spec Gap；不完整黑箱 binding 不可升級；完整黑箱只產生指定環境實測主張；正式 spec 證據才可形成 spec verified；既有流程與清理契約不回歸。完整 log 不貼回父代理。
+
+### 最脆弱假設
+
+- 現有 Evidence Package 的 `limitations` 可承載五欄位與層級；若型別不足，先更新 ADR／Plan，不繞過契約。
+- 高風險禁止目前只有資料／workflow 契約，沒有可靠 execution guard；不得把提示或欄位當成安全 enforcement。
+- 缺任何黑箱 binding 欄位時維持 exploratory 或 needs discovery，不猜測補值；正式 spec 來源必須可核對。
+
+### Rollback
+
+只回退本 ticket 的 production／test 變更與本 Plan／ADR／ticket／state／handoff 新增段落；保留既有 human premise、Evidence Package、Knowledge Summary 與歷史紀錄，不修改 `pi-main`。若 S1 證明既有 seam 不足，停止並重新設計。
+
+### Plan A 最終收斂（2026-09-02）
+
+S1–S4e 全部完成。Evidence 28/28、`forge-runtime npm test` 292/292（0 fail／skip／cancelled／todo，約 30.15 秒）；`npm run check` 無本 ticket 診斷，僅有未修改上游 `pi-main` 的 21 個 TS7016；CodeGraph review 無阻擋 finding，diff check 無 whitespace error。
+
+正式 spec 仍不可由 current runtime 驗證：可信 formal-spec importer、不可偽造 capability／來源綁定列為獨立後續 ticket；generic execution guard 亦為獨立後續工作。exploratory／black-box 可繼續，不能宣稱 `spec_verified` 已可用。Plan A 狀態：`implementation-complete-verified`。
+
+### S1–S3 實作與驗證狀態（2026-09-02）
+
+（歷史執行紀錄）S1–S3 已完成；後續 S4a–S4e 亦已完成。最終狀態與驗證以本文件「Plan A 最終收斂」為準。
+
+### S4：Formal-spec trust boundary 與輸入安全（追加 slice）
+
+#### Building
+
+- （已被 S4e 收窄取代的中間方案）原先規劃由 runtime 另外傳入受信任 formal-spec validation context，包含 `evidenceId`、`target`、`version`、`locator`；現行 API 已移除 `TrustedFormalSpecContext` 與第二個 validator 參數，`spec_verified` 在 current runtime 固定 fail-closed。
+- 驗證 context 的 `evidenceId` 必須指向 package 中可核對的正式 spec evidence；`formalSpecReference` 僅是主張，不得自行證明 spec。
+- 對 `scenarios` 做深度 immutable，並讓新增欄位的 malformed runtime input 回傳 validation error、維持 fail-closed，不以 throw 結束流程。
+
+#### Not Building
+
+不建立 generic execution guard、不修改 `pi-main/`、不放寬 exploratory／black-box／spec_verified 的既有主張邊界、不新增完整 workflow state 或第二份 evidence 真相來源。
+
+#### Files
+
+沿用 `forge-runtime/src/evidence/evidence-engine.ts` 與其既有 focused tests；若 RED 證明 extension schema／handler 也需調整，才擴至 `forge-runtime/extensions/forge-runtime.ts` 及對應測試。文件同步檔仍為本 Plan、ADR-0026、ticket、agent-state、handoff、CONTEXT。
+
+#### TDD／Verification
+
+（歷史執行紀錄）先建立 remediation RED，再完成最小 production 修正、獨立驗證與 code review；S4a–S4e 已完成。
+
+#### Fragile assumptions／Rollback
+
+最脆弱假設是 runtime 能可靠區分受信任 formal-spec context 與模型提交的 reference；若無法建立此邊界，必須維持非 `spec_verified`，不得猜測升級。回滾只撤回 S4 production／test 與本次文件追加段落，保留已完成的 S1–S3 與既有 Spec Gap 契約。
+
+### 二次 review 與 S4c 追加（2026-09-02）
+
+- 目前 runtime 沒有 trusted formal-spec importer／context provider；live `spec_verified` 故意 fail-closed，`exploratory`／`black_box_verified` 不受影響。正式 source importer 另立 ticket，不宣稱正式升級已可用。
+- S4c：若 `scenarios` 欄位存在，任何 verification level 均須為字串陣列，型別錯誤回傳 validation error 且不得 throw；`black_box_verified` 另須非空。
+- S4a／S4b test context fixture 型別錯誤已修正，並已完成 S4c RED→GREEN、完整驗證與二次獨立 code/document review。
+- Plan A 已完成；generic execution guard 仍維持後續 gap。

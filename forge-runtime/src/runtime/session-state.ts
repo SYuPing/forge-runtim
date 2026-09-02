@@ -456,7 +456,7 @@ export function createForgeSessionState(): ForgeSessionState {
 							roundId: identity.sourceRoundId,
 							decisionId: `${identity.attemptId}-deep-discovery-fallback`,
 							evidenceIds: [...fetchedEvidenceIds],
-							options: ["確認", "同意"],
+							options: ["確認", "取消"],
 							question: "此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認",
 							recommendation: "確認",
 						},

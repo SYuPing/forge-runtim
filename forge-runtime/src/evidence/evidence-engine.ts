@@ -24,6 +24,26 @@ export interface EvidenceFinding {
 	readonly evidenceIds: readonly string[];
 }
 
+export type EvidenceVerificationLevel = "exploratory" | "black_box_verified" | "spec_verified";
+
+export interface SpecGap {
+	readonly target: string;
+	readonly version?: string;
+	readonly environment?: string;
+	readonly scenarios?: readonly string[];
+	readonly verifiedAt?: string;
+	readonly reason: string;
+	readonly missingEvidence: readonly string[];
+	readonly impact: string;
+}
+
+export interface FormalSpecReference {
+	readonly target: string;
+	readonly version: string;
+	readonly locator: string;
+	readonly evidenceId: string;
+}
+
 export interface EvidenceLimitation {
 	readonly statement: string;
 	readonly blocking: boolean;
@@ -37,6 +57,9 @@ export interface EvidencePackage {
 	readonly decisions: readonly EvidenceDecision[];
 	readonly findings: readonly EvidenceFinding[];
 	readonly limitations: readonly EvidenceLimitation[];
+	readonly verificationLevel?: EvidenceVerificationLevel;
+	readonly specGap?: SpecGap;
+	readonly formalSpecReference?: FormalSpecReference;
 }
 
 export interface EvidencePackageInput {
@@ -47,12 +70,17 @@ export interface EvidencePackageInput {
 	readonly findings: readonly EvidenceFinding[];
 	readonly limitations: readonly EvidenceLimitation[];
 	readonly knowledgeSummary: string;
+	readonly verificationLevel?: EvidenceVerificationLevel;
+	readonly specGap?: SpecGap;
+	readonly formalSpecReference?: FormalSpecReference;
 }
 
 export type EvidencePackageValidationResult = { ok: true } | { ok: false; errors: string[] };
 
 export const EVIDENCE_PACKAGE_MAX_ITEMS = 50;
 export const EVIDENCE_PACKAGE_MAX_STATEMENT_CODE_POINTS = 4000;
+
+const nonEmptyString = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
 	if (value === null || typeof value !== "object" || seen.has(value)) return value;
@@ -78,6 +106,24 @@ export function createEvidencePackage(input: EvidencePackageInput): EvidencePack
 		input.findings.map((item) => Object.freeze({ ...item, evidenceIds: Object.freeze([...item.evidenceIds]) })),
 	);
 	const limitations = Object.freeze(input.limitations.map((item) => Object.freeze({ ...item })));
+	const specGap = input.specGap
+		? Object.freeze({
+				...input.specGap,
+				missingEvidence: Array.isArray(input.specGap.missingEvidence)
+					? Object.freeze([...input.specGap.missingEvidence])
+					: input.specGap.missingEvidence,
+				...(input.specGap.scenarios !== undefined
+					? {
+							scenarios: Array.isArray(input.specGap.scenarios)
+								? deepFreeze([...input.specGap.scenarios])
+								: input.specGap.scenarios,
+						}
+					: {}),
+			})
+			: undefined;
+	const formalSpecReference = input.formalSpecReference
+		? Object.freeze({ ...input.formalSpecReference })
+		: undefined;
 
 	return Object.freeze({
 		knowledgeSummary: input.knowledgeSummary,
@@ -86,6 +132,9 @@ export function createEvidencePackage(input: EvidencePackageInput): EvidencePack
 		decisions,
 		findings,
 		limitations,
+		...(input.verificationLevel ? { verificationLevel: input.verificationLevel } : {}),
+		...(specGap ? { specGap } : {}),
+		...(formalSpecReference ? { formalSpecReference } : {}),
 	});
 }
 
@@ -94,6 +143,60 @@ export function validateEvidencePackage(evidencePackage: EvidencePackage): Evide
 	if (!knowledgeSummary) {
 		return { ok: false, errors: ["knowledgeSummary 不可為空白"] };
 	}
+	if (
+		evidencePackage.verificationLevel !== undefined &&
+		!(["exploratory", "black_box_verified", "spec_verified"] as const).includes(evidencePackage.verificationLevel)
+	) {
+		return { ok: false, errors: ["verificationLevel 不合法"] };
+	}
+		if (evidencePackage.verificationLevel !== undefined || evidencePackage.specGap !== undefined) {
+			const specGap = evidencePackage.specGap;
+			if (!specGap || typeof specGap !== "object") return { ok: false, errors: ["verificationLevel 需要完整 Spec Gap"] };
+			if (!nonEmptyString(specGap.target)) return { ok: false, errors: ["Spec Gap target 不可為空白"] };
+		if (!nonEmptyString(specGap.reason)) return { ok: false, errors: ["Spec Gap reason 不可為空白"] };
+		if (!nonEmptyString(specGap.impact)) return { ok: false, errors: ["Spec Gap impact 不可為空白"] };
+		if (specGap.version !== undefined && !nonEmptyString(specGap.version)) {
+			return { ok: false, errors: ["Spec Gap version 不可為空白"] };
+		}
+		if (specGap.environment !== undefined && !nonEmptyString(specGap.environment)) {
+			return { ok: false, errors: ["Spec Gap environment 不可為空白"] };
+		}
+		if (specGap.verifiedAt !== undefined && !nonEmptyString(specGap.verifiedAt)) {
+			return { ok: false, errors: ["Spec Gap verifiedAt 不可為空白"] };
+		}
+			if (
+				!Array.isArray(specGap.missingEvidence) ||
+				specGap.missingEvidence.length === 0 ||
+				specGap.missingEvidence.some((item) => !nonEmptyString(item))
+			) {
+				return { ok: false, errors: ["Spec Gap missingEvidence 不可為空白"] };
+			}
+			if (specGap.scenarios !== undefined && (!Array.isArray(specGap.scenarios) || specGap.scenarios.some((item) => typeof item !== "string"))) {
+				return { ok: false, errors: ["Spec Gap scenarios 必須是字串陣列"] };
+			}
+			if (evidencePackage.verificationLevel === "black_box_verified") {
+			if (!nonEmptyString(specGap.version)) return { ok: false, errors: ["black_box_verified 需要 Spec Gap version"] };
+			if (!nonEmptyString(specGap.environment)) return { ok: false, errors: ["black_box_verified 需要 Spec Gap environment"] };
+			if (
+				!Array.isArray(specGap.scenarios) ||
+				specGap.scenarios.length === 0 ||
+				specGap.scenarios.some((item) => !nonEmptyString(item))
+			) {
+				return { ok: false, errors: ["black_box_verified 需要非空 Spec Gap scenarios"] };
+			}
+			if (!nonEmptyString(specGap.verifiedAt)) return { ok: false, errors: ["black_box_verified 需要 Spec Gap verifiedAt"] };
+		}
+	}
+	if (evidencePackage.verificationLevel === "spec_verified") {
+			const reference = evidencePackage.formalSpecReference;
+			if (!reference) return { ok: false, errors: ["spec_verified 需要 formalSpecReference"] };
+				if (!nonEmptyString(reference.target)) return { ok: false, errors: ["formalSpecReference target 不可為空白"] };
+				if (!nonEmptyString(reference.version)) return { ok: false, errors: ["formalSpecReference version 不可為空白"] };
+				if (!nonEmptyString(reference.locator)) return { ok: false, errors: ["formalSpecReference locator 不可為空白"] };
+				if (!nonEmptyString(reference.evidenceId)) return { ok: false, errors: ["formalSpecReference evidenceId 不可為空白"] };
+			// 尚無 runtime trusted formal-spec importer；caller 提供的同形狀物件不具授權能力。
+			return { ok: false, errors: ["spec_verified 需要受信任的 formal spec context"] };
+		}
 	if (Array.from(knowledgeSummary).length > EVIDENCE_PACKAGE_MAX_STATEMENT_CODE_POINTS) {
 		return {
 			ok: false,
@@ -146,7 +249,7 @@ export function validateEvidencePackage(evidencePackage: EvidencePackage): Evide
 		evidenceOrigins.set(evidence.evidenceId, evidence.origin);
 	}
 
-	for (const finding of evidencePackage.findings) {
+		for (const finding of evidencePackage.findings) {
 		if (finding.evidenceIds.length === 0) {
 			return { ok: false, errors: ["Finding 至少需要一個 Evidence ID"] };
 		}

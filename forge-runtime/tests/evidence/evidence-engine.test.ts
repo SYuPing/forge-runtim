@@ -440,6 +440,262 @@ test("EvidencePackage_WhenBlockingGapExists_ShouldRejectCompleted", () => {
 	assert.equal(validation.ok, false);
 });
 
+test("EvidencePackage_WhenExploratorySpecGapIsComplete_ShouldValidateWithoutBlocking", () => {
+	const exploratoryPackage = createEvidencePackage({
+		knowledgeSummary: "規格尚未取得時的探索性實作",
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [{ statement: "正式 spec 尚未取得", blocking: false }],
+		verificationLevel: "exploratory",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式文件受 NDA 限制",
+			missingEvidence: ["完整訊息格式與時序定義"],
+			impact: "只能進行 mock 與本機探索，不能宣稱正式相容",
+		},
+	} as unknown as Parameters<typeof createEvidencePackage>[0]);
+
+	assert.equal(exploratoryPackage.verificationLevel, "exploratory");
+	assert.deepEqual(exploratoryPackage.specGap, {
+		target: "Target Protocol",
+		reason: "正式文件受 NDA 限制",
+		missingEvidence: ["完整訊息格式與時序定義"],
+		impact: "只能進行 mock 與本機探索，不能宣稱正式相容",
+	});
+	assert.deepEqual(validateEvidencePackage(exploratoryPackage), { ok: true });
+});
+
+test("EvidencePackage_WhenBlackBoxBindingIsIncomplete_ShouldRejectUpgrade", () => {
+	const blackBoxPackage = createEvidencePackage({
+		knowledgeSummary: "黑箱驗證資料缺少可重現綁定資訊",
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [{ statement: "正式 spec 尚未取得", blocking: false }],
+		verificationLevel: "black_box_verified",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式文件受 NDA 限制",
+			missingEvidence: ["完整訊息格式與時序定義"],
+			impact: "只能宣稱指定環境實測",
+		},
+	} as unknown as Parameters<typeof createEvidencePackage>[0]);
+
+	const validation = validateEvidencePackage(blackBoxPackage);
+
+	assert.equal(validation.ok, false);
+});
+
+test("EvidencePackage_WhenBlackBoxScenariosInputChanges_ShouldKeepImmutableSnapshot", () => {
+	const scenarios = ["建立連線", "交換訊息"];
+	const blackBoxPackage = createEvidencePackage({
+		knowledgeSummary: "黑箱驗證情境應被快照化",
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		verificationLevel: "black_box_verified",
+		specGap: {
+			target: "Target Protocol",
+			version: "1.0",
+			environment: "simulator",
+			scenarios,
+			verifiedAt: "2026-09-02T00:00:00Z",
+			reason: "正式文件尚未取得",
+			missingEvidence: ["完整訊息格式"],
+			impact: "僅能宣稱指定環境實測",
+		},
+	});
+
+	scenarios[0] = "被修改的情境";
+	scenarios.push("被追加的情境");
+
+	assert.equal(Object.isFrozen(blackBoxPackage.specGap), true);
+	assert.equal(Object.isFrozen(blackBoxPackage.specGap?.scenarios), true);
+	assert.deepEqual(blackBoxPackage.specGap?.scenarios, ["建立連線", "交換訊息"]);
+});
+
+test("EvidencePackage_WhenSpecGapTargetIsMalformed_ShouldRejectWithoutThrowing", () => {
+	const validPackage = createEvidencePackage({
+		knowledgeSummary: "Spec Gap runtime 欄位驗證",
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		verificationLevel: "exploratory",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式文件尚未取得",
+			missingEvidence: ["完整訊息格式"],
+			impact: "僅能進行探索性實作",
+		},
+	});
+	const malformedPackage = {
+		...validPackage,
+		specGap: { ...validPackage.specGap, target: 123 },
+	} as unknown as Parameters<typeof validateEvidencePackage>[0];
+	let validation: ReturnType<typeof validateEvidencePackage> | undefined;
+
+	assert.doesNotThrow(() => {
+		validation = validateEvidencePackage(malformedPackage);
+	});
+	assert.equal(validation?.ok, false);
+});
+
+test("EvidencePackage_WhenExploratorySpecGapScenariosAreMalformed_ShouldRejectWithoutThrowing", () => {
+	const validPackage = createEvidencePackage({
+		knowledgeSummary: "Spec Gap scenarios runtime 欄位驗證",
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		verificationLevel: "exploratory",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式文件尚未取得",
+			missingEvidence: ["完整訊息格式"],
+			impact: "僅能進行探索性實作",
+		},
+	});
+	const malformedPackage = {
+		...validPackage,
+		specGap: { ...validPackage.specGap, scenarios: ["建立連線", 123] },
+	} as unknown as Parameters<typeof validateEvidencePackage>[0];
+	let validation: ReturnType<typeof validateEvidencePackage> | undefined;
+
+	assert.doesNotThrow(() => {
+		validation = validateEvidencePackage(malformedPackage);
+	});
+	assert.equal(validation?.ok, false);
+});
+
+test("EvidencePackage_WhenExploratorySpecGapScenariosIsNotArray_ShouldRejectWithoutThrowing", () => {
+	const validPackage = createEvidencePackage({
+		knowledgeSummary: "Spec Gap scenarios runtime 欄位驗證",
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		verificationLevel: "exploratory",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式文件尚未取得",
+			missingEvidence: ["完整訊息格式"],
+			impact: "僅能進行探索性實作",
+		},
+	});
+	const malformedPackage = {
+		...validPackage,
+		specGap: { ...validPackage.specGap, scenarios: "建立連線" },
+	} as unknown as Parameters<typeof validateEvidencePackage>[0];
+	let validation: ReturnType<typeof validateEvidencePackage> | undefined;
+
+	assert.doesNotThrow(() => {
+		validation = validateEvidencePackage(malformedPackage);
+	});
+	assert.equal(validation?.ok, false);
+});
+
+test("EvidencePackage_WhenSpecVerifiedHasNoTrustedImporter_ShouldFailClosed", () => {
+	const specVerifiedPackage = createEvidencePackage({
+		knowledgeSummary: "正式規格已由可核對證據支撐",
+		inherited: [
+			{
+				evidenceId: "ev-formal-spec-1",
+				kind: "wiki",
+				source: "https://example.com/formal-spec",
+				title: "Formal specification",
+				content: "Target Protocol v1.0 section 4",
+				metadata: {},
+			},
+		],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		verificationLevel: "spec_verified",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式規格已取得",
+			missingEvidence: ["無"],
+			impact: "完整相容性主張待正式規格引用驗證",
+		},
+		formalSpecReference: {
+			target: "Target Protocol",
+			version: "1.0",
+			locator: "section 4",
+			evidenceId: "ev-formal-spec-1",
+		},
+	} as unknown as Parameters<typeof createEvidencePackage>[0]);
+
+	assert.deepEqual(
+		validateEvidencePackage(specVerifiedPackage),
+		{ ok: false, errors: ["spec_verified 需要受信任的 formal spec context"] },
+	);
+});
+
+test("EvidencePackage_WhenSpecVerifiedLacksFormalReference_ShouldReject", () => {
+	const specVerifiedPackage = createEvidencePackage({
+		knowledgeSummary: "正式規格引用尚未提供",
+		inherited: [],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		verificationLevel: "spec_verified",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式規格已取得但尚未建立引用",
+			missingEvidence: ["正式規格引用"],
+			impact: "不可形成完整相容性主張",
+		},
+	} as unknown as Parameters<typeof createEvidencePackage>[0]);
+
+	const validation = validateEvidencePackage(specVerifiedPackage);
+
+	assert.equal(validation.ok, false);
+});
+
+test("EvidencePackage_WhenSpecVerifiedHasOnlyClaimReferenceWithoutTrustedContext_ShouldReject", () => {
+	const specVerifiedPackage = createEvidencePackage({
+		knowledgeSummary: "正式規格引用只是模型主張",
+		inherited: [{
+			evidenceId: "ev-formal-spec-claim-1",
+			kind: "wiki",
+			source: "https://example.com/formal-spec",
+			title: "Formal specification claim",
+			content: "Target Protocol v1.0 section 4",
+			metadata: {},
+		}],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		verificationLevel: "spec_verified",
+		specGap: {
+			target: "Target Protocol",
+			reason: "正式規格已取得",
+			missingEvidence: ["無"],
+			impact: "完整相容性主張待正式規格引用驗證",
+		},
+		formalSpecReference: {
+			target: "Target Protocol",
+			version: "1.0",
+			locator: "section 4",
+			evidenceId: "ev-formal-spec-claim-1",
+		},
+	} as unknown as Parameters<typeof createEvidencePackage>[0]);
+
+	assert.equal(validateEvidencePackage(specVerifiedPackage).ok, false);
+});
+
 function evidencePackageWithCounts(counts: { decisions?: number; findings?: number; limitations?: number }, statement: string) {
 	const evidence = {
 		evidenceId: "ev-limit-1",
@@ -492,5 +748,50 @@ test("EvidencePackage_WhenAnyStatementIs4001CodePoints_ShouldReject", () => {
 	for (const kind of ["decisions", "findings", "limitations"] as const) {
 		const validation = validateEvidencePackage(evidencePackageWithCounts({ [kind]: 1 }, statement));
 		assert.equal(validation.ok, false, `${kind} statement=4001 應被拒絕`);
+	}
+});
+
+test("EvidencePackage_WhenFormalSpecReferenceFieldIsMalformed_ShouldRejectWithoutThrowing", () => {
+	const fields = ["target", "version", "locator", "evidenceId"] as const;
+	const malformedValues = [42, "", "   ", null, undefined, {}];
+	for (const field of fields) {
+		for (const malformedValue of malformedValues) {
+			const evidence = {
+				evidenceId: "spec-evidence",
+				kind: "formal_spec",
+				source: "trusted-runtime",
+				title: "Formal specification",
+				content: "Specification evidence",
+				metadata: {},
+			};
+			const reference = {
+				target: "target",
+				version: "1.0",
+				locator: "spec://target/1.0",
+				evidenceId: evidence.evidenceId,
+			};
+			(reference as Record<string, unknown>)[field] = malformedValue;
+			const evidencePackage = createEvidencePackage({
+				knowledgeSummary: "具備正式規格證據的測試套件",
+				inherited: [evidence],
+				supplemental: [],
+				decisions: [],
+				findings: [],
+				limitations: [],
+				verificationLevel: "spec_verified",
+				specGap: {
+					target: "target",
+					reason: "測試格式驗證",
+					missingEvidence: ["無"],
+					impact: "無",
+				},
+				formalSpecReference: reference,
+			});
+
+			assert.doesNotThrow(() => {
+				const validation = validateEvidencePackage(evidencePackage);
+				assert.equal(validation.ok, false, `${field} 不是非空字串時應被拒絕`);
+			});
+		}
 	}
 });

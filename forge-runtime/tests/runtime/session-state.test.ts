@@ -683,7 +683,7 @@ test("SessionState_WhenNeedsDiscoveryOccursTwice_ShouldEnterDeepDiscoveryFallbac
 			waitUser: {
 				kind: "deep_discovery_fallback",
 				question: "此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認",
-				options: ["確認", "同意"],
+				options: ["確認", "取消"],
 				recommendation: "確認",
 			},
 		},
@@ -816,7 +816,7 @@ test("SessionState_WhenNeedsDiscoveryOccursAgainAfterFallbackConfirmation_Should
 		thirdResult.state.waitUser?.question,
 		"此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認",
 	);
-	assert.deepEqual(thirdResult.state.waitUser?.options, ["確認", "同意"]);
+	assert.deepEqual(thirdResult.state.waitUser?.options, ["確認", "取消"]);
 	assert.equal(thirdResult.state.waitUser?.recommendation, "確認");
 });
 

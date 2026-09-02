@@ -2,7 +2,7 @@
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
 scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829、deep-decision-replay-ui-only-stage-20260830、knowledge-understanding-context-build-deliverable-20260830、knowledge-summary-authority-boundary-20260831
-updated: 2026-09-01
+updated: 2026-09-02
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、agent-state/knowledge-summary-authority-boundary-20260831.md、scoped validation logs
 status: implemented-verified-reviewed
 ---
@@ -522,3 +522,47 @@ Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` �
 每條 chain 只計成功接受的人類回答，8 輪後先保存答案再以既有 WAIT_USER 發布 `grill_checkpoint`；固定 `continue_one`、`converge`、`cancel`，late/stale/duplicate fail-closed。選 `converge` 後只啟動一次 convergence invocation：無真正知識盲點時模型提交 `READY_FOR_DEEP`，runtime 沿 `continueDeepKnowledge` 進入 `DEEP_KNOWLEDGE_RETRIEVAL`；有真正知識盲點時最多問一題，保存回答後直接進 Deep，不回 checkpoint、不再 Grill、不問第二題，也不偽造 READY。真正知識盲點是 Deep Retrieval 所缺客觀知識／證據，不含可採用預設的 implementation detail。`cancel` 重用非 Deep cancel cleanup，回到 `RECEIVE`；只允許 material decision boundary 的 NEEDS_CONFIRMATION，非阻塞細節 READY_FOR_DEEP。只沿用既有 WAIT_USER，沒有 UI gap，故無 Plan B。
 
 本 ticket 已完成 final review，可交付。測試驗收為無盲點 READY→Deep，以及一個盲點問一題後直接 Deep；並已完成其餘 checkpoint、full suite 與 skill 驗證。未解風險為 check 僅保留 pi-main highlight.js TS7016 baseline、package 約 213 個 `.log` 的既有債務，以及 true knowledge gap 仍由 prompt/skill 契約約束；禁止修改 pi-main。
+
+## Deep Discovery fallback 選項與 full reset 設計交接（2026-09-02）
+
+本 ticket 已完成實作、主要驗證與 review，狀態為 `implementation-complete-verified`。`deep_discovery_fallback` 可見選項為「確認／取消」，共用 UI 另有「自行輸入…」；舊「同意」不列為 UI 選項，但保留 trim 後精確隱藏相容輸入，等同確認。
+
+「取消」及自行輸入 trim 後精確「取消」都清除本輪所有輸入與證據並回初始 `RECEIVE`，重用 `sessionState.reset()`（`forge-runtime/src/runtime/session-state.ts:720-741`）與既有 extension 外層清理；不可沿用 `cancelDeepKnowledge()`。一般 `deep_decision` 取消仍保留原契約。
+
+實際 production 為 `forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`；tests 為 `forge-runtime/tests/runtime/session-state.test.ts`（33/33）、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`（153/153）、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`（14/14）。完整 `npm test` 282/282，log 為 `.tmp-deep-fallback-full-test-rerun.log`；review 無阻擋 finding，`git diff -- pi-main` 無輸出。取消會清除輸入、證據、markers 與 active workflow 並回 `RECEIVE`；沒有待實作 slice。
+
+`npm run check` 與第二段獨立 tsc 均 exit 2，唯一 blocker 是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺 `highlight.js` 語言模組型別 TS7016。isolated verification 已完成：以 HEAD `fdccbd62403e40ba3400761bc0468668820a8059` 建 detached worktree，僅套用本 ticket 五個 code/test 檔 patch，未 install、未改 `pi-main`，`npm test` exit 0，282/282、0 fail/skip；worktree、junction 與 patch 已安全清理。下次先讀本 handoff 與上述摘要；若要處理 check blocker，必須另獲使用者明確授權修改 `pi-main`。
+
+## 2026-09-02 Spec Gap 探索性開發交接
+
+本張 Plan A 已獲使用者核准，且使用者要求完成文件後立即進入實作。正式 spec 難以取得時，探索性新產品開發仍可繼續；系統建立可追溯 `Spec Gap` 與 `exploratory`／`black_box_verified`／`spec_verified` 三層驗證，限制未證實的相容性主張與高風險真實操作。
+
+必讀：[`docs/PLAN-A.md`](PLAN-A.md)、[`CONTEXT.md`](../CONTEXT.md)、[`ADR-0026`](adr/ADR-0026-spec-gap-exploratory-development.md)、[`ticket`](tickets/spec-gap-exploratory-development-20260902.md)、[`agent-state`](../agent-state/spec-gap-exploratory-development-20260902.md)，以及 ADR-0021、ADR-0023、ADR-0024。
+
+（歷史交接，已由下方最終交接取代）下一步曾是 S1 RED；目前 S1–S4e 已完成。不可修改 `pi-main`，也不可把資料／prompt 契約宣稱成 execution guard。
+
+（歷史設計交接）本輪當時只完成文件；後續 S1–S4e 已完成，現況以本文件下方最終交接為準。Forge 尚無可驗證 capability／execution guard；高風險操作的可靠封鎖仍是後續 gap。
+
+## 2026-09-02 Spec Gap 最終交接
+
+本 ticket 與 Plan A 已完成（S1–S4e）。缺 formal spec 時，完整 non-blocking Spec Gap 可繼續 exploratory 開發；black-box 可在完整 binding 下形成指定環境實測，但不得宣稱正式 spec 相容。
+
+驗證：evidence 28/28；`forge-runtime npm test` 292/292，0 fail／skip／cancelled／todo，約 30.15 秒；`npm run check` 無本 ticket 診斷，僅有未修改上游 `pi-main` 的 21 個 TS7016；CodeGraph review 無阻擋 finding；`git diff --check` 無 whitespace error。
+
+注意：current runtime 沒有 trusted formal-spec importer、不可偽造 capability 或來源綁定，因此 `spec_verified` 即使 reference 格式正確仍固定 fail-closed。若要啟用正式驗證，先建立獨立 importer ticket；generic execution guard 也需另案處理。不要把既有綠燈寫成正式 spec 驗證已可用。
+
+## 2026-09-02 Spec Gap S1–S3 與 S4 remediation 交接
+
+（歷史執行交接）S1–S3 已實作並通過最小測試；後續 S4a–S4e 已完成，現況以「Spec Gap 最終交接」為準。
+
+S4 已加入 Plan A 與 ADR-0026：`formalSpecReference` 只是主張；`spec_verified` 必須對照 runtime 另傳的受信任 formal-spec validation context（`evidenceId`、`target`、`version`、`locator`），缺 context 或指向非正式 evidence 一律 validation error；`scenarios` 必須深度 immutable；malformed 新增欄位必須 fail-closed 回傳 validation error。generic execution guard 仍是未解 gap，不得假稱已實作。
+
+（歷史下一步，已完成）獨立測試、最小 production 修正、完整驗證與 code review 均已完成；不可將 formal spec importer 或 generic execution guard 誤寫成已完成。
+
+## 2026-09-02 二次 review 與 S4c 交接補充
+
+目前 runtime 沒有 trusted formal-spec importer／context provider，因此 live `spec_verified` 故意 fail-closed；`exploratory`／`black_box_verified` 不受影響。正式 source importer 是後續獨立 ticket，不可宣稱正式升級已可用。
+
+S4c 已完成：Spec Gap 的可選 `scenarios` 只要存在，任何 verification level 都必須是字串陣列，否則 validation error 且不得 throw；`black_box_verified` 仍要求非空。test context fixture 型別錯誤已修正，typecheck 已完成。
+
+Plan A 已完成；S4c RED→GREEN、完整驗證與二次獨立 code/document review 均已完成。generic execution guard 仍是後續 gap。

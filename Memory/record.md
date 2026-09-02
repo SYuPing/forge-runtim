@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-09-01
+updated: 2026-09-02
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
 status: complete
 ---
@@ -356,3 +356,19 @@ status: complete
 - 重大實作：兩個 convergence 入口跳過 relevance；普通 empty-candidate 保留 `WAIT_USER`；bare cancel 重用完整 cleanup；session 加入 blank/stale/duplicate 防護；canonical skill 改為 `forge-runtime/skills/grilling/SKILL.md`。
 - 驗證：完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、diff check 0。check 僅剩未修改 `pi-main` baseline。
 - 狀態：complete。package 約 213 個 `.log` 與 semantic true-gap classifier 是已知後續風險，未納入本輪。
+
+## 2026-09-02 Deep Discovery fallback 選項與 full reset 完成
+
+- 目標：將 `deep_discovery_fallback` 可見選項修正為「確認／取消」，並讓取消清除本輪所有輸入與證據後回到初始 `RECEIVE`。
+- 重大實作：`session-state.ts` 固定 fallback options；shared resume ingress 在 selector／typed input 精確「取消」時執行 fallback-specific cleanup、`sessionState.reset()` 與 active workflow 清除。舊「同意」只保留隱藏相容輸入；一般 `deep_decision` cancel 不變。
+- 修改檔案：production 為 `forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`；tests 為 `forge-runtime/tests/runtime/session-state.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。
+- 驗證：session-state 33/33、extension 153/153、真實 TUI 14/14、完整 `npm test` 282/282；review 無阻擋 finding，`git diff -- pi-main` 無輸出。完整 log：`.tmp-deep-fallback-full-test-rerun.log`。
+- 目前狀態：實作與主要驗證完成；isolated verification 亦已完成：以 HEAD `fdccbd62403e40ba3400761bc0468668820a8059` 建 detached worktree，僅套用本 ticket 五個 code/test 檔 patch，未 install、未改 `pi-main`，`npm test` exit 0，282/282、0 fail/skip；worktree、junction 與 patch 已安全清理。`npm run check` 與第二段獨立 tsc 均 exit 2，僅因未修改 `pi-main` 的 `syntax-highlight.ts` 缺 `highlight.js` TS7016；若處理 blocker，需另獲使用者授權修改 `pi-main`。
+
+## 2026-09-02 Spec Gap 探索性開發完成
+
+- 目標：缺 formal spec 時允許完整 non-blocking Spec Gap 繼續 exploratory 開發，並以驗證層級與主張邊界避免誤稱正式相容。
+- 重大實作：完成 `exploratory`／`black_box_verified`／`spec_verified`；black-box 要求 version、environment、非空字串 scenarios、verifiedAt；存在的 scenarios 必須為字串陣列，新增欄位 clone/freeze，壞資料回 validation error 不 throw；formalSpecReference 四欄位安全驗證為非空字串。
+- 安全決策：移除公開 `TrustedFormalSpecContext` 與第二個 validator 參數。Current runtime 無可信 formal-spec importer／不可偽造 capability／來源綁定，因此 `spec_verified` 固定 fail-closed；exploratory／black-box 不受影響。
+- 驗證：evidence 28/28；`forge-runtime npm test` 292/292，0 fail／skip／cancelled／todo，約 30.15 秒；`npm run check` 無本 ticket 診斷但保留上游 `pi-main` 21 個 TS7016；CodeGraph review 無阻擋 finding；`git diff --check` 無 whitespace error。
+- 目前狀態：本 ticket／Plan A 已完成；可信 importer、來源綁定與 generic execution guard 為獨立後續工作。

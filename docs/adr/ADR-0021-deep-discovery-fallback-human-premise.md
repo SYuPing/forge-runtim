@@ -2,9 +2,9 @@
 title: Deep Discovery fallback with human premise
 type: architecture-decision-record
 scope: Forge Runtime Deep Retrieval／Knowledge Understanding 資料不足復原與 human premise Evidence
-updated: 2026-08-29
+updated: 2026-09-02
 source: 使用者核准的 Q1-Q5 契約、FORGE_RUNTIME_Arch_v4.md、ADR-0015、ADR-0016、ADR-0018、ADR-0020
-status: design-approved-ready-for-red
+status: implementation-complete-verified
 ---
 
 # ADR-0021：Deep Discovery fallback 與 human premise
@@ -67,3 +67,17 @@ Evidence baseline 11 加 2；extension baseline 68 加 6；PI baseline 11 加 1�
 Grill／Deep evidence 跨第一次 snapshot switch 累積並依 ID 去重，在 cancel、switch、new workflow、reset 清除。human premise 記錄 goal、question、answer、`needsDiscoveryCount`、兩輪 `sourceRoundIds`，decision 引用該 premise。READY_FOR_DEEP 使用 terminate 與 pending settled invocation，在 `agent_settled` 的下一個 task 送普通 user message，再重驗 identity／stage／tools；pending handoff 關閉 Deep tool gate；WAIT_USER publication await；`message_end` callback 帶 ctx；fallback 無 locked evidence 的 `needs_decision` 將兩個 accumulator keys 視為合法 evidence。
 
 Evidence 13/13、Session State 22/22、Extension 142/142、PI interactive 12/12、`npm test` 248/248；Standards／Spec 獨立審查均 PASS。`npm run check` exit 1 的唯一失敗為未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21` 缺少 `highlight.js` declaration（TS7016）；Forge Runtime 自身零錯誤，不修改 `pi-main`。
+
+## 2026-09-02 dated amendment：取消與可見選項
+
+本次核准修正只針對 `deep_discovery_fallback`：可見選項固定為「確認」與「取消」，共用 UI 另追加「自行輸入…」；「同意」不再列為 UI 選項。為最小相容變更，既有 trim 後精確「同意」可保留為隱藏輸入，語意等同「確認」，不得在提示或 selector 顯示。
+
+選擇「取消」，或經「自行輸入…」輸入 trim 後精確「取消」，必須清除本輪所有輸入與證據並回到初始 `RECEIVE`。實作必須重用 `sessionState.reset()`（`forge-runtime/src/runtime/session-state.ts:720-741`）及既有 extension 外層清理；不得沿用 fallback 專用 `cancelDeepKnowledge()`，因其保留輸入／證據的契約不符合本案。一般 `deep_decision` 的取消仍維持保留輸入的既有契約。
+
+本 amendment 不重新定義其他自由輸入內容；trim 後不是上述精確值時維持既有 fail-closed／等待行為。此變更影響正式 Workflow state，採單一 Plan A，不建立 Plan B。
+
+## 2026-09-02 amendment 實作與驗證
+
+本 amendment 已完成實作。`session-state.ts` 將 fallback options 固定為「確認／取消」；`forge-runtime.ts` 在 shared resume ingress 對 trim 後精確「取消」執行 fallback-specific full cleanup、`sessionState.reset()` 與 active workflow 清除，回到 `RECEIVE`。共用「自行輸入…」遵循相同精確 cancel 路徑；trim 後精確「同意」僅作隱藏相容輸入。一般 `deep_decision` 取消仍使用原有 `cancelDeepKnowledge()`。
+
+驗證證據：`forge-runtime/tests/runtime/session-state.test.ts` 33/33、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 153/153、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts` 14/14、完整 `npm test` 282/282；review 無阻擋 finding。`npm run check` 與第二段獨立 tsc 均 exit 2，唯一原因是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 `highlight.js` TS7016；不得修改上游。isolated verification 已完成：以 HEAD `fdccbd62403e40ba3400761bc0468668820a8059` 建 detached worktree，僅套用本 ticket 五個 code/test 檔 patch，未 install、未改 `pi-main`，`npm test` exit 0，282/282、0 fail/skip；worktree、junction 與 patch 已安全清理。

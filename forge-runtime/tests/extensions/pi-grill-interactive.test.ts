@@ -1969,7 +1969,7 @@ test("PiTui_WhenDeepDiscoveryFallbackNeedsConfirmation_ShouldShowFixedPromptAndE
 		const normalizedQuestion = fixedQuestion.replace(/\s+/g, "");
 		assert.ok(normalizedViewport.includes(normalizedQuestion), "fallback viewport did not contain the complete fixed question");
 		assert.match(fallbackViewport, /確認/);
-		assert.match(fallbackViewport, /同意/);
+		assert.match(fallbackViewport, /取消/);
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "KNOWLEDGE_UNDERSTANDING");
 		await runtime.session.waitForIdle();

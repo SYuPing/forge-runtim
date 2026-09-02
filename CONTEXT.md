@@ -2,7 +2,7 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-09-01
+updated: 2026-09-02
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
 status: implemented-verified-reviewed
 ---
@@ -553,3 +553,48 @@ Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` �
 - converge 選擇後最多一題真正知識盲點：0 題直接進 `DEEP_KNOWLEDGE_RETRIEVAL`，1 題回答後直接進 Deep；兩個明確 convergence 入口跳過 relevance，普通 empty-candidate 仍 `WAIT_USER`。
 - bare `cancel` 與既有 cancel 共用完整 cleanup；session 對 blank、stale 與 cross-round duplicate 防護；canonical skill 為 `forge-runtime/skills/grilling/SKILL.md`，`.pi` 不再是來源。
 - 驗證：完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、diff check 0。`npm run check` 僅剩未修改 `pi-main` `highlight.js` TS7016 baseline；package 約 213 個 `.log` 與 prompt/skill semantic gap classifier 屬已知風險。
+
+## 2026-09-02 Deep Discovery fallback 選項與取消 lifecycle
+
+本輪目標是修正 `deep_discovery_fallback` 的人類選項與取消行為。已核准的可見選項為「確認／取消」，共用 UI 追加「自行輸入…」；舊「同意」不顯示，為最小相容性可保留 trim 後精確隱藏輸入並視為確認。
+
+取消或自行輸入 trim 後精確「取消」時，必須清除本輪所有輸入與證據並回初始 `RECEIVE`。實作重用 `sessionState.reset()`（`forge-runtime/src/runtime/session-state.ts:720-741`）及既有 extension 外層清理，不沿用保留資料的 `cancelDeepKnowledge()`；一般 `deep_decision` 取消契約維持不變。
+
+本輪僅完成設計文件，未修改 production/test、未執行測試。預期 production 最小範圍為 `forge-runtime/src/runtime/session-state.ts` 與 `forge-runtime/extensions/forge-runtime.ts`；不修改 `pi-main/`、不重新定義自由輸入、不建立 Plan B。現況證據來自前次 grill／Deep fallback 實作與驗證紀錄；新 session 須先讀 handoff、展示摘要並等待核准，再依 Plan A 進入測試先 RED 的實作流程。
+
+## 2026-09-02 Spec Gap 探索性開發設計核准
+
+- 使用者已核准：拿不到正式 spec 不阻擋探索性新產品開發；建立 `Spec Gap`，而不是把它當一般 Evidence failure。
+- `Spec Gap` 記錄 `target`、可選 `version`、`reason`、`missingEvidence`、`impact`；驗證層級為 `exploratory`、`black_box_verified`、`spec_verified`。
+- `exploratory` 可做本機實作、mock、模擬器與唯讀驗證，但不得宣稱相容／符合 spec；黑箱驗證必須綁定目標、版本、環境、情境與日期，只能宣稱指定環境實測；完整相容性需可核對正式 spec。
+- 高風險真實操作在正式 spec 或對應真實驗證前禁止；目前 Forge 沒有可驗證 capability／execution guard，本案只建立資料與 workflow 契約，不假稱已封鎖任意 shell 或外部操作。
+- 不新增完整狀態機，復用 Evidence Package、非 blocking limitation 與既有 `human_premise` 路徑，不修改 `pi-main/`。詳見 [`ADR-0026`](docs/adr/ADR-0026-spec-gap-exploratory-development.md) 與 [`docs/PLAN-A.md`](docs/PLAN-A.md)。
+- （歷史設計狀態）本案曾為 `design-confirmed-not-implemented`；已由下方最終實作狀態取代。
+
+## 2026-09-02 Spec Gap S1–S3 與 S4 remediation
+
+- （歷史執行紀錄）S1–S3 已完成；後續 S4a–S4e 亦已完成。最終狀態以本節「Spec Gap 最終完成」為準。
+- Review 指出 `formalSpecReference` 目前只是主張，不能自行證明 spec；S4 必須由 runtime 另外傳入受信任 formal-spec validation context（`evidenceId`、`target`、`version`、`locator`），缺 context 或指向非正式 evidence 一律 validation error。
+- S4 同時補強 `scenarios` 深度 immutable 與 malformed 新增欄位的 fail-closed validation error。generic execution guard 仍未建立，不能宣稱高風險操作已被可靠封鎖。
+- （歷史下一步，已完成）S4 remediation RED、最小修正、完整驗證與獨立 code review 均已完成。詳見 [`ADR-0026`](docs/adr/ADR-0026-spec-gap-exploratory-development.md)。
+
+## 2026-09-02 Spec Gap 最終完成
+
+- S1–S4e 已完成；缺 formal spec 時，完整 non-blocking Spec Gap 允許 exploratory 開發繼續，但不得宣稱正式 spec 相容。
+- `black_box_verified` 要求 version、environment、非空字串 scenarios、verifiedAt；存在的 scenarios 必須是字串陣列，新增欄位 clone/freeze，壞資料回 validation error 不 throw。formalSpecReference 四欄位安全驗證為非空字串。
+- 公開 TrustedFormalSpecContext 與第二個 validator 參數已移除。Current runtime 沒有可信 importer／不可偽造 capability／來源綁定，因此 spec_verified 仍固定 fail-closed；exploratory／black-box 不受影響。
+- 驗證：evidence 28/28、`npm test` 292/292；check 無本 ticket 診斷但保留上游 pi-main 21 個 TS7016；CodeGraph review 無阻擋 finding，diff check 無 whitespace error。可信 importer、來源綁定與 generic execution guard 為獨立後續工作。
+
+## 2026-09-02 Spec Gap 二次 review 與 S4c
+
+- 目前 runtime 沒有 trusted formal-spec importer／context provider，因此 live `spec_verified` 故意 fail-closed；`exploratory`／`black_box_verified` 不受影響。正式 source importer 是後續獨立 ticket，不得宣稱正式升級已可用。
+- S4c 要求：Spec Gap 的可選 `scenarios` 只要存在，任何 verification level 都必須是字串陣列，否則回傳 validation error、不 throw；`black_box_verified` 仍要求非空。
+- test context fixture 型別錯誤已修正，且已完成 typecheck、S4c RED→GREEN、完整驗證與二次 review；Plan A 已完成。
+
+## 2026-09-02 Deep Discovery fallback 選項與取消 lifecycle 完成
+
+本 ticket 已完成實作與驗證。`deep_discovery_fallback` 可見選項為「確認／取消」，共用 UI 另有「自行輸入…」；舊「同意」僅保留 trim 後精確的隱藏相容輸入。fallback 選擇「取消」或自行輸入精確「取消」時，shared resume ingress 執行 fallback-specific full cleanup、`sessionState.reset()` 與 active workflow 清除，回到 `RECEIVE`；一般 `deep_decision` 的 `cancelDeepKnowledge()` 契約維持不變。
+
+實作檔案：`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`；測試檔案：`forge-runtime/tests/runtime/session-state.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。驗證為 session-state 33/33、extension 153/153、真實 TUI 14/14、完整 `npm test` 282/282；完整 log 為 `.tmp-deep-fallback-full-test-rerun.log`。review 無阻擋 finding，`git diff -- pi-main` 無輸出。
+
+`npm run check` 與第二段獨立 tsc 均 exit 2，唯一 blocker 是未修改的 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺少 `highlight.js` 語言模組型別 TS7016；Forge Runtime 本輪範圍不受影響，不修改 `pi-main`。本 ticket 沒有待實作 slice。isolated verification 已完成：以 HEAD `fdccbd62403e40ba3400761bc0468668820a8059` 建 detached worktree，僅套用本 ticket 五個 code/test 檔 patch，未 install、未改 `pi-main`，`npm test` exit 0，282/282、0 fail/skip；worktree、junction 與 patch 已安全清理。

@@ -6569,9 +6569,82 @@ test("Extension_DeepRetrievalSecondNeedsDiscovery_StopsAtWaitUserWithoutFollowUp
 	assert.equal(harness.observedStatuses.at(-1)?.includes("WAIT_USER"), true);
 	assert.deepEqual(selectCalls.at(-1), {
 		title: "此專案資料來源不足，將以前次grill/ 資料來源所得之證據進行後續開發，請確認",
-		options: ["確認", "同意", "自行輸入…"],
+		options: ["確認", "取消", "自行輸入…"],
 	});
 	assert.equal(harness.observedUserMessageCalls.length, followUpCountBeforeCompletion);
+});
+
+test("Extension_DeepDiscoveryFallbackCancel_ShouldResetFromSelectorAndCustomEditor", async (t) => {
+	for (const { label, answer, custom } of [
+		{ label: "selector", answer: "取消", custom: false },
+		{ label: "custom editor", answer: " 取消 ", custom: true },
+	]) {
+		const rootDir = createTempRoot();
+		t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+		const marker = `DeepDiscoveryCancel${label === "selector" ? "Selector" : "Custom"}Needle`;
+		const { harness, searchTool } = await prepareDeepRetrieval(rootDir, `deep-discovery-cancel-${label.replace(" ", "-")}`, marker);
+		const firstRetrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+		assert.ok(firstRetrievalTool?.execute);
+		const firstResult = await firstRetrievalTool.execute(`call-${label}-first`, {
+			attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "needs_discovery", decisionSummary: "需要補充線索" },
+		}, undefined, undefined, harness.buildContext());
+		const secondInvocation = await transformNeedsDiscoveryToolResult(harness, `call-${label}-first`, {
+			attemptId: "deep-1", sourceRoundId: "grill-1", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "needs_discovery", decisionSummary: "需要補充線索" },
+		}, firstResult);
+		const fallbackRoundId = secondInvocation.match(/roundId\s*[:：]\s*(grill-\d+)/)?.[1];
+		assert.ok(fallbackRoundId);
+		const secondCandidateId = secondInvocation.match(/\bev-[0-9a-f]{64}\b/)?.[0];
+		assert.ok(secondCandidateId);
+		const evidenceTool = harness.registeredTools.get("forge_grill_evidence");
+		const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+		assert.ok(evidenceTool?.execute);
+		assert.ok(grillCompleteTool?.execute);
+		await evidenceTool.execute(`call-${label}-evidence`, { candidateId: secondCandidateId }, undefined, undefined, harness.buildContext());
+		await grillCompleteTool.execute(`call-${label}-grill`, {
+			roundId: "grill-2", status: "READY_FOR_DEEP", questions: [],
+			recommendation: { value: "proceed", reason: "ok", confidence: 0.9 },
+			evidence: [secondCandidateId], requiresUserConfirmation: false,
+		}, undefined, undefined, harness.buildContext());
+		await searchTool(`call-${label}-search`, {
+			attemptId: "deep-2", sourceRoundId: "grill-2", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			query: marker, source: "code_base",
+		}, undefined, undefined, harness.buildContext());
+
+		const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+		assert.ok(retrievalTool?.execute);
+		await retrievalTool.execute(`call-${label}-fallback`, {
+			attemptId: "deep-2", sourceRoundId: "grill-2", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "needs_discovery", decisionSummary: "仍需要補充線索" },
+		}, undefined, undefined, harness.buildContext({
+			ui: {
+				select: async (_title, options) => {
+					assert.deepEqual(options, ["確認", "取消", "自行輸入…"]);
+					return custom ? "自行輸入…" : answer.trim();
+				},
+				...(custom ? { custom: async () => answer } : {}),
+			},
+		}));
+
+		assert.equal(harness.observedStatuses.at(-1), "Forge RECEIVE [active]", `${label} 取消應回到初始 RECEIVE`);
+		assert.deepEqual(harness.getActiveTools(), ["read"], `${label} 取消應清除 active tools`);
+		assert.equal(harness.observedStatuses.some((status) => status.includes("KNOWLEDGE_UNDERSTANDING")), false);
+		const followUpCountAfterCancel = harness.observedUserMessageCalls.length;
+		const staleFallback = await retrievalTool.execute(`call-${label}-stale-fallback`, {
+			attemptId: "deep-2", sourceRoundId: "grill-2", phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "needs_discovery", decisionSummary: "仍需要補充線索" },
+		}, undefined, undefined, harness.buildContext({
+			ui: { select: async () => "取消" },
+		}));
+		assert.equal(staleFallback.details.status, "stale");
+		assert.equal(harness.observedStatuses.at(-1), "Forge RECEIVE [active]");
+		assert.equal(harness.observedUserMessageCalls.length, followUpCountAfterCancel);
+		const fresh = await harness.sendInput(`請幫我測試 ${marker} fresh-request.ts`);
+		const freshRoundId = (fresh as { text?: string }).text?.match(/roundId\s*[:：]\s*(grill-\d+)/)?.[1];
+		assert.ok(freshRoundId);
+		assert.notEqual(freshRoundId, fallbackRoundId);
+	}
 });
 
 test("Extension_DeepDiscoveryFallbackExactConfirmation_StartsKnowledgeUnderstandingWithCompletionToolOnly", async (t) => {

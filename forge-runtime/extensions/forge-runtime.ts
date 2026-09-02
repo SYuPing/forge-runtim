@@ -391,15 +391,21 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	};
 	const cancelWorkflow = async (ctx: CommandContext): Promise<void> => {
 		const current = sessionState.current();
+		const fallbackReset = current.stage === "WAIT_USER" && current.waitUser?.kind === "deep_discovery_fallback";
 		const deepCancel =
 			current.stage === "DEEP_KNOWLEDGE_RETRIEVAL" ||
 			current.stage === "KNOWLEDGE_UNDERSTANDING" ||
-			(current.stage === "WAIT_USER" &&
-				(current.waitUser?.kind === "deep_decision" || current.waitUser?.kind === "deep_discovery_fallback"));
+			(current.stage === "WAIT_USER" && current.waitUser?.kind === "deep_decision");
 		pendingConvergenceRoundId = undefined;
 		clearPendingState();
 		clearFallbackWorkflowState();
 		restoreActiveTools();
+		if (fallbackReset) {
+			pendingGrillRun = false;
+			activeWorkflow = undefined;
+			await publishState(pi, ctx, sessionState.reset());
+			return;
+		}
 		if (deepCancel) {
 			pendingGrillRun = false;
 			await publishState(pi, ctx, sessionState.cancelDeepKnowledge());
@@ -559,11 +565,19 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		};
 		const resumeWaitUserAnswer = async (answer: string, ctx: CommandContext): Promise<boolean> => {
 			const current = sessionState.current();
-				if (
-					current.stage === "WAIT_USER" &&
-					(current.waitUser?.kind === "deep_decision" || current.waitUser?.kind === "deep_discovery_fallback") &&
-					!requireDeepToolBoundary(ctx)
-				) {
+			if (
+				current.stage === "WAIT_USER" &&
+				current.waitUser?.kind === "deep_discovery_fallback" &&
+				answer.trim() === "取消"
+			) {
+				await cancelWorkflow(ctx);
+				return true;
+			}
+			if (
+				current.stage === "WAIT_USER" &&
+				(current.waitUser?.kind === "deep_decision" || current.waitUser?.kind === "deep_discovery_fallback") &&
+				!requireDeepToolBoundary(ctx)
+			) {
 				return true;
 			}
 			const deepAnswer = prepareDeepKnowledgeAnswer(answer);

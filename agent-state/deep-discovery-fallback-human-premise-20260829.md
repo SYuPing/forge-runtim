@@ -2,12 +2,73 @@
 title: deep-discovery-fallback-human-premise-20260829 agent state
 type: agent-state
 scope: Deep Discovery fallback 與 human premise Evidence
-updated: 2026-08-30
+updated: 2026-09-02
 source: docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、docs/tickets/deep-discovery-fallback-human-premise-20260829.md、docs/PLAN-A.md
-status: verification-in-progress
+status: implementation-complete-verified
 ---
 
 # deep-discovery-fallback-human-premise-20260829
+
+## 2026-09-02 規畫 milestone
+
+### 已完成項目
+
+- 已讀取 `docs/handoff.md`、`CONTEXT.md`、ADR-0021、`docs/PLAN-A.md`、本 ticket 與本狀態檔。
+- 已完成本輪設計文件更新；取消契約為清除本輪所有輸入與證據並回 `RECEIVE`，等待使用者核准後實作。
+
+## 2026-09-02 implementation milestone
+
+### 已完成項目
+
+- 已將 fallback 可見選項改為「確認／取消」，共用 UI 保留「自行輸入…」；舊「同意」只作隱藏精確相容輸入。
+- 已完成 fallback selector／typed cancel full reset，清除輸入、證據、markers 與 active workflow 並回 `RECEIVE`。
+- 已完成 review，無阻擋 finding。
+
+### 重要決策
+
+- fallback cancel 重用 `sessionState.reset()` 與既有 extension cleanup；一般 `deep_decision` cancel 不變，不修改 `pi-main`。
+
+### 修改檔案
+
+- Production：`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`。
+- Tests：`forge-runtime/tests/runtime/session-state.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。
+
+### 測試結果
+
+- session-state 33/33、extension 153/153、真實 TUI 14/14、完整 `npm test` 282/282；log：`.tmp-deep-fallback-full-test-rerun.log`。
+- `npm run check` 與第二段獨立 tsc 均 exit 2，唯一 blocker 是未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 `highlight.js` TS7016。
+
+### 未解問題與下一步
+
+- isolated verification 已完成：以 HEAD `fdccbd62403e40ba3400761bc0468668820a8059` 建 detached worktree，僅套用本 ticket 五個 code/test 檔 patch，未 install、未改 `pi-main`，`npm test` exit 0，282/282、0 fail/skip；worktree、junction 與 patch 已安全清理。本 ticket 沒有待實作 slice。若要處理 check blocker，需另獲使用者明確授權修改 `pi-main`。
+
+### 重要決策
+
+- 可見選項為「確認／取消」，共用 UI 追加「自行輸入…」。舊「同意」不顯示；為最小相容性可接受 trim 後精確「同意」作隱藏輸入，等同確認。
+- 取消與自行輸入精確「取消」均重用 `sessionState.reset()` 及 extension 外層清理；不得使用保留資料的 `cancelDeepKnowledge()`。一般 `deep_decision` 取消不變。
+- 單一 Plan A；先由測試子代理打第一個 RED，再修改兩個 production 檔。
+
+### 修改檔案
+
+- `CONTEXT.md`
+- `docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md`
+- `docs/PLAN-A.md`
+- `docs/handoff.md`
+- `docs/tickets/deep-discovery-fallback-human-premise-20260829.md`
+- `agent-state/deep-discovery-fallback-human-premise-20260829.md`
+
+### 測試結果
+
+- 本輪未執行測試；尚未修改 production 或 test。
+
+### 未解問題
+
+- 尚待使用者確認後，才能實作並驗證 selector、typed input、full reset 與 stale／duplicate 保護。
+- 驗證時需確認隱藏「同意」相容輸入不出現在 UI，且不改變一般 `deep_decision` 取消。
+
+### 下一步
+
+使用者核准後，依 `docs/PLAN-A.md` 先由獨立測試子代理新增 regression 並執行第一個 RED，再由 production worker 實作最小修正；之後才進行驗證與 review。
 
 ## 已完成項目
 
