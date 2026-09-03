@@ -58,3 +58,7 @@ S4 不改變本 ADR 的探索性開發方向，也不建立 generic execution gu
 S1–S4e 已完成。Evidence test 28/28 pass；`forge-runtime npm test` 292/292 pass，0 fail／skip／cancelled／todo，約 30.15 秒。`npm run check` 無本 ticket 診斷，僅保留上游 `pi-main` `syntax-highlight.ts` 的 21 個 TS7016；未修改上游。最終 CodeGraph review 無阻擋 finding，`git diff --check` 無 whitespace error。
 
 Current runtime 沒有可信 formal-spec importer／不可偽造 capability／來源綁定，所以格式正確的 `spec_verified` 仍刻意 fail-closed；這不是正式驗證已可用。exploratory／black-box 不受影響。可信 importer、來源綁定與 generic execution guard 均列為獨立後續工作。
+
+### Current-runtime verification note（2026-09-02）
+
+流程圖核對確認底層 Evidence engine 已完成，但 `forge_deep_complete` 尚未傳入 `verificationLevel`、`specGap` 或 `formalSpecReference`；trusted importer／來源綁定尚未落地，因此 current runtime 的 `spec_verified` 仍固定 fail-closed。此註記不新增決策，也不表示 extension 已完成 production wiring。

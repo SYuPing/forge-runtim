@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import Type from "typebox";
+import {
+	captureDocumentsBase,
+	commitDocumentsBundle,
+	renderDeliverableDocuments,
+} from "../src/artifacts/documents-writer.ts";
+import type { AdrBuildCandidate } from "../src/decision/adr-builder.ts";
 import { buildGrillingSkillInvocation } from "../src/grill/grill-skill.ts";
 import {
 	GrillCompletionSchema,
@@ -21,6 +27,8 @@ import {
 import { runLightDiscovery, type LightDiscoveryMatch, type LightDiscoveryResult } from "../src/discovery/light-discovery.ts";
 import { understandIntent } from "../src/intent/intent-understanding.ts";
 import type { IntentModelContext } from "../src/intent/intent-types.ts";
+import { buildContextBuildSkillInvocation } from "../src/knowledge/context-build-skill.ts";
+import type { ContextAmbiguity, ContextBuildCompletion } from "../src/knowledge/context-builder.ts";
 import {
 			createForgeSessionState,
 			type DeepAttemptIdentity,
@@ -41,6 +49,7 @@ import {
 	type EvidenceInput,
 	type EvidenceFinding,
 	type EvidenceLimitation,
+	type EvidencePackage,
 } from "../src/evidence/evidence-engine.ts";
 import type { ForgeUiState } from "../src/ui/ui-state.ts";
 import { buildWorkflowStatusText } from "../src/ui/workflow-status-widget.ts";
@@ -148,6 +157,16 @@ interface PendingSettledDiscoveryInvocation {
 	sourceRoundId: string;
 }
 
+interface PendingSettledBuildInvocation {
+	activeWorkflow: ActiveWorkflowContext;
+	invocation: string;
+	stage: "CONTEXT_BUILD" | "ADR_BUILD";
+	identity: {
+		readonly attemptId: string;
+		readonly sourceRoundId: string;
+	};
+}
+
 interface AssistantMessageEvent {
 	message?: {
 		content?: Array<AssistantTextBlock | AssistantThinkingBlock | AssistantToolCallBlock>;
@@ -235,6 +254,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	const grillToolNames = ["forge_grill_evidence", "forge_grill_complete"];
 	const deepRetrievalToolNames = ["forge_deep_search", "forge_deep_retrieval_complete"];
 	const deepUnderstandingToolNames = ["forge_deep_complete"];
+	const contextBuildToolNames = ["forge_context_complete"];
+	const adrBuildToolNames = ["forge_adr_complete"];
 	let pendingGrillRun = false;
 	let pendingKnowledgeRequest: { missingAssets: string[]; request: string; rootDir: string } | undefined;
 	let activeWorkflow: ActiveWorkflowContext | undefined;
@@ -245,6 +266,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let pendingSettledDeepInvocationTimer: ReturnType<typeof setTimeout> | undefined;
 	let pendingSettledDiscoveryInvocation: PendingSettledDiscoveryInvocation | undefined;
 	let pendingSettledDiscoveryInvocationTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingSettledBuildInvocation: PendingSettledBuildInvocation | undefined;
+	let pendingSettledBuildInvocationTimer: ReturnType<typeof setTimeout> | undefined;
+	let documentsBaseHash: string | undefined;
 		let pendingDiscoveryRestart: PendingDiscoveryRestart | undefined;
 		const fetchedGrillEvidence = new Map<string, EvidenceInput>();
 		const fetchedDeepSupplementalEvidence = new Map<string, EvidenceInput>();
@@ -280,6 +304,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			ctx.ui?.notify?.("Forge 無法安全限制 Deep 工具面，已拒絕進入 Deep。", "warn");
 			return false;
 		};
+		const requireBuildToolBoundary = (ctx: CommandContext) => {
+			if (canEnforceToolBoundary() && typeof pi.sendUserMessage === "function") {
+				return true;
+			}
+			ctx.ui?.notify?.("Forge 無法安全限制 Context/ADR 工具面，已拒絕繼續。", "warn");
+			return false;
+		};
 
 	const activateGrillTools = () => {
 		savedActiveTools ??= pi.getActiveTools?.();
@@ -292,6 +323,14 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	};
 	const activateDeepUnderstandingTools = () => {
 		pi.setActiveTools?.(deepUnderstandingToolNames);
+	};
+	const activateContextBuildTools = () => {
+		savedActiveTools ??= pi.getActiveTools?.();
+		pi.setActiveTools?.(contextBuildToolNames);
+	};
+	const activateAdrBuildTools = () => {
+		savedActiveTools ??= pi.getActiveTools?.();
+		pi.setActiveTools?.(adrBuildToolNames);
 	};
 	const restoreActiveTools = () => {
 		if (!savedActiveTools) {
@@ -318,6 +357,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				clearTimeout(pendingSettledDiscoveryInvocationTimer);
 				pendingSettledDiscoveryInvocationTimer = undefined;
 			}
+			pendingSettledBuildInvocation = undefined;
+			if (pendingSettledBuildInvocationTimer) {
+				clearTimeout(pendingSettledBuildInvocationTimer);
+				pendingSettledBuildInvocationTimer = undefined;
+			}
+			documentsBaseHash = undefined;
 			pendingDiscoveryRestart = undefined;
 			activeWaitUserUiLeaseKey = undefined;
 		};
@@ -361,8 +406,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 		}
 		};
-	const hasUnknownEvidenceIds = (ids: readonly string[], known: ReadonlySet<string>) =>
-		ids.some((evidenceId) => !known.has(evidenceId));
+		const hasUnknownEvidenceIds = (ids: readonly string[], known: ReadonlySet<string>) =>
+			ids.some((evidenceId) => !known.has(evidenceId));
+		const getUnpackagedHumanDecisions = (knowledgePackage: EvidencePackage) => {
+			const packagedDecisionIds = new Set(knowledgePackage.decisions.map((decision) => decision.decisionId));
+			return sessionState.getHumanDecisions().filter((decision) => !packagedDecisionIds.has(decision.decisionId));
+		};
 		const isCurrentDeepAttempt = (identity: DeepAttemptIdentity) => {
 			const attempt = sessionState.currentDeepAttempt();
 			return Boolean(
@@ -377,6 +426,13 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			return Boolean(
 				sessionState.currentDeepAttempt() &&
 				(stage === "DEEP_KNOWLEDGE_RETRIEVAL" || stage === "KNOWLEDGE_UNDERSTANDING"),
+			);
+		};
+		const hasActiveBuildAttempt = () => {
+			const stage = sessionState.current().stage;
+			return (
+				(stage === "CONTEXT_BUILD" && Boolean(sessionState.currentContextBuildAttempt())) ||
+				(stage === "ADR_BUILD" && Boolean(sessionState.currentAdrBuildAttempt()))
 			);
 		};
 		const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
@@ -560,12 +616,87 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 			if (retryAttempt.phase === "DEEP_KNOWLEDGE_RETRIEVAL") activateDeepRetrievalTools();
 			else activateDeepUnderstandingTools();
-			const invocation = `請依使用者決定 ${JSON.stringify(answer)} 繼續 Forge Deep ${retryAttempt.phase}。attemptId=${retryAttempt.attemptId} sourceRoundId=${retryAttempt.sourceRoundId} phase=${retryAttempt.phase}`;
-			return { kind: "handled", state: retryState, invocation };
-		};
-		const resumeWaitUserAnswer = async (answer: string, ctx: CommandContext): Promise<boolean> => {
-			const current = sessionState.current();
-			if (
+				const invocation = `請依使用者決定 ${JSON.stringify(answer)} 繼續 Forge Deep ${retryAttempt.phase}。attemptId=${retryAttempt.attemptId} sourceRoundId=${retryAttempt.sourceRoundId} phase=${retryAttempt.phase}`;
+				return { kind: "handled", state: retryState, invocation };
+			};
+			const resumeBuildAnswer = async (answer: string, ctx: CommandContext): Promise<boolean> => {
+				const current = sessionState.current();
+				const waitUserKind = current.waitUser?.kind;
+				if (
+					current.stage !== "WAIT_USER" ||
+					(waitUserKind !== "context_ambiguity" && waitUserKind !== "adr_ambiguity")
+				) {
+					return false;
+				}
+				if (!requireBuildToolBoundary(ctx)) {
+					return true;
+				}
+
+				pendingSettledBuildInvocation = undefined;
+				if (pendingSettledBuildInvocationTimer) {
+					clearTimeout(pendingSettledBuildInvocationTimer);
+					pendingSettledBuildInvocationTimer = undefined;
+				}
+				pendingReplayInvocation = undefined;
+				const state = sessionState.recordAnswer(answer);
+				await publishState(pi, ctx, state);
+				const stage = waitUserKind === "context_ambiguity" ? "CONTEXT_BUILD" : "ADR_BUILD";
+				if (state.stage !== stage) {
+					return true;
+				}
+
+				const workflow = activeWorkflow;
+				const knowledgePackage = sessionState.getKnowledgeUnderstandingPackage();
+				const identity = stage === "CONTEXT_BUILD"
+					? sessionState.currentContextBuildAttempt()
+					: sessionState.currentAdrBuildAttempt();
+				if (!workflow || !knowledgePackage || !identity || !documentsBaseHash) {
+					ctx.ui?.notify?.("Context/ADR 回答後缺少可驗證的執行期輸入，已停止。", "error");
+					return true;
+				}
+
+				let invocation: string;
+				try {
+					if (stage === "CONTEXT_BUILD") {
+						invocation = buildContextBuildSkillInvocation({
+							stage,
+							identity,
+							knowledgePackage,
+							humanDecisions: getUnpackagedHumanDecisions(knowledgePackage),
+						});
+						activateContextBuildTools();
+					} else {
+						const contextCandidate = sessionState.getContextCandidate();
+						if (!contextCandidate) {
+							ctx.ui?.notify?.("ADR 回答後缺少 Context candidate，已停止。", "error");
+							return true;
+						}
+						invocation = buildContextBuildSkillInvocation({
+							stage,
+							identity,
+							knowledgePackage,
+							contextCandidate,
+							humanDecisions: getUnpackagedHumanDecisions(knowledgePackage),
+						});
+						activateAdrBuildTools();
+					}
+				} catch (error) {
+					ctx.ui?.notify?.(
+						`Context/ADR skill 無法載入：${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+					return true;
+				}
+
+				pendingSettledBuildInvocation = { activeWorkflow: workflow, invocation, stage, identity };
+				return true;
+			};
+			const resumeWaitUserAnswer = async (answer: string, ctx: CommandContext): Promise<boolean> => {
+				const current = sessionState.current();
+				if (await resumeBuildAnswer(answer, ctx)) {
+					return true;
+				}
+				if (
 				current.stage === "WAIT_USER" &&
 				current.waitUser?.kind === "deep_discovery_fallback" &&
 				answer.trim() === "取消"
@@ -756,7 +887,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							completion,
 							activateDeepRetrievalTools,
 							"settled",
-							isConvergenceRound,
+							isConvergenceRound || (completion.evidence.length === 0 && sessionState.getHumanPremises().length > 0),
 					);
 					if (!enteredDeep.entered) {
 						return {
@@ -1481,25 +1612,41 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 
 			const locked = sessionState.getLockedDeepEvidence();
-			if (!locked && fetchedGrillEvidence.size === 0) {
+			const inheritedEvidence = locked ? [...locked.inherited] : [...fetchedGrillEvidence.values()];
+			const supplementalEvidence = locked ? [...locked.supplemental] : [...fetchedDeepSupplementalEvidence.values()];
+			const humanPremises = [
+				...sessionState.getHumanPremises(),
+				...(fallbackHumanPremise ? [fallbackHumanPremise] : []),
+			];
+			if (inheritedEvidence.length === 0 && supplementalEvidence.length === 0 && humanPremises.length === 0) {
 				return {
 					content: [{ type: "text", text: "Deep 證據尚未鎖定。" }],
 					details: { status: "invalid", errors: ["Deep evidence 尚未鎖定"] },
 				};
 			}
 
+			const humanPremiseByDecisionId = new Map<string, string>();
+			for (const premise of humanPremises) {
+				const decisionId = premise.metadata.decisionId;
+				if (typeof decisionId === "string") humanPremiseByDecisionId.set(decisionId, premise.evidenceId);
+			}
+			if (fallbackHumanDecisionId && fallbackHumanPremise) {
+				humanPremiseByDecisionId.set(fallbackHumanDecisionId, fallbackHumanPremise.evidenceId);
+			}
 			const decisions = [...sessionState.getHumanDecisions(), ...params.outcome.decisions].map((decision) =>
-				decision.decisionId === fallbackHumanDecisionId && fallbackHumanPremise
+				humanPremiseByDecisionId.has(decision.decisionId)
 					? {
 							...decision,
-							evidenceIds: [...new Set([...decision.evidenceIds, fallbackHumanPremise.evidenceId])],
+							evidenceIds: [
+								...new Set([...decision.evidenceIds, humanPremiseByDecisionId.get(decision.decisionId)!]),
+							],
 						}
 					: decision,
 			);
 			const evidencePackage = createEvidencePackage({
-				inherited: locked ? [...locked.inherited] : [...fetchedGrillEvidence.values()],
-				supplemental: locked ? [...locked.supplemental] : [...fetchedDeepSupplementalEvidence.values()],
-				humanPremise: fallbackHumanPremise ? [fallbackHumanPremise] : [],
+				inherited: inheritedEvidence,
+				supplemental: supplementalEvidence,
+				humanPremise: humanPremises,
 				decisions,
 				findings: params.outcome.findings,
 				limitations: params.outcome.limitations,
@@ -1537,11 +1684,393 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					};
 				}
 
+			const contextAttempt = sessionState.currentContextBuildAttempt();
+			const knowledgePackage = sessionState.getKnowledgeUnderstandingPackage();
+			if (!activeWorkflow || !contextAttempt || !knowledgePackage) {
+				restoreActiveTools();
+				await publishState(pi, ctx as CommandContext, completion.state);
+				return {
+					content: [{ type: "text", text: "Context Build 缺少可驗證的執行期輸入，已停止。" }],
+					details: { status: "invalid", reason: "context_build_input_unavailable", evidencePackage },
+					terminate: true,
+				};
+			}
+
+			let baseHash: string;
+			try {
+				baseHash = captureDocumentsBase(activeWorkflow.rootDir);
+			} catch (error) {
+				restoreActiveTools();
+				await publishState(pi, ctx as CommandContext, completion.state);
+				return {
+					content: [{ type: "text", text: "Documents 基準無法安全建立，Context Build 已停止。" }],
+					details: {
+						status: "invalid",
+						reason: "documents_base_unavailable",
+						error: error instanceof Error ? error.message : String(error),
+					},
+					terminate: true,
+				};
+			}
+
+			let invocation: string;
+			try {
+				invocation = buildContextBuildSkillInvocation({
+					stage: "CONTEXT_BUILD",
+					identity: contextAttempt,
+					knowledgePackage,
+					humanDecisions: getUnpackagedHumanDecisions(knowledgePackage),
+				});
+			} catch (error) {
+				restoreActiveTools();
+				await publishState(pi, ctx as CommandContext, completion.state);
+				return {
+					content: [{ type: "text", text: "Context Build skill 無法載入，已停止。" }],
+					details: {
+						status: "invalid",
+						reason: "context_build_skill_unavailable",
+						error: error instanceof Error ? error.message : String(error),
+					},
+					terminate: true,
+				};
+			}
+
 			restoreActiveTools();
+			activateContextBuildTools();
+			documentsBaseHash = baseHash;
+			pendingSettledBuildInvocation = {
+				activeWorkflow,
+				invocation,
+				stage: "CONTEXT_BUILD",
+				identity: contextAttempt,
+			};
 			await publishState(pi, ctx as CommandContext, completion.state);
 			return {
 				content: [{ type: "text", text: "Forge Deep 完成結果已接受。" }],
 				details: { status: "accepted", evidencePackage },
+				terminate: true,
+			};
+		},
+	});
+
+	pi.registerTool?.({
+		name: "forge_context_complete",
+		label: "Forge Context Build 完成",
+		description: "提交可追溯的 Context candidate 或需要人類決定的重大歧義。",
+		parameters: Type.Object(
+			{
+				attemptId: Type.String(),
+				sourceRoundId: Type.String(),
+				outcome: Type.Union([
+					Type.Object(
+						{
+							kind: Type.Literal("completed"),
+							candidate: Type.Object(
+								{
+									glossary: Type.Array(
+										Type.Object(
+											{
+												term: Type.String(),
+												definition: Type.String(),
+												evidenceIds: Type.Array(Type.String()),
+											},
+											{ additionalProperties: false },
+										),
+									),
+								},
+								{ additionalProperties: false },
+							),
+						},
+						{ additionalProperties: false },
+					),
+					Type.Object(
+						{
+							kind: Type.Literal("ambiguous"),
+							ambiguity: Type.Object(
+								{
+									decisionId: Type.String(),
+									question: Type.String(),
+									options: Type.Array(Type.String()),
+									recommendation: Type.String(),
+									evidenceIds: Type.Array(Type.String()),
+								},
+								{ additionalProperties: false },
+							),
+						},
+						{ additionalProperties: false },
+					),
+				]),
+			},
+			{ additionalProperties: false },
+		),
+		async execute(
+			_toolCallId: string,
+			params: { attemptId: string; sourceRoundId: string; outcome: ContextBuildCompletion },
+			_signal: unknown,
+			_onUpdate: unknown,
+			ctx: unknown,
+		) {
+			const identity = { attemptId: params.attemptId, sourceRoundId: params.sourceRoundId };
+			if (!requireBuildToolBoundary(ctx as CommandContext)) {
+				return {
+					content: [{ type: "text", text: "Forge 無法安全限制 Context 工具面，已拒絕處理。" }],
+					details: { status: "rejected", reason: "context_tool_boundary_unavailable" },
+				};
+			}
+
+			const completion = sessionState.completeContextBuild(identity, params.outcome);
+			if (completion.kind === "stale") {
+				return {
+					content: [{ type: "text", text: "過期的 Context Build 完成結果已忽略。" }],
+					details: { status: "stale" },
+					terminate: true,
+				};
+			}
+			if (completion.kind === "invalid") {
+				return {
+					content: [{ type: "text", text: completion.errors.join("\n") }],
+					details: { status: "invalid", errors: completion.errors },
+				};
+			}
+
+			pendingSettledBuildInvocation = undefined;
+			if (completion.kind === "ambiguous") {
+				restoreActiveTools();
+				if (completion.state.waitUser) {
+					await publishWaitUser(completion.state.waitUser, ctx as CommandContext, { deliverAs: "displayOnly" });
+				} else {
+					await publishState(pi, ctx as CommandContext, completion.state);
+				}
+				return {
+					content: [{ type: "text", text: "Context Build 的重大歧義需要使用者決定。" }],
+					details: { status: "ambiguous" },
+					terminate: true,
+				};
+			}
+
+			const workflow = activeWorkflow;
+			const adrAttempt = sessionState.currentAdrBuildAttempt();
+			const knowledgePackage = sessionState.getKnowledgeUnderstandingPackage();
+			const contextCandidate = sessionState.getContextCandidate();
+			if (!workflow || !adrAttempt || !knowledgePackage || !contextCandidate || !documentsBaseHash) {
+				restoreActiveTools();
+				await publishState(pi, ctx as CommandContext, completion.state);
+				return {
+					content: [{ type: "text", text: "ADR Build 缺少可驗證的執行期輸入，已停止。" }],
+					details: { status: "invalid", reason: "adr_build_input_unavailable" },
+					terminate: true,
+				};
+			}
+
+			let invocation: string;
+			try {
+				invocation = buildContextBuildSkillInvocation({
+					stage: "ADR_BUILD",
+					identity: adrAttempt,
+					knowledgePackage,
+					contextCandidate,
+					humanDecisions: getUnpackagedHumanDecisions(knowledgePackage),
+				});
+			} catch (error) {
+				restoreActiveTools();
+				await publishState(pi, ctx as CommandContext, completion.state);
+				return {
+					content: [{ type: "text", text: "ADR Build skill 無法載入，已停止。" }],
+					details: {
+						status: "invalid",
+						reason: "adr_build_skill_unavailable",
+						error: error instanceof Error ? error.message : String(error),
+					},
+					terminate: true,
+				};
+			}
+
+			activateAdrBuildTools();
+			pendingSettledBuildInvocation = {
+				activeWorkflow: workflow,
+				invocation,
+				stage: "ADR_BUILD",
+				identity: adrAttempt,
+			};
+			await publishState(pi, ctx as CommandContext, completion.state);
+			return {
+				content: [{ type: "text", text: "Forge Context Build 完成結果已接受。" }],
+				details: { status: "accepted" },
+				terminate: true,
+			};
+		},
+	});
+
+	pi.registerTool?.({
+		name: "forge_adr_complete",
+		label: "Forge ADR Build 完成",
+		description: "提交可追溯的 ADR 與 handoff candidate，或需要人類決定的重大歧義。",
+		parameters: Type.Object(
+			{
+				attemptId: Type.String(),
+				sourceRoundId: Type.String(),
+				outcome: Type.Union([
+					Type.Object(
+						{
+							kind: Type.Literal("completed"),
+							candidate: Type.Object(
+								{
+									records: Type.Array(
+										Type.Object(
+											{
+												decision: Type.String(),
+												rationale: Type.String(),
+												consequences: Type.Array(Type.String()),
+												citations: Type.Array(Type.String()),
+											},
+											{ additionalProperties: false },
+										),
+									),
+									handoff: Type.Object(
+										{
+											summary: Type.String(),
+											nextSessionFocus: Type.String(),
+											references: Type.Array(Type.String()),
+											suggestedSkills: Type.Array(Type.String()),
+										},
+										{ additionalProperties: false },
+									),
+								},
+								{ additionalProperties: false },
+							),
+						},
+						{ additionalProperties: false },
+					),
+					Type.Object(
+						{
+							kind: Type.Literal("ambiguous"),
+							ambiguity: Type.Object(
+								{
+									decisionId: Type.String(),
+									question: Type.String(),
+									options: Type.Array(Type.String()),
+									recommendation: Type.String(),
+									evidenceIds: Type.Array(Type.String()),
+								},
+								{ additionalProperties: false },
+							),
+						},
+						{ additionalProperties: false },
+					),
+				]),
+			},
+			{ additionalProperties: false },
+		),
+		async execute(
+			_toolCallId: string,
+			params: {
+				attemptId: string;
+				sourceRoundId: string;
+				outcome:
+					| { kind: "completed"; candidate: AdrBuildCandidate }
+					| { kind: "ambiguous"; ambiguity: ContextAmbiguity };
+			},
+			_signal: unknown,
+			_onUpdate: unknown,
+			ctx: unknown,
+		) {
+			const identity = { attemptId: params.attemptId, sourceRoundId: params.sourceRoundId };
+			if (!requireBuildToolBoundary(ctx as CommandContext)) {
+				return {
+					content: [{ type: "text", text: "Forge 無法安全限制 ADR 工具面，已拒絕處理。" }],
+					details: { status: "rejected", reason: "adr_tool_boundary_unavailable" },
+				};
+			}
+
+			pendingSettledBuildInvocation = undefined;
+			pendingReplayInvocation = undefined;
+			const completion = params.outcome.kind === "ambiguous"
+				? sessionState.requireAdrDecision(identity, params.outcome.ambiguity)
+				: sessionState.prepareAdrBuild(identity, params.outcome.candidate);
+			if (completion.kind === "stale") {
+				return {
+					content: [{ type: "text", text: "過期的 ADR Build 完成結果已忽略。" }],
+					details: { status: "stale" },
+					terminate: true,
+				};
+			}
+			if (completion.kind === "invalid") {
+				return {
+					content: [{ type: "text", text: completion.errors.join("\n") }],
+					details: { status: "invalid", errors: completion.errors },
+				};
+			}
+			if (completion.kind === "ambiguous") {
+				restoreActiveTools();
+				if (completion.state.waitUser) {
+					await publishWaitUser(completion.state.waitUser, ctx as CommandContext, { deliverAs: "displayOnly" });
+				} else {
+					await publishState(pi, ctx as CommandContext, completion.state);
+				}
+				return {
+					content: [{ type: "text", text: "ADR Build 的重大歧義需要使用者決定。" }],
+					details: { status: "ambiguous" },
+					terminate: true,
+				};
+			}
+
+			const workflow = activeWorkflow;
+			const knowledgePackage = sessionState.getKnowledgeUnderstandingPackage();
+			const contextCandidate = sessionState.getContextCandidate();
+			const adrBuildCandidate = sessionState.getAdrBuildCandidate();
+			if (!workflow || !knowledgePackage || !contextCandidate || !adrBuildCandidate || !documentsBaseHash) {
+				return {
+					content: [{ type: "text", text: "Documents commit 缺少可驗證的執行期輸入，已停止。" }],
+					details: { status: "invalid", reason: "documents_commit_input_unavailable" },
+				};
+			}
+
+			let documents;
+			try {
+				documents = renderDeliverableDocuments({
+					knowledgePackage,
+					contextCandidate,
+					adrBuildCandidate,
+					humanDecisions: getUnpackagedHumanDecisions(knowledgePackage),
+				});
+			} catch (error) {
+				return {
+					content: [{ type: "text", text: "Documents 內容無法安全產生。" }],
+					details: {
+						status: "invalid",
+						reason: "documents_render_failed",
+						error: error instanceof Error ? error.message : String(error),
+					},
+				};
+			}
+
+			const commit = commitDocumentsBundle({
+				rootDir: workflow.rootDir,
+				expectedBaseHash: documentsBaseHash,
+				documents,
+			});
+			if (commit.kind !== "committed") {
+				const errors = commit.kind === "conflict" ? [commit.error] : [...commit.errors];
+				return {
+					content: [{ type: "text", text: errors.join("\n") }],
+					details: { status: commit.kind, errors },
+				};
+			}
+
+			const finalized = sessionState.finalizeAdrBuild(identity, commit);
+			if (finalized.kind !== "accepted") {
+				return {
+					content: [{ type: "text", text: "Documents 已提交，但 ADR Build 無法完成狀態轉移。" }],
+					details: { status: "invalid", reason: "adr_finalize_failed" },
+				};
+			}
+
+			documentsBaseHash = undefined;
+			restoreActiveTools();
+			await publishState(pi, ctx as CommandContext, finalized.state);
+			return {
+				content: [{ type: "text", text: "Forge ADR Build 與 Documents bundle 已完成。" }],
+				details: { status: "accepted", commit },
 				terminate: true,
 			};
 		},
@@ -1720,6 +2249,33 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				await pi.sendUserMessage(pendingDiscovery.invocation);
 			}, 0);
 		}
+		const pendingBuild = pendingSettledBuildInvocation;
+		if (pendingBuild && !pendingSettledBuildInvocationTimer) {
+			pendingSettledBuildInvocation = undefined;
+			pendingSettledBuildInvocationTimer = setTimeout(async () => {
+				pendingSettledBuildInvocationTimer = undefined;
+				const currentAttempt = pendingBuild.stage === "CONTEXT_BUILD"
+					? sessionState.currentContextBuildAttempt()
+					: sessionState.currentAdrBuildAttempt();
+				const requiredTool = pendingBuild.stage === "CONTEXT_BUILD"
+					? "forge_context_complete"
+					: "forge_adr_complete";
+				const activeTools = pi.getActiveTools?.();
+				if (
+					activeWorkflow !== pendingBuild.activeWorkflow ||
+					sessionState.current().stage !== pendingBuild.stage ||
+					!currentAttempt ||
+					currentAttempt.attemptId !== pendingBuild.identity.attemptId ||
+					currentAttempt.sourceRoundId !== pendingBuild.identity.sourceRoundId ||
+					!activeTools?.includes(requiredTool) ||
+					!pi.sendUserMessage
+				) {
+					return;
+				}
+				pendingReplayInvocation = pendingBuild.invocation;
+				await pi.sendUserMessage(pendingBuild.invocation);
+			}, 0);
+		}
 		const pending = pendingSettledDeepInvocation;
 		if (!pending || pendingSettledDeepInvocationTimer) {
 			return;
@@ -1754,7 +2310,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	});
 
 		pi.on?.("message_update", async (event: AssistantMessageEvent) => {
-			if ((!pendingGrillRun && !hasActiveDeepAttempt()) || event.message?.role !== "assistant") {
+			if ((!pendingGrillRun && !hasActiveDeepAttempt() && !hasActiveBuildAttempt()) || event.message?.role !== "assistant") {
 				return;
 			}
 
@@ -1777,7 +2333,18 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					? undefined
 					: { block: true };
 		}
-			if (!pendingGrillRun && sessionState.current().stage !== "WAIT_USER") {
+		if (contextBuildToolNames.includes(event.toolName) || adrBuildToolNames.includes(event.toolName)) {
+			const stage = sessionState.current().stage;
+			const expectedTool = stage === "CONTEXT_BUILD"
+				? "forge_context_complete"
+				: stage === "ADR_BUILD"
+					? "forge_adr_complete"
+					: undefined;
+			return !pendingReplayInvocation && !pendingSettledBuildInvocation && hasActiveBuildAttempt() && event.toolName === expectedTool
+				? undefined
+				: { block: true };
+		}
+			if (!pendingGrillRun && !hasActiveDeepAttempt() && !hasActiveBuildAttempt() && sessionState.current().stage !== "WAIT_USER") {
 				return;
 			}
 		return { block: true };
@@ -1801,7 +2368,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			const grillRun = routingText === "/grill-run" || routingText.startsWith("/grill-run ");
 			const grillRunRequest = grillRun ? routingText.slice("/grill-run".length).trim() : "";
 			const canonicalRequest = grillRun ? grillRunRequest : rawText;
-			const rootDir = ctx?.cwd ?? process.cwd();
+			const rootDir = typeof ctx?.cwd === "string" && ctx.cwd.trim().length > 0 ? ctx.cwd : undefined;
 		if (routingText.startsWith("/") && !grillRun) {
 			return { action: "continue" as const };
 		}
@@ -1863,6 +2430,15 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 								(isApproval(routingText) || waitUser.recommendation.trim().toLowerCase() === normalized)
 								? waitUser.recommendation
 							: routingText);
+						if (waitUser?.kind === "context_ambiguity" || waitUser?.kind === "adr_ambiguity") {
+							if (await resumeBuildAnswer(answer, ctx ?? {})) {
+								const pendingBuild = pendingSettledBuildInvocation;
+								pendingSettledBuildInvocation = undefined;
+								return pendingBuild
+									? { action: "transform" as const, text: pendingBuild.invocation }
+									: { action: "handled" as const };
+							}
+						}
 						if (["deep_decision", "deep_discovery_fallback"].includes(waitUser?.kind ?? "")) {
 							if (!requireDeepToolBoundary(ctx ?? {})) {
 								return { action: "handled" as const };
@@ -1900,6 +2476,10 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 
 		if (intent.route !== "start_forge") {
 			return { action: "continue" as const };
+		}
+		if (!rootDir) {
+			ctx?.ui?.notify?.("Forge 缺少明確的 project root（ctx.cwd），已拒絕啟動 workflow。", "warn");
+			return { action: "handled" as const };
 		}
 		if (!requireGrillToolBoundary(ctx ?? {})) {
 			return { action: "handled" as const };

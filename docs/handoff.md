@@ -2,9 +2,9 @@
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
 scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829、deep-decision-replay-ui-only-stage-20260830、knowledge-understanding-context-build-deliverable-20260830、knowledge-summary-authority-boundary-20260831
-updated: 2026-09-02
-source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、agent-state/knowledge-summary-authority-boundary-20260831.md、scoped validation logs
-status: implemented-verified-reviewed
+updated: 2026-09-03
+source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、docs/adr/ADR-0027-context-build-human-premise-and-documents-output.md、docs/adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md、agent-state/knowledge-summary-authority-boundary-20260831.md、scoped validation logs
+status: adr-boundary-awaiting-user-confirmation
 ---
 
 # Intent route-only LLM 交接
@@ -565,4 +565,42 @@ S4 已加入 Plan A 與 ADR-0026：`formalSpecReference` 只是主張；`spec_ve
 
 S4c 已完成：Spec Gap 的可選 `scenarios` 只要存在，任何 verification level 都必須是字串陣列，否則 validation error 且不得 throw；`black_box_verified` 仍要求非空。test context fixture 型別錯誤已修正，typecheck 已完成。
 
+## 2026-09-02 Intent 到 Context 流程圖同步交接
+
+唯一視覺交付 `forge-intent-context-flow.html` 已對齊 current runtime，九列 baseline 不變；包含 checkpoint／converge、五種 WAIT_USER、status-only delivery、fallback 確認／取消、identity／barrier／batch 與 Evidence Package live 路徑。底層 Evidence engine 已完成，但 Spec Gap 欄位的 extension production wiring 尚未完成；`forge_deep_complete` 尚未傳 `verificationLevel`／`specGap`／`formalSpecReference`，trusted importer 未落地，`spec_verified` fail-closed。Context builder 尚無 production caller。
+
+驗證：HTML parser、純 HTML/CSS、無外部依賴、9 rows、手機 CSS、Edge 1280×900／390×844、console 0 PASS；獨立 review P0/P1/P2=0。`forge-runtime-flow.html` 前後 SHA-256 均為 `C0560AEBD00D457CBD89DDC5E8C845A308E02D614B220DFD8BABBE5AC67F0ADB`，原先已有工作樹修改，本輪未碰。下一步是另案處理 trusted importer／來源綁定與 Context builder production caller；不得宣稱 runtime 測試已跑。
+
 Plan A 已完成；S4c RED→GREEN、完整驗證與二次獨立 code/document review 均已完成。generic execution guard 仍是後續 gap。
+
+## 2026-09-02 CONTEXT_BUILD production continuation 交接
+
+### 目標與狀態
+
+本 ticket 狀態為 `implemented/verified`。已完成 Context Build production caller、自動續跑、candidate 保存、ADR Build 與 `Documents/` 原子提交；只執行 Plan A，沒有 UI／Plan B。
+
+### 人類確認與證據邊界
+
+Grill 中使用者明確確認需求、範圍或選擇時，即使沒有外部文件，也建立帶 round／decision provenance 的 `human_premise`，足以進入 `CONTEXT_BUILD`。它只證明使用者意圖，不證明 API、相容性、法規或安全；缺資料記完整 non-blocking Spec Gap。只有完全無可追溯確認、material ambiguity 或 blocking limitation 才 fail-closed。
+
+### 相關文件
+
+本 repo 的正式文件是 [`CONTEXT.md`](../CONTEXT.md)、[`PLAN-A.md`](PLAN-A.md)、[`ADR-0027`](adr/ADR-0027-context-build-human-premise-and-documents-output.md)、[`ADR-0028`](adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md) 與本 handoff；`Documents/` 是生成產物，不是 canonical 真相來源或本輪必讀文件。
+
+### 已知 gap 與風險
+
+`human_premise` 與獨立 `humanDecisions` 均保留 provenance；外部事實缺口是 non-blocking Spec Gap。只有零可追溯證據、blocking limitation 或 material ambiguity 才 fail-closed。不得把 `knowledgeSummary` 當權威。
+
+### 已完成與下一步
+
+已完成 `forge_context_complete`、`forge_adr_complete`、bundled skill、fresh attempt 的 `WAIT_USER` resume、managed blocks、optimistic base hash 與 atomic rollback；實作完成到 ADR 邊界。runtime 會切換到 `TO_SPEC` state，但目前沒有 TO_SPEC tool／handler，未執行或實作 TO_SPEC executor；本任務已取消，下一步是 `WAIT_USER`，等待使用者明確確認。production 入口已移除 `process.cwd()` fallback，只有非空 `ctx.cwd` 可啟動，缺失時 fail-closed。
+
+Context／ADR ambiguity 可由 UI select 或一般文字 input 回答；UI 在 `agent_settled` 排 fresh invocation，文字立即 transform fresh invocation，均保留 `sourceRoundId`／`humanDecisions`。
+
+驗證：`npm test` 324/324、base tsc pass、skill quick_validate pass、`git diff --check` pass。Pi-interactive tsc 仍受未修改 `pi-main` 的 `syntax-highlight.ts` 缺 `highlight.js` 宣告 TS7016 阻擋。
+
+## 2026-09-03 正式文件同步後的最新交接
+
+本輪使用者已取消目前實作任務；交接只以 AGENTS.md 規定的正式文件為準：先讀 root [`CONTEXT.md`](../CONTEXT.md)、[`docs/PLAN-A.md`](PLAN-A.md)、[`ADR-0027`](adr/ADR-0027-context-build-human-premise-and-documents-output.md) 與 [`ADR-0028`](adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md)，再讀本文件。`Documents/` 是未來 PI 使用者專案的生成產物，不是本 repo 的 canonical 真相來源，本輪不要求讀取或修改其中任何文件。
+
+現有 code 已完成 `CONTEXT_BUILD`、`ADR_BUILD` 與 Documents writer；但 `TO_SPEC` 目前僅是狀態節點存在／可轉入，TO_SPEC tool／handler 與後續規格化工作尚未開始，不能寫成已執行或已完成。流程交付停在 ADR 邊界；下一步只能等待使用者明確確認是否進入 TO_SPEC，不得自行開始 TO_SPEC、TO_TICKET 或其他後續實作。`human_premise`、Spec Gap 與既有 fail-closed 邊界仍依 ADR-0027 有效。

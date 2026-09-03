@@ -40,3 +40,5 @@ status: accepted-implemented-verified
 已完成：第 8 個有效人類回答後進 checkpoint；`continue_one` 恰一正常 round；`converge` 無盲點由模型提交 `READY_FOR_DEEP` 後直接進 `DEEP_KNOWLEDGE_RETRIEVAL`，有真正知識盲點最多問一題，回答保存後直接進 Deep；`cancel` 回 `RECEIVE` 並恢復工具。
 
 實作檔案為 `forge-runtime/src/ui/ui-state.ts`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts` 與 `forge-runtime/skills/grilling/SKILL.md`。驗證為完整 281/281、精準 convergence/cancel/relevance 5/5、session 33/33、cancel 8/8、`quick_validate` 成功、pack dry-run 260 files、isolated tarball install/path resolution 成功、`git diff --check` exit 0；`npm run check` 僅剩未修改 `pi-main` 的 `highlight.js` TS7016 baseline。已知 package 債務為仍包含約 213 個 `.log`；true knowledge gap 目前由 prompt/skill 契約約束，未加入 runtime NLP classifier。
+
+流程圖驗證註記（2026-09-02）：checkpoint／converge 維持既有 WAIT_USER 旁路，不新增 workflow state；review P0/P1/P2=0。

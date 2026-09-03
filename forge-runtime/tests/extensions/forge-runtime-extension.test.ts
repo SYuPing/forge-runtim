@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -109,6 +109,24 @@ test("Extension_WhenToolBoundaryCannotEnforce_ShouldNotStartGrill", async () => 
 	assert.deepEqual(result, { action: "handled" });
 	assert.deepEqual(harness.getActiveTools(), ["read"]);
 	assert.equal(harness.observedStatuses.some((status) => status.includes("GRILL")), false);
+});
+
+test("Extension_WhenProjectCwdIsMissing_ShouldFailClosedWithoutStartingWorkflow", async () => {
+	const harness = await createExtensionHarness({ initialActiveTools: ["read"] });
+
+	const result = await harness.sendInput("請幫我建立這個專案的規範");
+
+	assert.deepEqual(result, { action: "handled" });
+	assert.ok(
+		harness.observedNotifications.some((message) => /project root|cwd|專案根目錄|工作目錄/i.test(message)),
+		"缺少 project root/cwd 時必須明確通知",
+	);
+	assert.deepEqual(harness.getActiveTools(), ["read"]);
+	assert.equal(
+		harness.observedStatuses.some((status) => /GRILL|DEEP|CONTEXT|ADR/i.test(status)),
+		false,
+		"缺少 project root/cwd 時不得進入工作流",
+	);
 });
 
 test("Extension_WhenNoGrillAttempt_ShouldBlockGrillToolCalls", async () => {
@@ -2787,7 +2805,832 @@ test("Integration_WhenPackageIsValid_ShouldTransferToContextBuild", async (t) =>
 		[...harness.observedStatuses, ...harness.observedMessages].join("\n"),
 		/CONTEXT_BUILD/,
 	);
-	assert.deepEqual(harness.getActiveTools(), ["read", "write"]);
+	assert.deepEqual(harness.getActiveTools(), ["forge_context_complete"]);
+});
+
+test("AgentSettled_WhenContextBuildIsPending_ShouldInvokeBundledSkillOnce", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"context-build-settled",
+	);
+	const completeResult = await understandingTool(
+		"call-context-build-settled-complete",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "CONTEXT_BUILD_KNOWLEDGE_SUMMARY_SENTINEL",
+				decisions: [],
+				findings: [{ statement: "合法的 Context Build 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(completeResult.details.status, "accepted");
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute, "Expected forge_context_complete to be registered");
+	assert.deepEqual(harness.getActiveTools(), ["forge_context_complete"]);
+
+	const baseline = harness.observedUserMessageCalls.length;
+	assert.ok(harness.agentSettledHandler, "Expected agent_settled handler for pending Context Build");
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+	const messages = harness.observedUserMessageCalls.slice(baseline);
+	assert.equal(messages.length, 1, "Context Build pending invocation 只能送出一次");
+	const content = messages[0]?.content ?? "";
+	assert.match(content, /<skill name="context-build"/);
+	assert.match(content, /完成工具：forge_context_complete/);
+	assert.match(content, /"attemptId"\s*:\s*"context-1"/);
+	assert.match(content, /"sourceRoundId"\s*:\s*"grill-1"/);
+	assert.match(content, new RegExp(`\\b${candidateId}\\b`));
+	assert.doesNotMatch(content, /CONTEXT_BUILD_KNOWLEDGE_SUMMARY_SENTINEL/);
+	assert.doesNotMatch(content, /ContextBuildcontext-build-settledNeedle code base evidence/);
+});
+
+test("ContextAndAdrBuild_ShouldSuppressAssistantProseAndBlockWrongStageTool", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"build-boundary",
+	);
+	const deepResult = await understandingTool(
+		"call-build-boundary-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "Build boundary summary",
+				decisions: [],
+				findings: [{ statement: "可追溯的建模證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+
+	const contextMessage = {
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "Context Build prose must not leak" },
+				{ type: "thinking", thinking: "Context Build thinking must not leak" },
+			],
+		},
+	};
+	assert.ok(harness.messageUpdateHandler);
+	await harness.messageUpdateHandler(contextMessage);
+	assert.equal(contextMessage.message.content[0]?.text, "");
+	assert.equal(contextMessage.message.content[1]?.thinking, "");
+	assert.ok(harness.toolCallHandler);
+	assert.deepEqual(
+		await harness.toolCallHandler({
+			type: "tool_call",
+			toolCallId: "call-build-boundary-wrong-adr",
+			toolName: "forge_adr_complete",
+			input: {},
+		}),
+		{ block: true },
+	);
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute);
+	const contextResult = await contextCompleteTool.execute(
+		"call-build-boundary-context",
+		{
+			attemptId: "context-1",
+			sourceRoundId: "grill-1",
+			outcome: {
+				kind: "completed",
+				candidate: {
+					glossary: [{ term: "流程邊界", definition: "Context 與 ADR 的階段界線。", evidenceIds: [candidateId] }],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(contextResult.details.status, "accepted");
+
+	const adrMessage = {
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "ADR Build prose must not leak" },
+				{ type: "thinking", thinking: "ADR Build thinking must not leak" },
+			],
+		},
+	};
+	await harness.messageUpdateHandler(adrMessage);
+	assert.equal(adrMessage.message.content[0]?.text, "");
+	assert.equal(adrMessage.message.content[1]?.thinking, "");
+	assert.deepEqual(
+		await harness.toolCallHandler({
+			type: "tool_call",
+			toolCallId: "call-build-boundary-wrong-context",
+			toolName: "forge_context_complete",
+			input: {},
+		}),
+		{ block: true },
+	);
+});
+
+test("ContextAmbiguity_WhenUserAnswers_ShouldQueueFreshContextAttemptWithDecision", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"context-ambiguity-resume",
+	);
+	const deepResult = await understandingTool(
+		"call-context-ambiguity-resume-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "CONTEXT_AMBIGUITY_KNOWLEDGE_SUMMARY_SENTINEL",
+				decisions: [],
+				findings: [{ statement: "可追溯的 Context 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+
+	assert.ok(harness.agentSettledHandler, "Expected agent_settled handler for pending Context Build");
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	const oldAttemptId = contextMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const sourceRoundId = contextMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(oldAttemptId, "Context invocation must expose the original attemptId");
+	assert.ok(sourceRoundId, "Context invocation must expose sourceRoundId");
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute, "Expected forge_context_complete to be registered");
+	const baseline = harness.observedUserMessageCalls.length;
+	const selectCalls: Array<{ title: string; options: string[] }> = [];
+	const ambiguityResult = await contextCompleteTool.execute(
+		"call-context-ambiguity-resume-context",
+		{
+			attemptId: oldAttemptId,
+			sourceRoundId,
+			outcome: {
+				kind: "ambiguous",
+				ambiguity: {
+					decisionId: "context-boundary",
+					question: "採用哪一個產品範圍？",
+					options: ["方案 A", "方案 B"],
+					recommendation: "方案 A",
+					evidenceIds: [candidateId],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext({
+			ui: {
+				select: async (title, options) => {
+					selectCalls.push({ title, options: [...options] });
+					return "方案 B";
+				},
+			},
+		}),
+	);
+	assert.equal(ambiguityResult.details.status, "ambiguous");
+	assert.match(harness.observedStatuses.join("\n"), /WAIT_USER/);
+	assert.equal(selectCalls.length, 1);
+	assert.equal(selectCalls[0]?.title, "採用哪一個產品範圍？");
+	assert.ok(selectCalls[0]?.options.includes("方案 A"));
+	assert.ok(selectCalls[0]?.options.includes("方案 B"));
+	assert.ok(selectCalls[0]?.options.some((option) => option.includes("自行輸入")));
+
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+	const resumedMessages = harness.observedUserMessageCalls.slice(baseline);
+	assert.equal(resumedMessages.length, 1, "Context ambiguity 回答後只能送出一次新 invocation");
+	const resumedContent = resumedMessages[0]?.content ?? "";
+	const newAttemptId = resumedContent.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(newAttemptId, "Resumed Context invocation must expose a new attemptId");
+	assert.notEqual(newAttemptId, oldAttemptId, "Resumed Context invocation must use a fresh attempt");
+	assert.match(resumedContent, new RegExp(`"sourceRoundId"\\s*:\\s*"${sourceRoundId}"`));
+	assert.match(resumedContent, /humanDecisions/);
+	assert.match(resumedContent, /context-boundary/);
+	assert.match(resumedContent, /方案 B/);
+	assert.match(resumedContent, new RegExp(`\\b${candidateId}\\b`));
+	assert.doesNotMatch(resumedContent, /CONTEXT_AMBIGUITY_KNOWLEDGE_SUMMARY_SENTINEL/);
+	assert.doesNotMatch(resumedContent, /KnowledgeUnderstandingcontext-ambiguity-resumeNeedle code base evidence/);
+});
+
+test("ContextAmbiguity_WhenUserTypesAnswer_ShouldTransformFreshContextInvocation", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"context-ambiguity-text-answer",
+	);
+	const deepResult = await understandingTool(
+		"call-context-ambiguity-text-answer-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "CONTEXT_TEXT_ANSWER_KNOWLEDGE_SUMMARY_SENTINEL",
+				decisions: [],
+				findings: [{ statement: "可追溯的 Context 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+
+	assert.ok(harness.agentSettledHandler);
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	const oldAttemptId = contextMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const sourceRoundId = contextMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(oldAttemptId);
+	assert.ok(sourceRoundId);
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute);
+	const ambiguityResult = await contextCompleteTool.execute(
+		"call-context-ambiguity-text-answer-context",
+		{
+			attemptId: oldAttemptId,
+			sourceRoundId,
+			outcome: {
+				kind: "ambiguous",
+				ambiguity: {
+					decisionId: "context-text-boundary",
+					question: "採用哪一個產品範圍？",
+					options: ["方案 A", "方案 B"],
+					recommendation: "方案 A",
+					evidenceIds: [candidateId],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(ambiguityResult.details.status, "ambiguous");
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
+
+	const result = await harness.sendInput("方案 B");
+	assert.equal((result as { action?: string }).action, "transform");
+	const text = (result as { text?: string }).text ?? "";
+	const newAttemptId = text.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(newAttemptId);
+	assert.notEqual(newAttemptId, oldAttemptId);
+	assert.match(text, new RegExp(`"sourceRoundId"\\s*:\\s*"${sourceRoundId}"`));
+	assert.match(text, /humanDecisions/);
+	assert.match(text, /context-text-boundary/);
+	assert.match(text, /方案 B/);
+	assert.match(text, new RegExp(`\\b${candidateId}\\b`));
+	assert.doesNotMatch(text, /CONTEXT_TEXT_ANSWER_KNOWLEDGE_SUMMARY_SENTINEL/);
+});
+
+test("ContextComplete_WhenCandidateIsValid_ShouldEnterAdrBuildAndInvokeBundledSkillOnce", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"context-complete-adr-build",
+	);
+	const completeResult = await understandingTool(
+		"call-context-complete-adr-build-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "ADR_BUILD_KNOWLEDGE_SUMMARY_SENTINEL",
+				decisions: [],
+				findings: [{ statement: "合法的 Context Build 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(completeResult.details.status, "accepted");
+
+	const baseline = harness.observedUserMessageCalls.length;
+	assert.ok(harness.agentSettledHandler, "Expected agent_settled handler for pending Context Build");
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextMessage = harness.observedUserMessageCalls.slice(baseline)[0]?.content ?? "";
+	assert.match(contextMessage, /<skill name="context-build"/);
+	const attemptId = contextMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const sourceRoundId = contextMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(attemptId, "Context invocation must expose attemptId");
+	assert.ok(sourceRoundId, "Context invocation must expose sourceRoundId");
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute, "Expected forge_context_complete to be registered");
+	const contextResult = await contextCompleteTool.execute(
+		"call-context-complete-adr-build-context",
+		{
+			attemptId,
+			sourceRoundId,
+			outcome: {
+				kind: "completed",
+				candidate: {
+					glossary: [{ term: "產品範圍", definition: "使用者確認的新產品需求邊界。", evidenceIds: [candidateId] }],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(contextResult.details.status, "accepted");
+	assert.deepEqual(harness.getActiveTools(), ["forge_adr_complete"]);
+
+	const adrBaseline = harness.observedUserMessageCalls.length;
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+	const messages = harness.observedUserMessageCalls.slice(adrBaseline);
+	assert.equal(messages.length, 1, "ADR Build pending invocation 只能送出一次");
+	const content = messages[0]?.content ?? "";
+	assert.match(content, /<skill name="context-build"/);
+	assert.match(content, /完成工具：forge_adr_complete/);
+	assert.match(content, /"attemptId"\s*:\s*"adr-1"/);
+	assert.match(content, /"sourceRoundId"\s*:\s*"grill-1"/);
+	assert.match(content, /產品範圍/);
+	assert.match(content, /使用者確認的新產品需求邊界/);
+	assert.match(content, new RegExp(`\\b${candidateId}\\b`));
+	assert.doesNotMatch(content, /ADR_BUILD_KNOWLEDGE_SUMMARY_SENTINEL/);
+	assert.doesNotMatch(content, /ContextCompletecontext-complete-adr-buildNeedle code base evidence/);
+});
+
+test("AdrComplete_WhenCandidateIsValid_ShouldAtomicallyWriteDocumentsAndEnterToSpec", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"adr-complete-documents",
+	);
+	const deepResult = await understandingTool(
+		"call-adr-complete-documents-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "ADR_COMPLETE_KNOWLEDGE_SUMMARY_SENTINEL",
+				decisions: [],
+				findings: [{ statement: "可追溯的 ADR 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+
+	assert.ok(harness.agentSettledHandler, "Expected agent_settled handler for pending Context Build");
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	const contextAttemptId = contextMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const contextSourceRoundId = contextMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(contextAttemptId, "Context invocation must expose attemptId");
+	assert.ok(contextSourceRoundId, "Context invocation must expose sourceRoundId");
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute, "Expected forge_context_complete to be registered");
+	const contextResult = await contextCompleteTool.execute(
+		"call-adr-complete-documents-context",
+		{
+			attemptId: contextAttemptId,
+			sourceRoundId: contextSourceRoundId,
+			outcome: {
+				kind: "completed",
+				candidate: {
+					glossary: [{ term: "產品範圍", definition: "使用者確認的新產品需求邊界。", evidenceIds: [candidateId] }],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(contextResult.details.status, "accepted");
+	assert.deepEqual(harness.getActiveTools(), ["forge_adr_complete"]);
+
+	const adrBaseline = harness.observedUserMessageCalls.length;
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const adrMessage = harness.observedUserMessageCalls.slice(adrBaseline)[0]?.content ?? "";
+	const adrAttemptId = adrMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const adrSourceRoundId = adrMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(adrAttemptId, "ADR invocation must expose attemptId");
+	assert.ok(adrSourceRoundId, "ADR invocation must expose sourceRoundId");
+
+	const adrCompleteTool = harness.registeredTools.get("forge_adr_complete");
+	assert.ok(adrCompleteTool?.execute, "Expected forge_adr_complete to be registered");
+	const adrResult = await adrCompleteTool.execute(
+		"call-adr-complete-documents-adr",
+		{
+			attemptId: adrAttemptId,
+			sourceRoundId: adrSourceRoundId,
+			outcome: {
+				kind: "completed",
+				candidate: {
+					records: [
+						{
+							decision: "採用使用者確認的產品範圍作為本輪規格邊界。",
+							rationale: "目前唯一可追溯證據來自使用者確認的 Grill 前提。",
+							consequences: ["後續實作不得超出已確認的產品範圍。"],
+							citations: [candidateId],
+						},
+					],
+					handoff: {
+						summary: "已完成 Context 與 ADR 設計決策。",
+						nextSessionFocus: "依 ADR 開始產品規格實作。",
+						references: ["Documents/CONTEXT.md", "Documents/ADR.md"],
+						suggestedSkills: ["/execute-designed-plan"],
+					},
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(adrResult.details.status, "accepted");
+	assert.deepEqual(harness.getActiveTools(), ["read"]);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /TO_SPEC/);
+
+	const documentsDir = join(rootDir, "Documents");
+	assert.deepEqual(readdirSync(documentsDir).sort(), ["ADR.md", "CONTEXT.md", "handoff.md"]);
+	for (const fileName of ["CONTEXT.md", "ADR.md", "handoff.md"]) {
+		const content = readFileSync(join(documentsDir, fileName), "utf8");
+		assert.match(content, /forge-runtime:/);
+		assert.doesNotMatch(content, /ADR_COMPLETE_KNOWLEDGE_SUMMARY_SENTINEL/);
+		assert.doesNotMatch(content, /KnowledgeUnderstandingadr-complete-documentsNeedle code base evidence/);
+	}
+	for (const fileName of ["CONTEXT.md", "ADR.md"]) {
+		assert.match(readFileSync(join(documentsDir, fileName), "utf8"), new RegExp(candidateId));
+	}
+	const handoffContent = readFileSync(join(documentsDir, "handoff.md"), "utf8");
+	assert.match(handoffContent, /Documents\/CONTEXT\.md/);
+	assert.match(handoffContent, /Documents\/ADR\.md/);
+	assert.match(handoffContent, /已完成 Context 與 ADR 設計決策/);
+	assert.match(handoffContent, /依 ADR 開始產品規格實作/);
+});
+
+test("AdrAmbiguity_WhenUserAnswers_ShouldQueueFreshAttemptAndPersistDecision", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"adr-ambiguity-resume",
+	);
+	const deepResult = await understandingTool(
+		"call-adr-ambiguity-resume-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "ADR_AMBIGUITY_KNOWLEDGE_SUMMARY_SENTINEL",
+				decisions: [],
+				findings: [{ statement: "可追溯的 ADR 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+
+	assert.ok(harness.agentSettledHandler);
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	const contextAttemptId = contextMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const contextSourceRoundId = contextMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(contextAttemptId);
+	assert.ok(contextSourceRoundId);
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute);
+	const contextResult = await contextCompleteTool.execute(
+		"call-adr-ambiguity-resume-context",
+		{
+			attemptId: contextAttemptId,
+			sourceRoundId: contextSourceRoundId,
+			outcome: {
+				kind: "completed",
+				candidate: {
+					glossary: [{ term: "產品範圍", definition: "使用者確認的需求邊界。", evidenceIds: [candidateId] }],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(contextResult.details.status, "accepted");
+
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const adrMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	const oldAdrAttemptId = adrMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const adrSourceRoundId = adrMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(oldAdrAttemptId);
+	assert.equal(adrSourceRoundId, contextSourceRoundId);
+
+	const adrCompleteTool = harness.registeredTools.get("forge_adr_complete");
+	assert.ok(adrCompleteTool?.execute);
+	const selectCalls: Array<{ title: string; options: string[] }> = [];
+	const ambiguityResult = await adrCompleteTool.execute(
+		"call-adr-ambiguity-resume-adr",
+		{
+			attemptId: oldAdrAttemptId,
+			sourceRoundId: adrSourceRoundId,
+			outcome: {
+				kind: "ambiguous",
+				ambiguity: {
+					decisionId: "adr-boundary",
+					question: "採用哪一個產品方案？",
+					options: ["方案 A", "方案 B"],
+					recommendation: "方案 A",
+					evidenceIds: [candidateId],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext({
+			ui: {
+				select: async (title, options) => {
+					selectCalls.push({ title, options: [...options] });
+					return "方案 B";
+				},
+			},
+		}),
+	);
+	assert.equal(ambiguityResult.details.status, "ambiguous");
+	assert.match(harness.observedStatuses.join("\n"), /WAIT_USER/);
+	assert.equal(selectCalls.length, 1);
+	assert.equal(selectCalls[0]?.title, "採用哪一個產品方案？");
+	assert.ok(selectCalls[0]?.options.includes("方案 B"));
+
+	const baseline = harness.observedUserMessageCalls.length;
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const resumedMessages = harness.observedUserMessageCalls.slice(baseline);
+	assert.equal(resumedMessages.length, 1);
+	const resumedContent = resumedMessages[0]?.content ?? "";
+	const newAdrAttemptId = resumedContent.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(newAdrAttemptId);
+	assert.notEqual(newAdrAttemptId, oldAdrAttemptId);
+	assert.match(resumedContent, /"sourceRoundId"\s*:\s*"grill-1"/);
+	assert.match(resumedContent, /humanDecisions/);
+	assert.match(resumedContent, /adr-boundary/);
+	assert.match(resumedContent, /方案 B/);
+	assert.match(resumedContent, new RegExp(`\\b${candidateId}\\b`));
+	assert.doesNotMatch(resumedContent, /ADR_AMBIGUITY_KNOWLEDGE_SUMMARY_SENTINEL/);
+
+	const finalResult = await adrCompleteTool.execute(
+		"call-adr-ambiguity-resume-final",
+		{
+			attemptId: newAdrAttemptId,
+			sourceRoundId: "grill-1",
+			outcome: {
+				kind: "completed",
+				candidate: {
+					records: [
+						{
+							decision: "採用使用者確認的產品方案。",
+							rationale: "使用者已在 ADR 邊界決策中選擇方案 B。",
+							consequences: ["後續規格依方案 B 展開。"],
+							citations: [candidateId],
+						},
+					],
+					handoff: {
+						summary: "ADR 邊界已由使用者確認。",
+						nextSessionFocus: "依方案 B 開始規格實作。",
+						references: ["Documents/CONTEXT.md", "Documents/ADR.md"],
+						suggestedSkills: ["/execute-designed-plan"],
+					},
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(finalResult.details.status, "accepted");
+	const contextContent = readFileSync(join(rootDir, "Documents", "CONTEXT.md"), "utf8");
+	assert.match(contextContent, /adr-boundary/);
+	assert.match(contextContent, /方案 B/);
+	assert.match(contextContent, new RegExp(`\\b${candidateId}\\b`));
+	assert.doesNotMatch(contextContent, /ADR_AMBIGUITY_KNOWLEDGE_SUMMARY_SENTINEL/);
+});
+
+test("AdrComplete_WhenDocumentsChangedAfterContextStart_ShouldFailClosedWithoutOverwrite", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"adr-documents-conflict",
+	);
+	const deepResult = await understandingTool(
+		"call-adr-documents-conflict-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "ADR_DOCUMENTS_CONFLICT_KNOWLEDGE_SUMMARY_SENTINEL",
+				decisions: [],
+				findings: [{ statement: "可追溯的 ADR 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+
+	assert.ok(harness.agentSettledHandler, "Expected agent_settled handler for pending Context Build");
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	const contextAttemptId = contextMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const contextSourceRoundId = contextMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(contextAttemptId, "Context invocation must expose attemptId");
+	assert.ok(contextSourceRoundId, "Context invocation must expose sourceRoundId");
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute, "Expected forge_context_complete to be registered");
+	const contextResult = await contextCompleteTool.execute(
+		"call-adr-documents-conflict-context",
+		{
+			attemptId: contextAttemptId,
+			sourceRoundId: contextSourceRoundId,
+			outcome: {
+				kind: "completed",
+				candidate: {
+					glossary: [{ term: "產品範圍", definition: "使用者確認的新產品需求邊界。", evidenceIds: [candidateId] }],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(contextResult.details.status, "accepted");
+	assert.deepEqual(harness.getActiveTools(), ["forge_adr_complete"]);
+
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const adrMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	const adrAttemptId = adrMessage.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1];
+	const adrSourceRoundId = adrMessage.match(/"sourceRoundId"\s*:\s*"([^"]+)"/)?.[1];
+	assert.ok(adrAttemptId, "ADR invocation must expose attemptId");
+	assert.ok(adrSourceRoundId, "ADR invocation must expose sourceRoundId");
+
+	const documentsDir = join(rootDir, "Documents");
+	mkdirSync(documentsDir, { recursive: true });
+	const externalContext = "外部流程已先寫入的 CONTEXT 內容。\n";
+	writeFileSync(join(documentsDir, "CONTEXT.md"), externalContext, "utf8");
+
+	const adrCompleteTool = harness.registeredTools.get("forge_adr_complete");
+	assert.ok(adrCompleteTool?.execute, "Expected forge_adr_complete to be registered");
+	const adrResult = await adrCompleteTool.execute(
+		"call-adr-documents-conflict-adr",
+		{
+			attemptId: adrAttemptId,
+			sourceRoundId: adrSourceRoundId,
+			outcome: {
+				kind: "completed",
+				candidate: {
+					records: [
+						{
+							decision: "採用使用者確認的產品範圍作為本輪規格邊界。",
+							rationale: "目前唯一可追溯證據來自使用者確認的 Grill 前提。",
+							consequences: ["後續實作不得超出已確認的產品範圍。"],
+							citations: [candidateId],
+						},
+					],
+					handoff: {
+						summary: "已完成 Context 與 ADR 設計決策。",
+						nextSessionFocus: "依 ADR 開始產品規格實作。",
+						references: ["Documents/CONTEXT.md", "Documents/ADR.md"],
+						suggestedSkills: ["/execute-designed-plan"],
+					},
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(adrResult.details.status, "conflict");
+	assert.equal(readFileSync(join(documentsDir, "CONTEXT.md"), "utf8"), externalContext);
+	assert.equal(readdirSync(documentsDir).includes("ADR.md"), false);
+	assert.equal(readdirSync(documentsDir).includes("handoff.md"), false);
+	assert.deepEqual(harness.getActiveTools(), ["forge_adr_complete"]);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /ADR_BUILD/);
+	assert.doesNotMatch(harness.observedStatuses.join("\n"), /TO_SPEC/);
+});
+
+test("DeepCompletion_WhenOnlyGrillHumanPremiseExists_ShouldEnterContextBuild", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read", "write"] });
+	await harness.sendInput("請幫我整理一個沒有既有資料的新產品規範");
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	await grillCompleteTool.execute("call-human-premise-grill-confirmation", {
+		roundId: "grill-1",
+		status: "NEEDS_CONFIRMATION",
+		questions: [{ id: "new-product-confirmation", question: "是否以前提繼續？", options: ["確認", "拒絕"] }],
+		recommendation: { value: "確認", reason: "新產品尚無外部資料。", confidence: 0.8 },
+		evidence: [],
+		requiresUserConfirmation: true,
+	}, undefined, undefined, harness.buildContext());
+	await harness.sendInput("確認");
+
+	const secondGrillComplete = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(secondGrillComplete?.execute, "Expected forge_grill_complete after user confirmation");
+	const secondGrillResult = await secondGrillComplete.execute("call-human-premise-ready-for-deep", {
+		roundId: "grill-2",
+		status: "READY_FOR_DEEP",
+		questions: [],
+		recommendation: { value: "proceed", reason: "使用者已確認前提。", confidence: 0.9 },
+		evidence: [],
+		requiresUserConfirmation: false,
+	}, undefined, undefined, harness.buildContext());
+	assert.deepEqual(secondGrillResult.content, [{ type: "text", text: "Forge Grill 完成結果已接受。" }], "已有使用者確認 human premise 時，空 external evidence 的 READY_FOR_DEEP 應被接受");
+	assert.equal(secondGrillResult.details.status, "READY_FOR_DEEP", "已有使用者確認 human premise 時，空 external evidence 的 READY_FOR_DEEP 應被接受");
+
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute, "Expected forge_deep_retrieval_complete to expose execute");
+	await settlePendingDeepPrompt(harness);
+	const retrievalResult = await retrievalTool.execute("call-human-premise-retrieval-complete", {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-2",
+		phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+		outcome: { kind: "completed" },
+	}, undefined, undefined, harness.buildContext());
+	assert.equal(retrievalResult.details.status, "accepted", JSON.stringify(retrievalResult.details));
+
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingTool?.execute, "Expected forge_deep_complete to expose execute");
+	const completeResult = await understandingTool.execute("call-human-premise-understanding", {
+		attemptId: "deep-1",
+		sourceRoundId: "grill-2",
+		phase: "KNOWLEDGE_UNDERSTANDING",
+		outcome: { kind: "completed", knowledgeSummary: "以使用者確認前提建立規範。", decisions: [], findings: [], limitations: [] },
+	}, undefined, undefined, harness.buildContext());
+
+	assert.equal(completeResult.details.status, "accepted");
+	assert.match(harness.observedStatuses.join("\n"), /CONTEXT_BUILD/);
+	const evidencePackage = completeResult.details.evidencePackage as {
+		evidence: Array<{ origin: string; metadata: Record<string, unknown> }>;
+	};
+	const premise = evidencePackage.evidence.find((evidence) => evidence.origin === "human_premise");
+	assert.ok(premise, "Expected human premise evidence");
+	assert.equal(premise.metadata.roundId, "grill-1");
+	assert.equal(premise.metadata.decisionId, "new-product-confirmation");
 });
 
 test("Extension_WhenCompletionOmissionOccurs_ShouldShowRetryCancelSwitchAndSettle", async (t) => {
@@ -4685,13 +5528,23 @@ test("Integration_WhenGrillHumanDecisionIsAnswered_ShouldInjectImmutableDecision
 	assert.equal(completion.details.status, "accepted");
 	assert.match(harness.observedStatuses.at(-1) ?? "", /CONTEXT_BUILD/);
 	const evidencePackage = completion.details.evidencePackage as {
+		evidence: Array<{ evidenceId: string; origin: string; source: string; metadata: Record<string, unknown> }>;
 		decisions: Array<{ decisionId: string; statement: string; evidenceIds: string[] }>;
 	};
+	const premise = evidencePackage.evidence.find((item) => item.origin === "human_premise");
+	assert.ok(premise, "Expected confirmed Grill human premise evidence");
+	assert.equal(premise.source, "forge://human-premise");
+	assert.equal(premise.metadata.roundId, "grill-1");
+	assert.equal(premise.metadata.decisionId, decisionId);
+	assert.deepEqual(
+		evidencePackage.evidence.filter((item) => item.origin === "grill").map((item) => item.evidenceId),
+		[candidateId],
+	);
 	assert.deepEqual(evidencePackage.decisions, [
 		{
 			decisionId,
 			statement: `問題：${question}；決定：${answer}`,
-			evidenceIds: [candidateId],
+			evidenceIds: [candidateId, premise.evidenceId],
 		},
 	]);
 });

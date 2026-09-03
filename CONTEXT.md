@@ -2,7 +2,7 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-09-02
+updated: 2026-09-03
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
 status: implemented-verified-reviewed
 ---
@@ -591,6 +591,39 @@ Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` �
 - S4c 要求：Spec Gap 的可選 `scenarios` 只要存在，任何 verification level 都必須是字串陣列，否則回傳 validation error、不 throw；`black_box_verified` 仍要求非空。
 - test context fixture 型別錯誤已修正，且已完成 typecheck、S4c RED→GREEN、完整驗證與二次 review；Plan A 已完成。
 
+## 2026-09-02 Intent 到 Context 流程圖 current-runtime 對齊
+
+- 衍生視圖已對齊 current runtime：checkpoint／converge、五種 WAIT_USER payload kind、status-only `transcript`／`displayOnly` delivery、fallback 確認／取消、Deep identity、PI parallel／Forge barrier／mixed batch，以及 Evidence Package live 路徑。
+- Spec Gap 只宣稱底層 Evidence engine 完成；Spec Gap 欄位在 extension production wiring 仍為 partial，`forge_deep_complete` 尚未傳 `verificationLevel`／`specGap`／`formalSpecReference`。trusted importer 未落地，`spec_verified` 維持 fail-closed。
+- Context builder 尚無 production caller，流程圖以 partial／未完成標示。證據：`forge-intent-context-flow.html:24-32,35,37`。
+- 驗證：review P0/P1/P2=0；HTML parser、無 JavaScript／外部依賴、9 rows、手機 CSS、Edge 1280×900／390×844、console 0 PASS。`forge-runtime-flow.html` 本輪前後 SHA-256 均為 `C0560AEBD00D457CBD89DDC5E8C845A308E02D614B220DFD8BABBE5AC67F0ADB`；該檔原先已有工作樹修改，本輪未碰。
+
+## 2026-09-02 CONTEXT_BUILD production continuation 設計核准
+
+本輪目標是完成既有 `KNOWLEDGE_UNDERSTANDING → CONTEXT_BUILD` 契約的 production 接線、自動續跑、候選保存與 `ADR_BUILD` 交接；不重做已完成的 Evidence Package、`knowledgeSummary` 非權威邊界、Spec Gap 或 Deep fallback。
+
+### Human premise 與 fail-closed 邊界
+
+- 新產品即使沒有文件，只要 Grill 中使用者明確確認需求、範圍或選擇，就建立帶有 `round`／decision provenance 的 `human_premise`。它證明使用者意圖，足以支持 `CONTEXT_BUILD`，不要求先有外部文件。
+- `human_premise` 不得冒充 API、相容性、法規、安全或其他外部事實。缺少這些資料時，完整記錄 non-blocking `Spec Gap`，讓 exploratory 開發可繼續；不得因此把新產品一律擋住。
+- 只有完全沒有可追溯的人類確認、仍有 material ambiguity，或存在 blocking limitation 時才 fail-closed。既有 evidence provenance、引用、推論與安全限制不放寬。
+
+### Context／ADR／文件產物語言
+
+- `CONTEXT_BUILD` 只採用當前任務相關且已驗證的 `decisions`、`findings`、`limitations` 與 evidence IDs；`knowledgeSummary` 僅供閱讀，原始 wiki、log、subagent transcript 不直接灌入。
+- package 自帶 workflow-native `context-build` skill，吸收 domain-modeling／handoff 的規則；skill 只產生候選，不直接寫檔。
+- `CONTEXT_BUILD` 驗證並保存 Context candidate 後才進 `ADR_BUILD`；`ADR_BUILD` 驗證 ADR／handoff candidates，全部文件驗證與 bundle commit 成功後才進 `TO_SPEC`。任一步失敗不 transition；material ambiguity 先 `WAIT_USER`。
+- 使用者未來以 PI 開發的專案文件固定寫入明確 `ctx.cwd` 下的 `Documents/CONTEXT.md`、`Documents/ADR.md`、`Documents/handoff.md`。Forge 開發自身的根 `CONTEXT.md` 與 `docs/` 是不同層次，避免混淆。
+- production 入口已移除 `process.cwd()` fallback；只有非空 `ctx.cwd` 可啟動，確保 `Documents/` 永遠位於 active PI project root，缺失時 fail-closed。
+- 文件寫入使用 Forge-owned managed blocks、base-hash 防並行覆蓋、同目錄 staging 與 rollback，保留 managed blocks 外的使用者內容。
+
+### 本輪狀態與邊界
+
+- 狀態：`implemented/verified`、`direct-plan`，只有 Plan A，沒有 UI／Plan B。
+- 最小 production scope：context-build skill、Context builder、ADR builder、Documents writer、session state 與 Forge extension；測試分離驗證 stage、IO trust boundary、session 與 extension。
+- 不修改 `pi-main/`、不新增外部依賴、不做 UI、不做 Spec／TO_TICKET 實作、不放寬既有 evidence 驗證；本輪預計超過 8 個檔案但不新增 service，因為這是單一原子可用 slice 的必要分層。
+- 已修復並驗證：一般確認可建立具 provenance 的 `human_premise`，並與獨立 `humanDecisions` 分離保存；Context／ADR production caller 與 Documents bundle 已接線。
+
 ## 2026-09-02 Deep Discovery fallback 選項與取消 lifecycle 完成
 
 本 ticket 已完成實作與驗證。`deep_discovery_fallback` 可見選項為「確認／取消」，共用 UI 另有「自行輸入…」；舊「同意」僅保留 trim 後精確的隱藏相容輸入。fallback 選擇「取消」或自行輸入精確「取消」時，shared resume ingress 執行 fallback-specific full cleanup、`sessionState.reset()` 與 active workflow 清除，回到 `RECEIVE`；一般 `deep_decision` 的 `cancelDeepKnowledge()` 契約維持不變。
@@ -598,3 +631,18 @@ Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` �
 實作檔案：`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`；測試檔案：`forge-runtime/tests/runtime/session-state.test.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。驗證為 session-state 33/33、extension 153/153、真實 TUI 14/14、完整 `npm test` 282/282；完整 log 為 `.tmp-deep-fallback-full-test-rerun.log`。review 無阻擋 finding，`git diff -- pi-main` 無輸出。
 
 `npm run check` 與第二段獨立 tsc 均 exit 2，唯一 blocker 是未修改的 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺少 `highlight.js` 語言模組型別 TS7016；Forge Runtime 本輪範圍不受影響，不修改 `pi-main`。本 ticket 沒有待實作 slice。isolated verification 已完成：以 HEAD `fdccbd62403e40ba3400761bc0468668820a8059` 建 detached worktree，僅套用本 ticket 五個 code/test 檔 patch，未 install、未改 `pi-main`，`npm test` exit 0，282/282、0 fail/skip；worktree、junction 與 patch 已安全清理。
+
+## 2026-09-03 CONTEXT_BUILD production continuation 實作完成
+
+- 狀態：`implemented/verified`。`agent_settled` 會用 bundled `context-build` skill 自動續跑，`forge_context_complete` 與 `forge_adr_complete` 各只啟動一次；ambiguity 以 fresh attempt 進 `WAIT_USER` 後 resume。
+- `human_premise` 與獨立 `humanDecisions` 均保留 provenance；外部事實不足是 non-blocking Spec Gap。僅零可追溯證據、blocking limitation 或 material ambiguity fail-closed。
+- Documents writer 使用 active PI project root 的 `Documents/`、optimistic base hash、managed blocks、staging 與 atomic rollback；三檔成功後 runtime 只切入 `TO_SPEC` 狀態節點，未啟動／未實作 TO_SPEC executor。package manifest 掛載 `pi.skills`。
+- Context／ADR 的 material ambiguity 可由 UI select 或一般文字 input 回答：UI 路徑在 `agent_settled` 排 fresh invocation，文字路徑立即 transform fresh invocation；兩者均保留 `sourceRoundId`／`humanDecisions`，不會卡在舊 attempt。
+- 驗證：`npm test` 324/324、base tsc pass、skill `quick_validate` pass、`git diff --check` pass。production 入口只有非空 `ctx.cwd` 可啟動，缺失時 fail-closed；Pi-interactive tsc 仍受未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺 `highlight.js` 宣告的 TS7016 阻擋。
+
+## 2026-09-03 正式文件與 TO_SPEC 邊界（最新）
+
+- `正式開發文件`：依 `AGENTS.md` 規範，指 root `CONTEXT.md`、`docs/adr/`、`docs/PLAN-A.md`、`docs/handoff.md`；這些是本 repo 的 canonical 真相來源。
+- `Documents 生成產物`：未來 PI 使用者專案的輸出目錄，不是本 repo 的正式設計文件；本輪取消任務後不修改、不要求先讀取，也不以其內容覆蓋 canonical 文件。
+- `TO_SPEC 狀態節點`：代表流程模型存在可轉入的節點；`TO_SPEC 實作`（tool／handler）與後續工作尚未開始，未獲使用者確認前不得進入或宣稱已執行。
+- 最新狀態：本輪只同步正式文件至 ADR 邊界，後續只能等待使用者明確確認 TO_SPEC；詳見 [`ADR-0028`](docs/adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md)。

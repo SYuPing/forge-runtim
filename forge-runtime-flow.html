@@ -355,7 +355,7 @@
   <header>
     <p class="eyebrow">FORGE RUNTIME / 流程與進度</p>
     <h1>目前流程做到哪裡，從收到需求一路看到交接</h1>
-    <p>這張圖把目前真的做完、只做一部分，以及還沒做完的工作放在一起。進度更新到 2026/08/31；綠色是已完成，橘色是部分完成，灰色虛線是後續工作。</p>
+    <p>這張圖把目前真的做完、只做一部分，以及還沒做完的工作放在一起。進度更新到 2026/09/02；綠色是已完成，橘色是部分完成，灰色虛線是後續工作。</p>
   </header>
 
   <main>
@@ -453,6 +453,9 @@
               <li>使用者明確同意的前提會和已查證資料一起保存；資料包的格式與交接已完成。</li>
               <li><code>knowledgeSummary</code> 只作白話摘要，不是正式依據；正式欄位與執行期證據仍由結構化資料包負責。</li>
               <li>最新完整測試 266/266 通過，兩輪獨立審查也都通過。</li>
+              <li>Deep Discovery fallback 顯示「確認／取消」；取消會清除本輪資料並回到初始入口，一般深度決定的取消行為不變。</li>
+              <li>缺少正式規格時可建立 Spec Gap，區分探索、指定環境黑箱驗證與正式規格驗證，並限制可宣稱的範圍。</li>
+              <li>最新完整測試 292/292 通過；fallback 專項 282/282、Evidence 專項 28/28 也通過。</li>
             </ul>
           </article>
           <article class="future">
@@ -461,6 +464,7 @@
               <li>空白資料包目前仍可能通過最後檢查；「資料是否真的足夠」還需要另案補強。</li>
               <li>由資料包自動啟動或排程後續的 Context Build，仍未納入本輪範圍。</li>
               <li>整理背景文件，以及後面的設計決定、規格、工作單、實作、測試與審查。</li>
+              <li>可信正式規格來源匯入、來源綁定與通用高風險操作防護仍是獨立後續工作；目前正式規格驗證會先擋下來。</li>
               <li>完整控制面板與固定畫面配置。</li>
               <li>多來源摘要、知識卡、長期保存、第二次獨立查核與外部來源。</li>
               <li>由使用者在實際操作畫面重跑原始情境。</li>
@@ -639,10 +643,32 @@
             <p><strong>驗證：</strong>有效測試由 145/1 變成 146/0，Context 單項測試 4/0，完整測試 266/266；規格與標準審查通過。整體程式檢查仍只被未修改的上游 <code>highlight.js</code> 宣告問題擋住。</p>
           </article>
         </div>
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">09/02</p>
+            <h3>取消就完整清掉這一輪，回到最初入口</h3>
+            <p><strong>做了什麼：</strong>Deep Discovery fallback 的可見選項改為「確認／取消」，共用畫面仍可選「自行輸入…」；選擇取消或輸入精確的「取消」後，流程會回到 <code>RECEIVE</code>。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>原先畫面把「同意」列為可見選項，取消也會保留部分 fallback 資料，無法真正回到乾淨的初始狀態。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>讓 fallback 取消重用完整清理與 <code>sessionState.reset()</code>，清除輸入、證據、標記和目前工作；舊「同意」只保留精確的隱藏相容輸入，一般 <code>deep_decision</code> 取消契約不變。</p>
+            <p><strong>驗證：</strong>session-state 33/33、extension 153/153、真實 TUI 14/14、完整測試 282/282；隔離工作區驗證同樣為 282/282，差異檢查為 0，審查沒有阻擋問題。</p>
+          </article>
+        </div>
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">09/02</p>
+            <h3>沒有正式規格，也能探索，但不能假稱相容</h3>
+            <p><strong>做了什麼：</strong>建立 Spec Gap，讓缺少正式規格時可以做本機實作、模擬與黑箱驗證；每種驗證層級都清楚限制能說到哪裡，正式規格驗證則需要可信來源。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>初版驗證器曾放過格式錯誤的 <code>scenarios</code>，錯誤的正式規格引用也可能直接拋出例外；公開的同形狀信任資料還可能被呼叫端偽造。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>所有 <code>scenarios</code> 先確認是字串陣列，正式規格欄位改用安全的非空字串檢查；移除可被偽造的公開信任參數，當前 runtime 的 <code>spec_verified</code> 沒有可信匯入器時一律先擋下來。</p>
+            <p><strong>驗證：</strong>Evidence 專項 28/28、Forge Runtime 完整測試 292/292、程式檢查沒有本 ticket 診斷，差異檢查沒有空白錯誤；可信正式規格匯入、來源綁定與通用高風險操作防護仍未完成。</p>
+          </article>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer>更新日期：2026/08/31。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、CONTEXT.md、docs/PLAN-A.md、docs/handoff.md、docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、docs/adr/ADR-0022-forge-stage-ui-only-settled-decision-replay.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、agent-state/deep-discovery-fallback-human-premise-20260829.md、agent-state/knowledge-summary-authority-boundary-20260831.md。這是人工整理的進度快照，只反映文件已證實的範圍，不會自動讀取程式狀態。</footer>
+  <footer>更新日期：2026/09/02。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、CONTEXT.md、docs/PLAN-A.md、docs/handoff.md、docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、docs/adr/ADR-0022-forge-stage-ui-only-settled-decision-replay.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、docs/adr/ADR-0025-grill-soft-cap-human-checkpoint.md、docs/adr/ADR-0026-spec-gap-exploratory-development.md、agent-state/deep-discovery-fallback-human-premise-20260829.md、agent-state/knowledge-summary-authority-boundary-20260831.md、agent-state/spec-gap-exploratory-development-20260902.md。這是人工整理的進度快照，只反映文件已證實的範圍，不會自動讀取程式狀態。</footer>
 </body>
 </html>

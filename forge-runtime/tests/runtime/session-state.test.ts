@@ -26,6 +26,37 @@ test("SessionState_WhenAnswerRecorded_ShouldEnterUserConfirmedThenGrill", () => 
 	assert.notEqual(finalState.stage, "DEEP_KNOWLEDGE_RETRIEVAL");
 });
 
+test("GrillConfirmation_WhenNoExternalEvidence_ShouldCreateHumanPremiseEvidence", () => {
+	const session = createForgeSessionState();
+	const request = "建立一個全新的產品，確認需求與範圍";
+	const question = "是否確認新產品需求與範圍？";
+	const answer = "確認";
+	const decisionId = "new-product-scope-confirmation";
+	const round = session.startGrillRound(request, Object.freeze({ candidates: {}, manifest: [] }));
+	session.requireWaitUser({
+		kind: "grill_confirmation",
+		roundId: round.roundId,
+		decisionId,
+		evidenceIds: [],
+		options: ["確認", "修改"],
+		question,
+		recommendation: "確認",
+	});
+
+	session.recordAnswer(answer);
+
+	const premises = session.getHumanPremises();
+	assert.equal(premises.length, 1);
+	const premise = premises[0];
+	assert.ok(premise);
+	assert.equal(premise.kind, "human_premise");
+	assert.match(premise.content, new RegExp(request));
+	assert.match(premise.content, new RegExp(question));
+	assert.match(premise.content, new RegExp(answer));
+	assert.equal(premise.metadata.roundId, round.roundId);
+	assert.equal(premise.metadata.decisionId, decisionId);
+});
+
 test("SessionState_WhenDecisionAlreadyAnswered_ShouldRejectDuplicate", () => {
 	const session = createForgeSessionState();
 	const round = session.startGrillRound("重複回答確認", Object.freeze({ candidates: {}, manifest: [] }));
@@ -138,6 +169,26 @@ test("SessionState_WhenBlankAnswerIsRecorded_ShouldRemainWaitingWithoutSaving", 
 	assert.deepEqual(afterBlankAnswer, beforeBlankAnswer);
 	assert.deepEqual(session.current(), beforeBlankAnswer);
 	assert.equal(session.getHumanDecisions().length, 0);
+});
+
+test("GrillConfirmation_WhenAnswerIsNotConfirmed_ShouldNotCreateHumanPremiseEvidence", () => {
+	const session = createForgeSessionState();
+	const round = session.startGrillRound("確認新產品規範", Object.freeze({ candidates: {}, manifest: [] }));
+	session.requireWaitUser({
+		kind: "grill_confirmation",
+		roundId: round.roundId,
+		decisionId: "unconfirmed-answer",
+		evidenceIds: [],
+		options: ["確認", "修改"],
+		question: "是否確認？",
+		recommendation: "確認",
+	});
+
+	session.recordAnswer("   ");
+
+	assert.equal(session.current().stage, "WAIT_USER");
+	assert.deepEqual(session.getHumanPremises(), []);
+	assert.deepEqual(session.getHumanDecisions(), []);
 });
 
 test("SessionState_WhenContinueRequested_ShouldRetainRoundAndSnapshot", () => {
@@ -420,6 +471,874 @@ test("SessionState_WhenKnowledgeUnderstandingCompletes_ShouldStoreFullPackageBef
 	assert.deepEqual(storedPackage.findings, evidencePackage.findings);
 	assert.deepEqual(storedPackage.limitations, evidencePackage.limitations);
 	assert.deepEqual(storedPackage.evidenceIds, [evidence.evidenceId]);
+});
+
+test("CompleteContextBuild_WhenCandidateIsValid_ShouldStoreCandidateAndEnterAdrBuild", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("交付完整 Knowledge Understanding", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-context-build",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "Context Build 規格",
+		content: "已驗證的 Context Build 規格內容",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [
+			{
+				decisionId: "decision-context-build",
+				statement: "採用已驗證的 Context Build 規格",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+		findings: [
+			{
+				statement: "已確認規格可供 Context Build 使用",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+		limitations: [{ statement: "尚未接上自動續跑 Context Build", blocking: false }],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+
+	const understandingResult = session.handleDeepResult(understandingIdentity, {
+		kind: "completed",
+		evidencePackage,
+	});
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedPackage);
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const candidate = {
+		glossary: [
+			{
+				term: "產品範圍",
+				definition: "使用者確認的新產品需求邊界。",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+	};
+
+	const result = session.completeContextBuild(contextIdentity, { kind: "completed", candidate });
+
+	assert.equal(result.kind, "accepted");
+	assert.equal(result.state.stage, "ADR_BUILD");
+	const storedCandidate = session.getContextCandidate();
+	assert.deepEqual(storedCandidate, candidate);
+	assert.notStrictEqual(storedCandidate, candidate);
+	assert.ok(Object.isFrozen(storedCandidate));
+	assert.ok(Object.isFrozen(storedCandidate.glossary));
+	assert.ok(Object.isFrozen(storedCandidate.glossary[0]));
+	assert.ok(Object.isFrozen(storedCandidate.glossary[0].evidenceIds));
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedPackage);
+});
+
+test("CompleteContextBuild_WhenCandidateIsValid_ShouldIssueAdrBuildAttempt", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("交付 Context Build 後建立 ADR Build attempt", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-adr-build-attempt",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "ADR Build attempt 規格",
+		content: "已驗證的 ADR Build attempt 規格內容",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+
+	const result = session.completeContextBuild(contextIdentity, {
+		kind: "completed",
+		candidate: {
+			glossary: [
+				{
+					term: "產品範圍",
+					definition: "使用者確認的新產品需求邊界。",
+					evidenceIds: [evidence.evidenceId],
+				},
+			],
+		},
+	});
+
+	assert.equal(result.kind, "accepted");
+	assert.equal(result.state.stage, "ADR_BUILD");
+	const adrIdentity = session.currentAdrBuildAttempt();
+	assert.ok(adrIdentity);
+	assert.ok(adrIdentity.attemptId.length > 0);
+	assert.notEqual(adrIdentity.attemptId, contextIdentity.attemptId);
+	assert.equal(adrIdentity.sourceRoundId, contextIdentity.sourceRoundId);
+	assert.equal(session.currentContextBuildAttempt(), undefined);
+});
+
+test("PrepareAdrBuild_WhenCandidatesAreValid_ShouldStoreImmutableCandidatesWithoutAdvancing", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("準備 ADR Build candidate", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-adr-candidate",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "ADR candidate 規格",
+		content: "已驗證的 ADR candidate 證據",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const contextCandidate = {
+		glossary: [
+			{
+				term: "產品範圍",
+				definition: "使用者確認的新產品需求邊界。",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+	};
+	const contextResult = session.completeContextBuild(contextIdentity, { kind: "completed", candidate: contextCandidate });
+	assert.equal(contextResult.kind, "accepted");
+	assert.equal(contextResult.state.stage, "ADR_BUILD");
+	const adrIdentity = session.currentAdrBuildAttempt();
+	assert.ok(adrIdentity);
+	const storedContextCandidate = session.getContextCandidate();
+	const storedKnowledgePackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedContextCandidate);
+	assert.ok(storedKnowledgePackage);
+	const candidate = {
+		records: [
+			{
+				decision: "採用單一產品範圍",
+				rationale: "可由 Context candidate 與使用者前提共同支持。",
+				consequences: ["後續規格沿用此範圍"],
+				citations: [evidence.evidenceId],
+			},
+		],
+		handoff: {
+			summary: "Context Build 已完成，準備進入規格化。",
+			nextSessionFocus: "依 ADR candidate 產生正式規格。",
+			references: ["Documents/CONTEXT.md", "Documents/ADR.md"],
+			suggestedSkills: ["execute-designed-plan"],
+		},
+	};
+
+	const result = session.prepareAdrBuild(adrIdentity, candidate);
+
+	assert.equal(result.kind, "accepted");
+	assert.equal(result.state.stage, "ADR_BUILD");
+	const storedCandidate = session.getAdrBuildCandidate();
+	assert.deepEqual(storedCandidate, candidate);
+	assert.notStrictEqual(storedCandidate, candidate);
+	assert.ok(Object.isFrozen(storedCandidate));
+	assert.ok(Object.isFrozen(storedCandidate.records));
+	assert.ok(Object.isFrozen(storedCandidate.records[0]));
+	assert.ok(Object.isFrozen(storedCandidate.records[0].consequences));
+	assert.ok(Object.isFrozen(storedCandidate.records[0].citations));
+	assert.ok(Object.isFrozen(storedCandidate.handoff));
+	assert.ok(Object.isFrozen(storedCandidate.handoff.references));
+	assert.ok(Object.isFrozen(storedCandidate.handoff.suggestedSkills));
+	assert.deepEqual(session.currentAdrBuildAttempt(), adrIdentity);
+	assert.strictEqual(session.getContextCandidate(), storedContextCandidate);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedKnowledgePackage);
+});
+
+test("FinalizeAdrBuild_WhenDocumentsCommitted_ShouldEnterToSpec", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("完成 ADR Build 文件提交", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-finalize-adr-build",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "Finalize ADR Build 規格",
+		content: "已驗證的文件提交規格內容",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const contextCandidate = {
+		glossary: [
+			{
+				term: "產品範圍",
+				definition: "使用者確認的新產品需求邊界。",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+	};
+	const contextResult = session.completeContextBuild(contextIdentity, { kind: "completed", candidate: contextCandidate });
+	assert.equal(contextResult.kind, "accepted");
+	assert.equal(contextResult.state.stage, "ADR_BUILD");
+	const adrIdentity = session.currentAdrBuildAttempt();
+	assert.ok(adrIdentity);
+	const adrCandidate = {
+		records: [
+			{
+				decision: "採用單一產品範圍",
+				rationale: "由 Context candidate 與已驗證證據共同支持。",
+				consequences: ["後續規格沿用此範圍"],
+				citations: [evidence.evidenceId],
+			},
+		],
+		handoff: {
+			summary: "ADR Build 已完成，準備進入規格化。",
+			nextSessionFocus: "依 ADR candidate 產生正式規格。",
+			references: ["Documents/CONTEXT.md", "Documents/ADR.md"],
+			suggestedSkills: ["execute-designed-plan"],
+		},
+	};
+	assert.equal(session.prepareAdrBuild(adrIdentity, adrCandidate).kind, "accepted");
+	const storedAdrCandidate = session.getAdrBuildCandidate();
+	const storedContextCandidate = session.getContextCandidate();
+	const storedKnowledgePackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedAdrCandidate);
+	assert.ok(storedContextCandidate);
+	assert.ok(storedKnowledgePackage);
+
+	const result = session.finalizeAdrBuild(adrIdentity, {
+		kind: "committed",
+		baseHash: "a".repeat(64),
+	});
+
+	assert.equal(result.kind, "accepted");
+	assert.equal(result.state.stage, "TO_SPEC");
+	assert.equal(session.currentAdrBuildAttempt(), undefined);
+	assert.strictEqual(session.getAdrBuildCandidate(), storedAdrCandidate);
+	assert.strictEqual(session.getContextCandidate(), storedContextCandidate);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedKnowledgePackage);
+	assert.equal(session.current().waitUser, undefined);
+});
+
+test("PrepareAdrBuild_WhenRecordCitesUnknownEvidence_ShouldFailClosed", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("未知 citation 的 ADR Build candidate", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-adr-validation",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "ADR validation 規格",
+		content: "已驗證的 ADR validation 證據",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const contextCandidate = {
+		glossary: [
+			{
+				term: "產品範圍",
+				definition: "使用者確認的新產品需求邊界。",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+	};
+	const contextResult = session.completeContextBuild(contextIdentity, { kind: "completed", candidate: contextCandidate });
+	assert.equal(contextResult.kind, "accepted");
+	assert.equal(contextResult.state.stage, "ADR_BUILD");
+	const adrIdentity = session.currentAdrBuildAttempt();
+	assert.ok(adrIdentity);
+	const storedContextCandidate = session.getContextCandidate();
+	const storedKnowledgePackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedContextCandidate);
+	assert.ok(storedKnowledgePackage);
+	const candidate = {
+		records: [
+			{
+				decision: "採用單一產品範圍",
+				rationale: "其餘欄位有效，但 citation 不存在於 Knowledge Package。",
+				consequences: ["後續規格沿用此範圍"],
+				citations: ["ev-not-in-package"],
+			},
+		],
+		handoff: {
+			summary: "Context Build 已完成，準備進入規格化。",
+			nextSessionFocus: "依 ADR candidate 產生正式規格。",
+			references: ["Documents/CONTEXT.md", "Documents/ADR.md"],
+			suggestedSkills: ["execute-designed-plan"],
+		},
+	};
+
+	const result = session.prepareAdrBuild(adrIdentity, candidate);
+
+	assert.equal(result.kind, "invalid");
+	if (result.kind !== "invalid") throw new Error("未知 citation 應拒絕 ADR candidate");
+	assert.ok(result.errors.some((error) => error.includes("ev-not-in-package")));
+	assert.equal(result.state.stage, "ADR_BUILD");
+	assert.equal(session.getAdrBuildCandidate(), undefined);
+	assert.deepEqual(session.currentAdrBuildAttempt(), adrIdentity);
+	assert.strictEqual(session.getContextCandidate(), storedContextCandidate);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedKnowledgePackage);
+});
+
+test("PrepareAdrBuild_WhenHandoffContainsObviousSecret_ShouldFailClosed", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("敏感資訊檢查的 ADR Build candidate", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-adr-secret-validation",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "ADR secret validation 規格",
+		content: "已驗證的 ADR secret validation 證據",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const contextCandidate = {
+		glossary: [
+			{
+				term: "產品範圍",
+				definition: "使用者確認的新產品需求邊界。",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+	};
+	const contextResult = session.completeContextBuild(contextIdentity, { kind: "completed", candidate: contextCandidate });
+	assert.equal(contextResult.kind, "accepted");
+	assert.equal(contextResult.state.stage, "ADR_BUILD");
+	const storedContextCandidate = session.getContextCandidate();
+	assert.ok(storedContextCandidate);
+	const adrIdentity = session.currentAdrBuildAttempt();
+	assert.ok(adrIdentity);
+	const candidate = {
+		records: [
+			{
+				decision: "採用單一產品範圍",
+				rationale: "record 與 citation 均有合法證據支持。",
+				consequences: ["後續規格沿用此範圍"],
+				citations: [evidence.evidenceId],
+			},
+		],
+		handoff: {
+			summary: "交接摘要 api_key=sk-live-secret-value",
+			nextSessionFocus: "依 ADR candidate 產生正式規格。",
+			references: ["Documents/CONTEXT.md", "Documents/ADR.md"],
+			suggestedSkills: ["execute-designed-plan"],
+		},
+	};
+
+	const result = session.prepareAdrBuild(adrIdentity, candidate);
+
+	assert.equal(result.kind, "invalid");
+	if (result.kind !== "invalid") throw new Error("handoff 明文敏感資訊應拒絕 ADR candidate");
+	assert.ok(result.errors.some((error) => /敏感|secret/i.test(error)));
+	assert.equal(result.state.stage, "ADR_BUILD");
+	assert.equal(session.getAdrBuildCandidate(), undefined);
+	assert.deepEqual(session.currentAdrBuildAttempt(), adrIdentity);
+	assert.strictEqual(session.getContextCandidate(), storedContextCandidate);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), evidencePackage);
+});
+
+test("CompleteContextBuild_WhenCandidateCitesUnknownEvidence_ShouldFailClosed", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("拒絕未知 Context Build 證據", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-context-known",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "Context Build 已知證據",
+		content: "候選內容可引用的已知證據",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的 Context Build 摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedPackage);
+
+	const result = session.completeContextBuild(contextIdentity, {
+		kind: "completed",
+		candidate: {
+			glossary: [
+				{
+					term: "產品範圍",
+					definition: "使用者確認的新產品需求邊界。",
+					evidenceIds: ["ev-not-in-package"],
+				},
+			],
+		},
+	});
+
+	assert.equal(result.kind, "invalid");
+	assert.ok(result.errors.some((error) => error.includes("ev-not-in-package")));
+	assert.equal(result.state.stage, "CONTEXT_BUILD");
+	assert.equal(session.getContextCandidate(), undefined);
+	assert.deepEqual(session.currentContextBuildAttempt(), contextIdentity);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedPackage);
+});
+
+test("CompleteContextBuild_WhenAmbiguityCitesUnknownEvidence_ShouldFailClosed", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("拒絕未知歧義 Context Build 證據", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-context-ambiguity-known",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "歧義已知證據",
+		content: "可供歧義選項引用的已知證據",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的 Context Build 摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedPackage);
+
+	const result = session.completeContextBuild(contextIdentity, {
+		kind: "ambiguous",
+		ambiguity: {
+			decisionId: "context-unknown-evidence",
+			question: "產品範圍要採用哪一種定義？",
+			options: ["最小範圍", "完整範圍"],
+			recommendation: "最小範圍",
+			evidenceIds: ["ev-not-in-package"],
+		},
+	});
+
+	assert.equal(result.kind, "invalid");
+	assert.ok(result.errors.some((error) => error.includes("ev-not-in-package")));
+	assert.equal(result.state.stage, "CONTEXT_BUILD");
+	assert.equal(result.state.waitUser, undefined);
+	assert.deepEqual(session.currentContextBuildAttempt(), contextIdentity);
+	assert.equal(session.getContextCandidate(), undefined);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedPackage);
+});
+
+test("CompleteContextBuild_WhenMaterialAmbiguityExists_ShouldEnterWaitUserWithoutPersisting", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("交付完整 Knowledge Understanding", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-context-ambiguity",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "Context Build 歧義規格",
+		content: "需要使用者確認的 Context Build 邊界",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [{ statement: "Context Build 邊界仍有歧義", blocking: false }],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+
+	const understandingResult = session.handleDeepResult(understandingIdentity, {
+		kind: "completed",
+		evidencePackage,
+	});
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedPackage);
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+
+	const result = session.completeContextBuild(contextIdentity, {
+		kind: "ambiguous",
+		ambiguity: {
+			decisionId: "context-scope",
+			question: "產品範圍要採用哪一種定義？",
+			options: ["最小範圍", "完整範圍"],
+			recommendation: "最小範圍",
+			evidenceIds: [evidence.evidenceId],
+		},
+	});
+
+	assert.equal(result.kind, "ambiguous");
+	assert.equal(result.state.stage, "WAIT_USER");
+	assert.deepEqual(result.state.waitUser, {
+		kind: "context_ambiguity",
+		roundId: contextIdentity.sourceRoundId,
+		decisionId: "context-scope",
+		question: "產品範圍要採用哪一種定義？",
+		options: ["最小範圍", "完整範圍"],
+		recommendation: "最小範圍",
+		evidenceIds: [evidence.evidenceId],
+	});
+	assert.equal(session.getContextCandidate(), undefined);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedPackage);
+});
+
+test("ContextAmbiguity_WhenUserAnswers_ShouldResumeContextBuildWithNewAttempt", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("恢復 Context Build", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-context-resume",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "Context Build 恢復規格",
+		content: "需要使用者選擇後恢復 Context Build",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [{ statement: "Context Build 邊界仍有歧義", blocking: false }],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	assert.ok(storedPackage);
+	const oldIdentity = session.currentContextBuildAttempt();
+	assert.ok(oldIdentity);
+	const ambiguityResult = session.completeContextBuild(oldIdentity, {
+		kind: "ambiguous",
+		ambiguity: {
+			decisionId: "context-resume-scope",
+			question: "產品範圍要採用哪一種定義？",
+			options: ["最小範圍", "完整範圍"],
+			recommendation: "最小範圍",
+			evidenceIds: [evidence.evidenceId],
+		},
+	});
+	assert.equal(ambiguityResult.kind, "ambiguous");
+
+	const resumedState = session.recordAnswer("完整範圍");
+	assert.equal(resumedState.stage, "CONTEXT_BUILD");
+	assert.equal(resumedState.waitUser, undefined);
+	assert.deepEqual(session.getHumanDecisions(), [
+		{
+			decisionId: "context-resume-scope",
+			statement: "問題：產品範圍要採用哪一種定義？；決定：完整範圍",
+			evidenceIds: [evidence.evidenceId],
+		},
+	]);
+	const newIdentity = session.currentContextBuildAttempt();
+	assert.ok(newIdentity);
+	assert.notEqual(newIdentity.attemptId, oldIdentity.attemptId);
+	assert.equal(newIdentity.sourceRoundId, oldIdentity.sourceRoundId);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedPackage);
+
+	const staleResult = session.completeContextBuild(oldIdentity, {
+		kind: "completed",
+		candidate: {
+			glossary: [
+				{
+					term: "產品範圍",
+					definition: "使用者選擇的完整需求邊界。",
+					evidenceIds: [evidence.evidenceId],
+				},
+			],
+		},
+	});
+	assert.equal(staleResult.kind, "stale");
+	assert.equal(session.current().stage, "CONTEXT_BUILD");
+});
+
+test("RequireAdrDecision_WhenMaterialAmbiguityExists_ShouldEnterWaitUserWithoutPersisting", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("交付 ADR Build 歧義決策", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-adr-ambiguity",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "ADR Build 歧義規格",
+		content: "需要使用者確認的 ADR 決策邊界",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const contextCandidate = {
+		glossary: [
+			{
+				term: "產品範圍",
+				definition: "使用者確認的新產品需求邊界。",
+				evidenceIds: [evidence.evidenceId],
+			},
+		],
+	};
+	const contextResult = session.completeContextBuild(contextIdentity, { kind: "completed", candidate: contextCandidate });
+	assert.equal(contextResult.kind, "accepted");
+	assert.equal(contextResult.state.stage, "ADR_BUILD");
+	const adrIdentity = session.currentAdrBuildAttempt();
+	assert.ok(adrIdentity);
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	const storedContextCandidate = session.getContextCandidate();
+	assert.ok(storedPackage);
+	assert.ok(storedContextCandidate);
+
+	const result = session.requireAdrDecision(adrIdentity, {
+		decisionId: "adr-scope",
+		question: "ADR 的產品範圍要採用哪一種定義？",
+		options: ["最小範圍", "完整範圍"],
+		recommendation: "最小範圍",
+		evidenceIds: [evidence.evidenceId],
+	});
+
+	assert.equal(result.kind, "ambiguous");
+	assert.equal(result.state.stage, "WAIT_USER");
+	assert.deepEqual(result.state.waitUser, {
+		kind: "adr_ambiguity",
+		roundId: adrIdentity.sourceRoundId,
+		decisionId: "adr-scope",
+		question: "ADR 的產品範圍要採用哪一種定義？",
+		options: ["最小範圍", "完整範圍"],
+		recommendation: "最小範圍",
+		evidenceIds: [evidence.evidenceId],
+	});
+	assert.equal(session.getAdrBuildCandidate(), undefined);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedPackage);
+	assert.strictEqual(session.getContextCandidate(), storedContextCandidate);
+});
+
+test("AdrAmbiguity_WhenUserAnswers_ShouldResumeAdrBuildWithNewAttempt", () => {
+	const session = createForgeSessionState();
+	const snapshot = Object.freeze({ candidates: {}, manifest: [] });
+	session.startGrillRound("ADR Build 歧義回答後恢復", snapshot);
+	session.beginDeepKnowledge();
+	const retrievalIdentity = session.currentDeepAttempt();
+	assert.ok(retrievalIdentity);
+	session.completeDeepKnowledge([], undefined, retrievalIdentity);
+	const understandingIdentity = session.currentDeepAttempt();
+	assert.ok(understandingIdentity);
+	const evidence = {
+		evidenceId: "ev-adr-resume",
+		kind: "wiki",
+		source: "wiki/spec",
+		title: "ADR Build 恢復規格",
+		content: "需要使用者選擇後恢復 ADR Build",
+		metadata: {},
+	};
+	const evidencePackage = createEvidencePackage({
+		inherited: [evidence],
+		supplemental: [],
+		decisions: [],
+		findings: [],
+		limitations: [],
+		knowledgeSummary: "已驗證的完整知識摘要",
+	});
+	const understandingResult = session.handleDeepResult(understandingIdentity, { kind: "completed", evidencePackage });
+	assert.equal(understandingResult.kind, "accepted");
+	assert.equal(understandingResult.state.stage, "CONTEXT_BUILD");
+	const contextIdentity = session.currentContextBuildAttempt();
+	assert.ok(contextIdentity);
+	const contextResult = session.completeContextBuild(contextIdentity, {
+			kind: "completed",
+			candidate: {
+				glossary: [
+					{
+						term: "產品範圍",
+						definition: "使用者確認的新產品需求邊界。",
+						evidenceIds: [evidence.evidenceId],
+					},
+				],
+			},
+		});
+	assert.equal(contextResult.kind, "accepted");
+	assert.equal(contextResult.state.stage, "ADR_BUILD");
+	const oldIdentity = session.currentAdrBuildAttempt();
+	assert.ok(oldIdentity);
+	const storedPackage = session.getKnowledgeUnderstandingPackage();
+	const storedContextCandidate = session.getContextCandidate();
+	assert.ok(storedPackage);
+	assert.ok(storedContextCandidate);
+
+	const ambiguityResult = session.requireAdrDecision(oldIdentity, {
+		decisionId: "adr-resume-scope",
+		question: "ADR 的產品範圍要採用哪一種定義？",
+		options: ["最小範圍", "完整範圍"],
+		recommendation: "最小範圍",
+		evidenceIds: [evidence.evidenceId],
+	});
+	assert.equal(ambiguityResult.kind, "ambiguous");
+
+	const resumedState = session.recordAnswer("完整範圍");
+	assert.equal(resumedState.stage, "ADR_BUILD");
+	assert.equal(resumedState.waitUser, undefined);
+	assert.deepEqual(session.getHumanDecisions(), [
+		{
+			decisionId: "adr-resume-scope",
+			statement: "問題：ADR 的產品範圍要採用哪一種定義？；決定：完整範圍",
+			evidenceIds: [evidence.evidenceId],
+		},
+	]);
+	const newIdentity = session.currentAdrBuildAttempt();
+	assert.ok(newIdentity);
+	assert.notEqual(newIdentity.attemptId, oldIdentity.attemptId);
+	assert.equal(newIdentity.sourceRoundId, oldIdentity.sourceRoundId);
+	const staleResult = session.prepareAdrBuild(oldIdentity, {
+		records: [],
+		handoff: {
+			summary: "",
+			nextSessionFocus: "",
+			references: [],
+			suggestedSkills: [],
+		},
+	});
+	assert.equal(staleResult.kind, "stale");
+	assert.equal(session.getAdrBuildCandidate(), undefined);
+	assert.strictEqual(session.getContextCandidate(), storedContextCandidate);
+	assert.strictEqual(session.getKnowledgeUnderstandingPackage(), storedPackage);
 });
 
 test("SessionState_WhenKnowledgeUnderstandingPackageIsInvalid_ShouldRemainInUnderstandingWithoutPartialSave", () => {

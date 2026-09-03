@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { createOrchestrator, type Orchestrator } from "../workflow/orchestrator.ts";
 import { createForgeUiState, type ForgeUiState, type WaitUserState } from "../ui/ui-state.ts";
 import {
@@ -6,6 +8,22 @@ import {
 	type EvidenceInput,
 	type EvidencePackage,
 } from "../evidence/evidence-engine.ts";
+import {
+	freezeContextCandidate,
+	validateContextAmbiguity,
+	validateContextCandidate,
+	type ContextBuildCompletion,
+	type ContextBuildIdentity,
+	type ContextCandidate,
+	type ContextAmbiguity,
+} from "../knowledge/context-builder.ts";
+import {
+	freezeAdrBuildCandidate,
+	validateAdrBuildCandidate,
+	type AdrBuildCandidate,
+	type AdrBuildIdentity,
+} from "../decision/adr-builder.ts";
+import type { CommitDocumentsResult } from "../artifacts/documents-writer.ts";
 
 export interface WaitUserPayload extends WaitUserState {
 	decisionSummary?: string;
@@ -120,6 +138,50 @@ export type DeepCompletedResult =
 			readonly decisionSummary?: never;
 	  };
 
+export type ContextBuildCallResult =
+	| {
+			readonly kind: "accepted";
+			readonly state: ForgeUiState;
+			readonly identity: ContextBuildIdentity;
+	  }
+	| {
+			readonly kind: "ambiguous";
+			readonly state: ForgeUiState;
+			readonly identity: ContextBuildIdentity;
+	  }
+	| {
+			readonly kind: "stale";
+			readonly expected?: ContextBuildIdentity;
+			readonly received: ContextBuildIdentity;
+	  }
+	| {
+			readonly kind: "invalid";
+			readonly state: ForgeUiState;
+			readonly errors: readonly string[];
+	  };
+
+export type AdrBuildCallResult =
+	| {
+			readonly kind: "accepted";
+			readonly state: ForgeUiState;
+			readonly identity: AdrBuildIdentity;
+	  }
+	| {
+			readonly kind: "ambiguous";
+			readonly state: ForgeUiState;
+			readonly identity: AdrBuildIdentity;
+	  }
+	| {
+			readonly kind: "stale";
+			readonly expected?: AdrBuildIdentity;
+			readonly received: AdrBuildIdentity;
+	  }
+	| {
+			readonly kind: "invalid";
+			readonly state: ForgeUiState;
+			readonly errors: readonly string[];
+	  };
+
 export interface DeepNeedsDecisionResult {
 	readonly kind: "needs_decision";
 	readonly decisionId: string;
@@ -154,8 +216,11 @@ export interface ForgeSessionState {
 		decisionSummary: string | undefined,
 		identity: DeepAttemptIdentity,
 	): DeepCallResult;
+	completeContextBuild(identity: ContextBuildIdentity, completion: ContextBuildCompletion): ContextBuildCallResult;
 	confirm(): ForgeUiState;
 		current(): ForgeUiState;
+		currentContextBuildAttempt(): ContextBuildIdentity | undefined;
+		currentAdrBuildAttempt(): AdrBuildIdentity | undefined;
 		currentDeepAttempt(): DeepAttemptIdentity | undefined;
 		continueGrillRound(): GrillRound;
 		retryGrillRound(): GrillRound | undefined;
@@ -164,6 +229,9 @@ export interface ForgeSessionState {
 	getFetchedEvidenceIds(): ReadonlySet<string>;
 	getLockedDeepEvidence(): LockedDeepEvidence | undefined;
 	getHumanDecisions(): readonly EvidenceDecision[];
+	getHumanPremises(): readonly EvidenceInput[];
+	getContextCandidate(): ContextCandidate | undefined;
+	getAdrBuildCandidate(): AdrBuildCandidate | undefined;
 	getKnowledgeUnderstandingPackage(): EvidencePackage | undefined;
 		handleDeepResult(identity: DeepAttemptIdentity, result: DeepResult): DeepCallResult;
 	isFirstGrillRoundOfSnapshot(): boolean;
@@ -179,6 +247,9 @@ export interface ForgeSessionState {
 			releaseDeepSearchBudget(identity: DeepAttemptIdentity): "released" | "stale";
 	recordEvidenceFetch(candidateId: string): void;
 	recordAnswer(answer: string): ForgeUiState;
+	prepareAdrBuild(identity: AdrBuildIdentity, candidate: AdrBuildCandidate): AdrBuildCallResult;
+	requireAdrDecision(identity: AdrBuildIdentity, ambiguity: ContextAmbiguity): AdrBuildCallResult;
+	finalizeAdrBuild(identity: AdrBuildIdentity, commit: CommitDocumentsResult): AdrBuildCallResult;
 	reset(): ForgeUiState;
 	requireGrillResult(payload: WaitUserPayload): ForgeUiState;
 	reject(selection?: string): ForgeUiState;
@@ -193,6 +264,7 @@ function copyEvidenceInput(evidence: EvidenceInput): EvidenceInput {
 export function createForgeSessionState(): ForgeSessionState {
 		const answeredDecisionKeys = new Set<string>();
 		const humanDecisions = new Map<string, EvidenceDecision>();
+	const humanPremises = new Map<string, EvidenceInput>();
 	const deepSupplementalEvidenceIds = new Set<string>();
 	const deepSupplementalEvidence = new Map<string, EvidenceInput>();
 	const fetchedEvidenceIds = new Set<string>();
@@ -202,7 +274,13 @@ export function createForgeSessionState(): ForgeSessionState {
 			let orchestrator: Orchestrator | undefined;
 	let nextRoundId = 1;
 	let nextDeepAttemptId = 1;
+	let nextContextBuildAttemptId = 1;
+	let nextAdrBuildAttemptId = 1;
 		let deepAttempt: DeepAttemptIdentity | undefined;
+	let contextBuildAttempt: ContextBuildIdentity | undefined;
+	let adrBuildAttempt: AdrBuildIdentity | undefined;
+	let adrBuildCandidate: AdrBuildCandidate | undefined;
+	let contextCandidate: ContextCandidate | undefined;
 		let needsDiscoveryCount = 0;
 		let deepSearchBudgetRoundId: string | undefined;
 		let deepSearchCount = 0;
@@ -361,6 +439,12 @@ export function createForgeSessionState(): ForgeSessionState {
 		current() {
 			return uiState;
 		},
+		currentContextBuildAttempt() {
+			return contextBuildAttempt ? { ...contextBuildAttempt } : undefined;
+		},
+		currentAdrBuildAttempt() {
+			return adrBuildAttempt ? { ...adrBuildAttempt } : undefined;
+		},
 		currentDeepAttempt() {
 			return deepAttempt;
 		},
@@ -398,6 +482,15 @@ export function createForgeSessionState(): ForgeSessionState {
 		},
 		getHumanDecisions() {
 			return [...humanDecisions.values()].map(copyEvidenceDecision);
+		},
+		getHumanPremises() {
+			return [...humanPremises.values()].map(copyEvidenceInput);
+		},
+		getContextCandidate() {
+			return contextCandidate;
+		},
+		getAdrBuildCandidate() {
+			return adrBuildCandidate;
 		},
 		getKnowledgeUnderstandingPackage() {
 			return knowledgeUnderstandingPackage;
@@ -507,7 +600,11 @@ export function createForgeSessionState(): ForgeSessionState {
 				knowledgeUnderstandingPackage = previousPackage;
 				throw error;
 			}
-		})();
+			})();
+			contextBuildAttempt = {
+				attemptId: `context-${nextContextBuildAttemptId++}`,
+				sourceRoundId: identity.sourceRoundId,
+			};
 			uiState = {
 				...uiState,
 				lastEvidenceIds: [...result.evidencePackage.evidenceIds],
@@ -515,6 +612,146 @@ export function createForgeSessionState(): ForgeSessionState {
 				waitUser: undefined,
 			};
 			deepAttempt = undefined;
+			return { kind: "accepted", state: uiState, identity };
+		},
+		completeContextBuild(identity, completion) {
+			if (
+				!contextBuildAttempt ||
+				contextBuildAttempt.attemptId !== identity.attemptId ||
+				contextBuildAttempt.sourceRoundId !== identity.sourceRoundId
+			) {
+				return { kind: "stale", expected: contextBuildAttempt, received: identity };
+			}
+			if (!orchestrator || orchestrator.getStage() !== "CONTEXT_BUILD") {
+				return { kind: "invalid", state: uiState, errors: ["Context Build completion 不合法"] };
+			}
+			if (!knowledgeUnderstandingPackage) {
+				return { kind: "invalid", state: uiState, errors: ["Context Build 缺少 Knowledge Package"] };
+			}
+			if (completion.kind === "ambiguous") {
+				const ambiguity = completion.ambiguity;
+				const validation = validateContextAmbiguity(ambiguity, knowledgeUnderstandingPackage.evidenceIds);
+				if (!validation.ok) {
+					return { kind: "invalid", state: uiState, errors: validation.errors };
+				}
+				uiState = {
+					...uiState,
+					lastEvidenceIds: [...ambiguity.evidenceIds],
+					stage: orchestrator.transitionTo("WAIT_USER"),
+					waitUser: {
+						kind: "context_ambiguity",
+						roundId: identity.sourceRoundId,
+						decisionId: ambiguity.decisionId,
+						evidenceIds: [...ambiguity.evidenceIds],
+						options: [...ambiguity.options],
+						question: ambiguity.question,
+						recommendation: ambiguity.recommendation,
+					},
+				};
+				contextBuildAttempt = undefined;
+				return { kind: "ambiguous", state: uiState, identity };
+			}
+			const validation = validateContextCandidate(completion.candidate, knowledgeUnderstandingPackage.evidenceIds);
+			if (!validation.ok) {
+				return { kind: "invalid", state: uiState, errors: validation.errors };
+			}
+
+			const candidate = freezeContextCandidate(completion.candidate);
+			const previousCandidate = contextCandidate;
+			contextCandidate = candidate;
+			const nextStage = (() => {
+				try {
+					return orchestrator.transitionTo("ADR_BUILD");
+				} catch (error) {
+					contextCandidate = previousCandidate;
+					throw error;
+				}
+			})();
+			uiState = { ...uiState, stage: nextStage, waitUser: undefined };
+			contextBuildAttempt = undefined;
+			adrBuildAttempt = {
+				attemptId: `adr-${nextAdrBuildAttemptId++}`,
+				sourceRoundId: identity.sourceRoundId,
+			};
+			adrBuildCandidate = undefined;
+			return { kind: "accepted", state: uiState, identity };
+		},
+		prepareAdrBuild(identity, candidate) {
+			if (
+				!adrBuildAttempt ||
+				adrBuildAttempt.attemptId !== identity.attemptId ||
+				adrBuildAttempt.sourceRoundId !== identity.sourceRoundId
+			) {
+				return { kind: "stale", expected: adrBuildAttempt, received: identity };
+			}
+			if (!orchestrator || orchestrator.getStage() !== "ADR_BUILD") {
+				return { kind: "invalid", state: uiState, errors: ["ADR Build candidate 不合法"] };
+			}
+			if (!knowledgeUnderstandingPackage) {
+				return { kind: "invalid", state: uiState, errors: ["ADR Build 缺少 Knowledge Package"] };
+			}
+			const validation = validateAdrBuildCandidate(candidate, knowledgeUnderstandingPackage.evidenceIds);
+			if (!validation.ok) {
+				return { kind: "invalid", state: uiState, errors: validation.errors };
+			}
+
+			adrBuildCandidate = freezeAdrBuildCandidate(candidate);
+			return { kind: "accepted", state: uiState, identity };
+		},
+		requireAdrDecision(identity, ambiguity) {
+			if (
+				!adrBuildAttempt ||
+				adrBuildAttempt.attemptId !== identity.attemptId ||
+				adrBuildAttempt.sourceRoundId !== identity.sourceRoundId
+			) {
+				return { kind: "stale", expected: adrBuildAttempt, received: identity };
+			}
+			if (!orchestrator || orchestrator.getStage() !== "ADR_BUILD" || !knowledgeUnderstandingPackage) {
+				return { kind: "invalid", state: uiState, errors: ["ADR Build ambiguity 不合法"] };
+			}
+			const validation = validateContextAmbiguity(ambiguity, knowledgeUnderstandingPackage.evidenceIds);
+			if (!validation.ok) {
+				return { kind: "invalid", state: uiState, errors: validation.errors };
+			}
+
+			uiState = {
+				...uiState,
+				lastEvidenceIds: [...ambiguity.evidenceIds],
+				stage: orchestrator.transitionTo("WAIT_USER"),
+				waitUser: {
+					kind: "adr_ambiguity",
+					roundId: identity.sourceRoundId,
+					decisionId: ambiguity.decisionId,
+					evidenceIds: [...ambiguity.evidenceIds],
+					options: [...ambiguity.options],
+					question: ambiguity.question,
+					recommendation: ambiguity.recommendation,
+				},
+			};
+			adrBuildAttempt = undefined;
+			adrBuildCandidate = undefined;
+			return { kind: "ambiguous", state: uiState, identity };
+		},
+		finalizeAdrBuild(identity, commit) {
+			if (
+				!adrBuildAttempt ||
+				adrBuildAttempt.attemptId !== identity.attemptId ||
+				adrBuildAttempt.sourceRoundId !== identity.sourceRoundId
+			) {
+				return { kind: "stale", expected: adrBuildAttempt, received: identity };
+			}
+			if (
+				!orchestrator ||
+				orchestrator.getStage() !== "ADR_BUILD" ||
+				!adrBuildCandidate ||
+				commit.kind !== "committed" ||
+				!/^[a-f0-9]{64}$/.test(commit.baseHash)
+			) {
+				return { kind: "invalid", state: uiState, errors: ["ADR Build 尚未完成 Documents bundle commit"] };
+			}
+
+			uiState = { ...uiState, stage: orchestrator.transitionTo("TO_SPEC"), waitUser: undefined };
+			adrBuildAttempt = undefined;
 			return { kind: "accepted", state: uiState, identity };
 		},
 			isFirstGrillRoundOfSnapshot() {
@@ -670,6 +907,8 @@ export function createForgeSessionState(): ForgeSessionState {
 					}
 				const isDeepDiscoveryFallback = uiState.waitUser.kind === "deep_discovery_fallback";
 			const isRelevanceClarification = uiState.waitUser.kind === "relevance_clarification";
+			const isContextAmbiguity = uiState.waitUser.kind === "context_ambiguity";
+			const isAdrAmbiguity = uiState.waitUser.kind === "adr_ambiguity";
 			if (answeredDecisionKeys.has(decisionKey)) {
 				return uiState;
 			}
@@ -685,6 +924,30 @@ export function createForgeSessionState(): ForgeSessionState {
 						evidenceIds: [...uiState.waitUser.evidenceIds],
 					}),
 				);
+			}
+			if (isGrillConfirmation && currentGrillRound) {
+				const premiseContent = [
+					`目標：${currentGrillRound.request}`,
+					`問題：${pendingWaitUser.question}`,
+					`回答：${normalizedAnswer}`,
+				].join("\n");
+				humanPremises.set(decisionKey, {
+					evidenceId: `human-premise-${createHash("sha256")
+						.update(
+							[currentGrillRound.roundId, decisionId, currentGrillRound.request, pendingWaitUser.question, normalizedAnswer].join(
+								"\u0000",
+							),
+						)
+						.digest("hex")}`,
+					kind: "human_premise",
+					source: "forge://human-premise",
+					title: "使用者前提",
+					content: premiseContent,
+					metadata: {
+						roundId: currentGrillRound.roundId,
+						decisionId,
+					},
+				});
 			}
 			if (isGrillConfirmation) {
 				grillAcceptedAnswerCount += 1;
@@ -709,6 +972,32 @@ export function createForgeSessionState(): ForgeSessionState {
 					return uiState;
 				}
 			}
+			if (isContextAmbiguity) {
+				contextBuildAttempt = {
+					attemptId: `context-${nextContextBuildAttemptId++}`,
+					sourceRoundId: pendingWaitUser.roundId,
+				};
+				uiState = {
+					...uiState,
+					decisionSummary: `使用者已回答決策 ${JSON.stringify(decisionId)}：${JSON.stringify(answer)}。`,
+					stage: orchestrator.transitionTo("CONTEXT_BUILD"),
+					waitUser: undefined,
+				};
+				return uiState;
+			}
+			if (isAdrAmbiguity) {
+				adrBuildAttempt = {
+					attemptId: `adr-${nextAdrBuildAttemptId++}`,
+					sourceRoundId: pendingWaitUser.roundId,
+				};
+				uiState = {
+					...uiState,
+					decisionSummary: `使用者已回答決策 ${JSON.stringify(decisionId)}：${JSON.stringify(answer)}。`,
+					stage: orchestrator.transitionTo("ADR_BUILD"),
+					waitUser: undefined,
+				};
+				return uiState;
+			}
 			uiState = {
 				...uiState,
 				decisionSummary: `使用者已回答決策 ${JSON.stringify(decisionId)}：${JSON.stringify(answer)}。`,
@@ -720,6 +1009,7 @@ export function createForgeSessionState(): ForgeSessionState {
 	reset() {
 		answeredDecisionKeys.clear();
 		humanDecisions.clear();
+		humanPremises.clear();
 		deepSupplementalEvidenceIds.clear();
 		deepSupplementalEvidence.clear();
 		fetchedEvidenceIds.clear();
@@ -735,6 +1025,10 @@ export function createForgeSessionState(): ForgeSessionState {
 		resumableDeepPhase = undefined;
 		lockedDeepEvidence = undefined;
 		knowledgeUnderstandingPackage = undefined;
+		contextBuildAttempt = undefined;
+		contextCandidate = undefined;
+		adrBuildAttempt = undefined;
+		adrBuildCandidate = undefined;
 			orchestrator = undefined;
 			completionOmissionRecorded = false;
 				uiState = createForgeUiState("RECEIVE");
@@ -805,11 +1099,16 @@ export function createForgeSessionState(): ForgeSessionState {
 			grillAcceptedAnswerCount = 0;
 			continueGrillCheckpointPending = false;
 			humanDecisions.clear();
+			humanPremises.clear();
 			deepSupplementalEvidenceIds.clear();
 			deepSupplementalEvidence.clear();
 			fetchedEvidenceIds.clear();
 			lockedDeepEvidence = undefined;
 			knowledgeUnderstandingPackage = undefined;
+			contextBuildAttempt = undefined;
+			contextCandidate = undefined;
+			adrBuildAttempt = undefined;
+			adrBuildCandidate = undefined;
 		}
 			currentGrillRound = {
 				isFirstRoundOfSnapshot,

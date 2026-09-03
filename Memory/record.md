@@ -2,9 +2,9 @@
 title: Forge Runtime v4 開發記錄
 type: development-record
 scope: 開發目標、重大決策、實作里程碑與目前狀態
-updated: 2026-09-02
+updated: 2026-09-03
 source: 本 repo 的架構文件、ADR、Plan、handoff 與 agent-state
-status: complete
+status: waiting-user
 ---
 
 # Forge Runtime v4 開發記錄
@@ -12,6 +12,13 @@ status: complete
 ## 文件用途
 
 本文件只記錄開發目標、重大設計決策、實作過程、驗證結果與目前狀態。錯誤根因、修復方式與可重用教訓集中在 [`lesson_learn.md`](./lesson_learn.md)，避免兩份文件各自形成不同真相。
+
+## 2026-09-02 CONTEXT_BUILD production continuation 設計
+
+- 目標：接上既有 Evidence Package 契約的 `CONTEXT_BUILD` production caller、自動續跑、candidate 保存、`ADR_BUILD` 與 `Documents/` 原子文件提交。
+- 重大決策：Grill 中使用者明確確認需求、範圍或選擇即可建立帶 round／decision provenance 的 `human_premise`；沒有外部文件的新產品仍可進 Context Build。外部事實不足記 non-blocking Spec Gap。
+- fail-closed 只適用於完全無可追溯確認、material ambiguity 或 blocking limitation；不得把 human premise 當 API／相容性／法規／安全事實。
+- 交付文件：ADR-0027、Plan A、ticket 與 agent-state 已建立；本輪狀態仍為 `design-approved-not-implemented`。
 
 ## 開發目標與架構基線
 
@@ -372,3 +379,37 @@ status: complete
 - 安全決策：移除公開 `TrustedFormalSpecContext` 與第二個 validator 參數。Current runtime 無可信 formal-spec importer／不可偽造 capability／來源綁定，因此 `spec_verified` 固定 fail-closed；exploratory／black-box 不受影響。
 - 驗證：evidence 28/28；`forge-runtime npm test` 292/292，0 fail／skip／cancelled／todo，約 30.15 秒；`npm run check` 無本 ticket 診斷但保留上游 `pi-main` 21 個 TS7016；CodeGraph review 無阻擋 finding；`git diff --check` 無 whitespace error。
 - 目前狀態：本 ticket／Plan A 已完成；可信 importer、來源綁定與 generic execution guard 為獨立後續工作。
+
+## 2026-09-02 Intent 到 Context 流程圖同步
+
+- 目標：依 current runtime 更新唯一衍生視圖的維護紀錄，保持九列 baseline 與安全邊界。
+- 重大變更：文件確認 checkpoint／converge、五種 WAIT_USER、status-only delivery、fallback 確認／取消、identity／barrier／batch；Spec Gap 僅宣稱底層 Evidence engine 完成，extension wiring 與 Context builder production caller 仍未完成。
+- 證據與驗證：`forge-intent-context-flow.html:24-32,35,37`；review P0/P1/P2=0；parser、無 JS／外部依賴、9 rows、手機 CSS、Edge 兩尺寸與 console 0 PASS。舊流程圖 SHA-256 前後均為指定值，本輪未修改。
+- 狀態：文件同步完成；trusted importer／來源綁定與 Context builder production wiring 留待另案。
+
+## 2026-09-03 CONTEXT_BUILD production continuation 完成
+
+- 目標：將既有 Evidence Package 與 Grill 的人類確認接上 `CONTEXT_BUILD → ADR_BUILD → TO_SPEC` production 流程，並把候選設計決策原子提交至使用者專案的 `Documents/`。
+- 重大實作：`human_premise` 與 `post-package humanDecisions` 均保留 round／decision provenance；新增 Context／ADR completion tools、相應 skill invocation、material ambiguity 的 `WAIT_USER` resume、stale identity guard，以及成功後 `TO_SPEC` transition。
+- 重大實作：新增 `context-build` package skill；Context、ADR、handoff 僅攜帶結構化事實與證據 metadata，不複製 raw evidence／`knowledgeSummary`，並在 handoff renderer 進行 PII／敏感資料遮罩。
+- 重大實作：新增 managed-block `Documents/CONTEXT.md`、`Documents/ADR.md`、`Documents/handoff.md` writer；提交前以 base hash 偵測衝突，同目錄暫存、備份與跨檔 rollback 保證 atomic bundle，並保留使用者非 managed 內容。
+- 驗證：完整測試 322/322；base typecheck 通過；skill validator 通過；`git diff --check` 通過。PI interactive typecheck 仍因未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺少 `highlight.js` declarations（TS7016）未通過，維持既有上游 baseline，不修改 `pi-main/`。
+- 狀態：本 ticket 實作與文件交付完成；後續僅保留上游型別 baseline 與真實 PI session 的人工驗收風險。
+
+## 2026-09-03 CONTEXT_BUILD 最終根目錄邊界同步
+
+- 使用者專案的交付根目錄固定取自非空 `ctx.cwd`，輸出位置為 `<ctx.cwd>/Documents/CONTEXT.md`、`<ctx.cwd>/Documents/ADR.md` 與 `<ctx.cwd>/Documents/handoff.md`；不得以 `process.cwd()` 補值，避免未來使用 PI 開發其他專案時寫錯根目錄。
+- 最終驗證：完整測試 323/323；`Extension_WhenProjectCwdIsMissing_ShouldFailClosedWithoutStartingWorkflow` 證實缺少專案根目錄時不啟動 workflow；extension tests 162/162。此段為目前狀態，不改寫前述歷史測試數字。
+
+## 2026-09-03 CONTEXT_BUILD 文字回答續跑同步
+
+- 一般文字輸入現在也能回應 Context／ADR ambiguity；回答會消耗目前 pending invocation，建立新的 attempt，並立即轉換成 fresh invocation，避免沿用舊 identity。
+- 最終驗證更新為完整測試 324/324、extension tests 163/163；保留 `ctx.cwd` 必須明確存在的 fail-closed 邊界與既有上游 `pi-main` 型別 baseline。
+
+## 2026-09-03 取消後續實作與正規文件邊界同步
+
+- 目標：依使用者最新決定停止目前後續開發，只同步狀態／知識庫文件。
+- 重大決策：本 ticket 的正式交付邊界停在 `ADR_BUILD`／ADR；`TO_SPEC` 尚未開始，等待使用者明確確認。`Documents/` 是生成產物，本輪不更新；依 `AGENTS.md`，repo 正規文件以根目錄 `CONTEXT.md`、`ADR.md`、`PLAN-A.md`、`handoff.md` 與 `docs/` 為準。相關決策證據見 `ADR-0028` 與 `AGENTS.md:29-34`。
+- 實際狀態：程式碼已完成 CONTEXT_BUILD、ADR_BUILD 與 Documents writer；成功 ADR 後目前 runtime 會切至 `TO_SPEC` state，但沒有 TO_SPEC tool／handler，因此沒有 TO_SPEC executor，不能宣稱已執行 TO_SPEC。runtime 邊界證據為 `forge-runtime/src/runtime/session-state.ts` 與 `forge-runtime/extensions/forge-runtime.ts`。
+- 本輪僅更新 ticket、agent-state、record、lesson；未修改 `Documents/`、程式碼或測試，未重新執行驗證。
+- 狀態：WAIT_USER。

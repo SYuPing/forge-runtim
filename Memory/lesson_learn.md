@@ -2,7 +2,7 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-09-02
+updated: 2026-09-03
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: complete
 ---
@@ -12,6 +12,13 @@ status: complete
 ## 使用方式
 
 本文件只記錄「發現什麼問題、根因是什麼、如何修復、下次怎麼避免」。每筆教訓都應附可核對的檔案或測試證據；沒有證據時只記錄觀察，不把假設寫成結論。開發目標與重大實作請查 [`record.md`](./record.md)。
+
+## 2026-09-02 CONTEXT_BUILD continuation：已驗證未修復問題
+
+- 現象：一般 `grill_confirmation` 只記 `EvidenceDecision`，不建立 `human_premise`；human premise 目前限於 `deep_discovery_fallback`。另有 premise 注入前未設外部 evidence gate。
+- 根因證據：`forge-runtime/src/runtime/session-state.ts:677-687`、`forge-runtime/extensions/forge-runtime.ts:526-541,1483-1507`。
+- 修復計畫：在既有 confirmation／decision provenance 路徑建立 human premise，保留外部事實與 Spec Gap 邊界；完成 Context Build／ADR Build 驗證、managed blocks、base-hash、staging 與 rollback 後再轉階段。
+- 教訓：fail-closed 不應等同「必須先有外部文件」；可追溯的人類意圖足以支撐 exploratory context，但不能升格為外部事實。本輪未執行測試，亦未發現其他新 bug。
 
 本輪已發現並修復 production regression；以下內容只記錄可由檔案、測試或 log 核對的 bug 與教訓。
 
@@ -319,3 +326,35 @@ status: complete
 - **公開 structural trusted context 可偽造**：公開 `TrustedFormalSpecContext` 只靠結構型別與相同 evidenceId 即可能被 caller 偽造；修正為移除公開 context 與第二 validator 參數，current runtime 的 `spec_verified` 固定 fail-closed，等待可信 importer／來源綁定。證據：第三輪 code review 與 S4e 30/30 GREEN。
 - **API 收窄後 typecheck 遺留**：移除第二 validator 參數後，source 過時比較與 tests 舊 fixture 造成 4 個本 ticket typecheck errors；修正 fixture／source 後才可重跑。證據：S4e 後 typecheck RED 紀錄及最終 `npm run check` 無本 ticket 診斷。
 - **output shape regression**：新增 optional `scenarios` 初版在缺失時輸出 `scenarios: undefined`，使既有 exploratory `deepStrictEqual` 失敗；修正為 optional 欄位缺失時不輸出。證據：S4b 首次 27 tests、26 pass／1 fail，後續 27/27 GREEN。
+
+## 2026-09-02 流程圖 current-runtime 對齊
+
+- **本輪未發現新 bug**；本輪只維護衍生流程圖與 Markdown 文件。
+- 可重用教訓：底層 Evidence engine、extension production wiring 與 Context builder caller 必須分開記錄；`spec_verified` 沒有可信 importer／來源綁定時應維持 fail-closed，不得由欄位格式推論正式驗證完成。證據：`forge-intent-context-flow.html:31-32,35,37`、`docs/adr/ADR-0026-spec-gap-exploratory-development.md`。
+- 驗證環境限制：Built-in Browser 缺服務檔；Edge headless 已等效通過 1280×900／390×844 與 console 0，未將環境限制寫成 runtime bug。
+
+## 2026-09-03 CONTEXT_BUILD production continuation bugs 與教訓
+
+- **括號缺漏造成 parse error**：`adr-builder.ts` 的 freeze candidate 與 extension Context `Type.Array` schema 各發生一次 closing parenthesis 缺漏；測試／編譯先形成可核對的 parse error，修正括號後恢復驗證。證據：`forge-runtime/src/decision/adr-builder.ts`、`forge-runtime/extensions/forge-runtime.ts`、322/322 測試與 base typecheck。
+- **handoff 初版 PII 邊界不足**：初版只阻擋 obvious secret，可能讓 high-confidence PII 進入 handoff；RED `documents-writer.test.ts` 證實缺口，修正為 renderer 對高信心 PII／敏感資料做 redaction，並保留可追溯的結構化內容。證據：`forge-runtime/src/artifacts/documents-writer.ts`、`forge-runtime/tests/artifacts/documents-writer.test.ts`、322/322。
+- **TypeScript narrowing 造成驗證阻塞**：`Array.isArray` narrowing 使 callback 出現 implicit `any`，union test 未先做 discriminant narrow 也造成 typecheck error；修正為明確型別 narrowing 後 base `npm run check` 通過。證據：`forge-runtime/src/artifacts/documents-writer.ts`、相關測試與 typecheck 結果。
+- **可重用教訓**：schema／immutable candidate／文件 renderer 的型別邊界應先用編譯器與 RED 測試驗證；敏感資料檢查不能只依賴 secret pattern，handoff 需在輸出邊界統一遮罩。未修改 `pi-main/`；PI interactive typecheck 的 `highlight.js` TS7016 是既有上游 baseline。
+
+## 2026-09-03 專案根目錄邊界修正
+
+- **已驗證 bug／根因**：extension input 原先使用 `ctx.cwd ?? process.cwd()`，在未提供專案 cwd 時可能把未來 PI 專案的 `Documents/` 寫入錯誤根目錄；根因是舊 discovery convenience fallback 滲入 artifact workflow。
+- **修復方式**：`start_forge` 在 workflow 啟動前要求非空 `ctx.cwd`，缺少時 fail-closed 且不建立 workflow；artifact writer 只接受明確的 workflow root，不提供 `process.cwd()` fallback。
+- **證據**：`Extension_WhenProjectCwdIsMissing_ShouldFailClosedWithoutStartingWorkflow`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` extension tests 162/162、完整測試 323/323。
+
+## 2026-09-03 文字輸入 WAIT_USER 分流修正
+
+- **已驗證 bug**：UI-select resume 已接通，但使用者以一般文字回答 Context／ADR 的 `WAIT_USER` ambiguity 時，入口仍落入 Grill resume；該 action 被標記為 handled，卻沒有排程新的 build invocation。
+- **根因證據**：文字入口的分流只接在 `resumeWaitUserAnswer`，未在 deep／grill resume 前呼叫共用 `resumeBuildAnswer`，因此 build pending invocation 沒有被 consume，也沒有建立 fresh identity。
+- **修復方式**：文字入口改在 deep／grill 分流前呼叫共用 `resumeBuildAnswer`；成功回答會 consume pending invocation，建立新 attempt 並立即 transform 成新的 Context／ADR invocation。
+- **證據**：`ContextAmbiguity_WhenUserTypesAnswer_ShouldTransformFreshContextInvocation`；完整測試 324/324、extension tests 163/163。
+
+## 2026-09-03 文件邊界與 workflow state 教訓
+
+- **本輪未發現新 bug**：本輪只有文件同步，未修改或驗證 runtime。
+- **可重用教訓**：workflow state transition 不等於 phase executor 已實作；目前成功 ADR 後可轉入 `TO_SPEC` state，但 `forge-runtime/src/runtime/session-state.ts` 與 `forge-runtime/extensions/forge-runtime.ts` 的實際流程沒有 TO_SPEC tool／handler，故不能把 state 名稱當成已完成的 TO_SPEC。證據：上述兩個 runtime 檔案與 `ADR-0028`。
+- **可重用教訓**：generated `Documents/` 不等於 canonical repo docs；本 repo 的正規文件邊界由 `AGENTS.md:29-34` 定義，包含根目錄 `CONTEXT.md`、`ADR.md`、`PLAN-A.md`、`handoff.md` 與 `docs/`。生成產物不應覆寫正式真相來源，也不應在本輪未獲授權時更新。

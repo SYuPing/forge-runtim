@@ -1,3 +1,12 @@
+---
+title: Forge Runtime v4 Plan A
+type: implementation-plan
+scope: Forge Runtime v4 設計、實作、驗證與交接
+updated: 2026-09-03
+source: FORGE_RUNTIME_Arch_v4.md、CONTEXT.md、docs/adr、docs/handoff.md
+status: adr-boundary-awaiting-user-confirmation
+---
+
 # Plan A：Intent Route-Only LLM（本段歷史 ticket）
 
 日期：2026-08-21
@@ -2378,3 +2387,60 @@ S1–S4e 全部完成。Evidence 28/28、`forge-runtime npm test` 292/292（0 fa
 - S4c：若 `scenarios` 欄位存在，任何 verification level 均須為字串陣列，型別錯誤回傳 validation error 且不得 throw；`black_box_verified` 另須非空。
 - S4a／S4b test context fixture 型別錯誤已修正，並已完成 S4c RED→GREEN、完整驗證與二次獨立 code/document review。
 - Plan A 已完成；generic execution guard 仍維持後續 gap。
+
+### 流程圖維護校正（2026-09-02）
+
+本輪僅同步衍生視圖與文件：底層 Evidence engine 已完成，Spec Gap 欄位的 extension production wiring 尚未完成；`forge_deep_complete` 尚未傳 `verificationLevel`／`specGap`／`formalSpecReference`，trusted importer 未落地，`spec_verified` 維持 fail-closed。流程圖 parser、無 JS／外部依賴、9 rows、手機 CSS、Edge 1280×900／390×844、console 0 與 review P0/P1/P2=0 均通過。
+
+## 2026-09-02 CONTEXT_BUILD production continuation（direct-plan）
+
+### Building
+
+完成 `CONTEXT_BUILD` production 接線、自動續跑、Context candidate 保存、`ADR_BUILD` 交接與 `Documents/` 原子提交。Grill 明確確認可建立具 round／decision provenance 的 `human_premise`；沒有外部文件不阻擋新產品，外部事實不足記完整 non-blocking Spec Gap。
+
+### Not Building
+
+不修改 `pi-main/`、不新增 dependency、不做 UI、Spec／TO_TICKET、trusted formal-spec importer 或 generic execution guard；不重做既有 Evidence Package 契約。
+
+### Files
+
+Production：`forge-runtime/skills/context-build/SKILL.md`（新增）、`src/knowledge/context-builder.ts`、`src/decision/adr-builder.ts`、`src/artifacts/documents-writer.ts`（新增）、`src/runtime/session-state.ts`、`extensions/forge-runtime.ts`。Tests：`tests/knowledge/context-builder.test.ts`、`tests/decision/adr-builder.test.ts`、`tests/artifacts/documents-writer.test.ts`（新增）、`tests/runtime/session-state.test.ts`、`tests/extensions/forge-runtime-extension.test.ts`。共 11 檔，超過 8 檔但不新增 service，因 stage、IO trust boundary 與測試必須分離；這仍是一個原子可用 slice。
+
+### Tests（先 RED，再實作）
+
+先由獨立子代理新增 11 個 PascalCase 測試並確認第一個紅燈；主代理再做最小 implementation。每個 slice 後由不同子代理重跑，final review 另派角色。測試覆蓋：human premise 建立／未確認不建立、Context／ADR 成功與 ambiguity／validation fail-closed、bundled skill 自動只呼叫一次／載入失敗、managed blocks 建立／保留 unmanaged content、cwd／base-hash 無效 rollback。
+
+基線：evidence 32、state-machine 8、session-state 33、extension 167，共 240 passed；預期完成後 251 passed／0 failed。
+
+### Execution Order
+
+1. 子代理先新增／修改第一批測試。
+2. 子代理執行確認紅燈並回報 failing test／原因。
+3. 主代理確認紅燈後才做最小 production implementation。
+4. 每個 slice 後由測試角色重跑。
+5. 下一 slice 沒有紅燈就回步驟 1。
+6. implementation 完成後由不同角色 final review。
+
+### Verification
+
+沿用既有 `forge-runtime` 驗證格式：`tsx --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1`。Targeted batches 依序執行 context-builder／adr-builder／documents-writer、session-state、extension；最後執行相關全套，記錄實際 pass/fail，不在根目錄假設 npm workflow。
+
+### Fragile assumptions
+
+`human_premise` 只代表人類意圖，不得升格外部事實；完全無確認、material ambiguity 或 blocking limitation 必須停住。文件 writer 只能寫明確 `ctx.cwd/Documents/`，需 base-hash 與 rollback 保護。
+
+### 2026-09-03 實作收斂與驗證
+
+本 Plan A 已完成，狀態為 `implemented/verified`：bundled `context-build` skill 透過 `pi.skills` 掛載；`agent_settled` 各只啟動一次 `forge_context_complete`／`forge_adr_complete`。Context／ADR ambiguity 使用 fresh attempt 進 `WAIT_USER`，回答後 resume；三檔 managed Documents bundle 以 optimistic base hash、staging 與 atomic rollback 保護，成功後進 `TO_SPEC`。
+
+Context／ADR ambiguity 可由 UI select 或一般文字 input 回答：UI 路徑在 `agent_settled` 排 fresh invocation，文字路徑立即 transform fresh invocation；兩者均保留 `sourceRoundId`／`humanDecisions`，不會卡住。
+
+`human_premise` 與獨立 `humanDecisions` 保留 provenance。零可追溯證據、blocking limitation 或 material ambiguity 才 fail-closed；外部事實缺口保留為 non-blocking Spec Gap。handoff 使用 semantic secret/confidential 規則與 deterministic high-confidence PII redaction，輸出固定為 active PI project root 的 `Documents/`。production 入口已移除 `process.cwd()` fallback；只有非空 `ctx.cwd` 可啟動，缺失時 fail-closed。
+
+驗證：`npm test` 324/324、base tsc pass、skill quick_validate pass、`git diff --check` pass。Pi-interactive tsc 的既有未修改 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 缺 `highlight.js` 宣告（TS7016）仍為風險；不可寫成全綠。
+
+## 2026-09-03 正式文件同步與停止邊界
+
+本輪使用者取消目前實作任務，僅更新 AGENTS.md 規定的正式文件：root `CONTEXT.md`、`docs/adr/`、本 `docs/PLAN-A.md` 與 `docs/handoff.md`。`Documents/` 僅是未來 PI 使用者專案的生成產物，本輪不讀、不改，也不作為 canonical 真相來源。
+
+本 Plan A 的已完成驗證史予以保留；但 `TO_SPEC` 只記為狀態節點存在／可轉入，TO_SPEC tool／handler 與後續工作尚未開始。流程交付停在 ADR 邊界，未獲使用者明確確認前不得開始 TO_SPEC、TO_TICKET 或其他後續實作。詳見 [`ADR-0028`](adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md)。
