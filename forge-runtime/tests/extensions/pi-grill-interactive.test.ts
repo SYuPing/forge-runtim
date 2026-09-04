@@ -57,6 +57,7 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 	mkdirSync(tempDir, { recursive: true });
 	mkdirSync(join(tempDir, "wiki"), { recursive: true });
 	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(join(tempDir, "code_base", "Forge.ts"), "Forge\n", "utf8");
 	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
 	const terminal = new VirtualTerminal(100, 30);
 	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
@@ -138,8 +139,13 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 		});
 		faux.setResponses([
 			routerStartForgeResponse(),
-			fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
-				evidence: [],
+			(context) => fauxAssistantMessage([
+				fauxToolCall("forge_grill_evidence", {
+					candidateId: extractCandidateId(context),
+				}, { id: "call-evidence-1" }),
+			]),
+			(context) => fauxAssistantMessage([fauxToolCall("forge_grill_complete", {
+				evidence: [extractCandidateId(context)],
 				questions: [{ id: "q-proceed", question: "是否進入 deep knowledge？", options: ["是", "否"] }],
 				recommendation: { reason: "需要使用者確認。", value: "是" },
 				requiresUserConfirmation: true,
@@ -167,20 +173,20 @@ test("SuccessfulNeedsConfirmationCompletion_TerminatesTurnUntilUserAnswer", asyn
 		await waitForViewport(terminal, "是否進入 deep knowledge？");
 		const callCountAtWaitUser = faux.state.callCount;
 		const assistantMessagesAtWaitUser = runtime.session.messages.filter((message) => message.role === "assistant").length;
-		assert.equal(callCountAtWaitUser, 2, "router completion 與 Grill completion 應分開計數");
+		assert.equal(callCountAtWaitUser, 3, "router、evidence 與 Grill completion 應分開計數");
 		assert.equal(faux.getPendingResponseCount(), 1);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		assert.equal(faux.state.callCount, callCountAtWaitUser);
 		assert.equal(runtime.session.messages.filter((message) => message.role === "assistant").length, assistantMessagesAtWaitUser);
 
-			terminal.sendInput("是");
-			terminal.sendInput("\r");
-			for (let attempt = 0; attempt < 250; attempt += 1) {
-				const userMessages = runtime.session.messages.filter((message) => message.role === "user");
-				if (userMessages.length === 2 && JSON.stringify(userMessages[1]).includes("grill-2")) break;
-				await new Promise((resolve) => setTimeout(resolve, 20));
-			}
-			assert.equal(runtime.session.messages.filter((message) => message.role === "user").length, 2);
+		terminal.sendInput("是");
+		terminal.sendInput("\r");
+		for (let attempt = 0; attempt < 250; attempt += 1) {
+			const userMessages = runtime.session.messages.filter((message) => message.role === "user");
+			if (userMessages.length === 2 && JSON.stringify(userMessages[1]).includes("grill-2")) break;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.equal(runtime.session.messages.filter((message) => message.role === "user").length, 2);
 		assert.match(JSON.stringify(runtime.session.messages), /grill-2/);
 	} finally {
 		if (boundaryTimer) {
@@ -436,10 +442,11 @@ test("SuccessfulReadyForDeepCompletion_ReturnsTerminatingResultWithoutConfirmati
 
 test("PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnswer", async () => {
 	const tempDir = join(tmpdir(), `pi-grill-tui-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(tempDir, { recursive: true });
-		mkdirSync(join(tempDir, "wiki"), { recursive: true });
-		mkdirSync(join(tempDir, "code_base"), { recursive: true });
-		const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+	mkdirSync(tempDir, { recursive: true });
+	mkdirSync(join(tempDir, "wiki"), { recursive: true });
+	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(join(tempDir, "code_base", "Forge.ts"), "Forge\n", "utf8");
+	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
 	const terminal = new VirtualTerminal(100, 30);
 	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
 	let mode: InteractiveMode | undefined;
@@ -499,9 +506,14 @@ test("PiTui_WhenNeedsConfirmationCompletes_ShouldShowQuestionAndAdvanceAfterAnsw
 
 		faux.setResponses([
 			routerStartForgeResponse(),
-			fauxAssistantMessage(
+			(context) => fauxAssistantMessage([
+				fauxToolCall("forge_grill_evidence", {
+					candidateId: extractCandidateId(context),
+				}, { id: "call-evidence-1" }),
+			]),
+			(context) => fauxAssistantMessage(
 				[fauxToolCall("forge_grill_complete", {
-					evidence: [],
+					evidence: [extractCandidateId(context)],
 					questions: [{ id: "q-proceed", question: "是否進入 deep knowledge？", options: ["是", "否"] }],
 					recommendation: { reason: "需要使用者確認。", value: "是" },
 					requiresUserConfirmation: true,
@@ -1073,6 +1085,7 @@ test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndResumeOnlyAfterExplicitR
 	mkdirSync(tempDir, { recursive: true });
 	mkdirSync(join(tempDir, "wiki"), { recursive: true });
 	mkdirSync(join(tempDir, "code_base"), { recursive: true });
+	writeFileSync(join(tempDir, "code_base", "Forge.ts"), "Forge\n", "utf8");
 	const faux = registerFauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
 	const terminal = new VirtualTerminal(100, 30);
 	let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
@@ -1156,9 +1169,14 @@ test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndResumeOnlyAfterExplicitR
 		assert.doesNotMatch(JSON.stringify(runtime.session.messages), /retry-attempt-completed/);
 
 		faux.appendResponses([
-			fauxAssistantMessage([
+			(context) => fauxAssistantMessage([
+				fauxToolCall("forge_grill_evidence", {
+					candidateId: extractCandidateId(context),
+				}, { id: "call-evidence-retry-1" }),
+			]),
+			(context) => fauxAssistantMessage([
 				fauxToolCall("forge_grill_complete", {
-					evidence: [],
+					evidence: [extractCandidateId(context)],
 					questions: [{ id: "q-retry", question: "retry-attempt-completed", options: ["是", "否"] }],
 					recommendation: { reason: "重試完成。", value: "是" },
 					requiresUserConfirmation: true,
@@ -1171,7 +1189,7 @@ test("PiTui_WhenCompletionIsOmitted_ShouldRecoverOnceAndResumeOnlyAfterExplicitR
 		terminal.sendInput("\r");
 		await waitForViewport(terminal, "retry-attempt-completed");
 		await runtime.session.waitForIdle();
-		assert.equal(faux.state.callCount, 3);
+		assert.equal(faux.state.callCount, 4);
 		assert.equal(faux.getPendingResponseCount(), 0);
 		assert.equal(runtime.session.messages.filter((message) => message.role === "user").length, 2);
 		assert.equal(runtime.session.isIdle, true);

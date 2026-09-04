@@ -501,6 +501,8 @@ DEEP_KNOWLEDGE
 
 每輪 Grill 只處理一個最阻塞的設計邊界。使用者的選項或自由回答都必須記錄為人類決策，再由下一輪 Grill 判斷是否仍有未解邊界；只有 Grill 明確回報 `READY_FOR_DEEP` 才可進入 Deep Knowledge。
 
+窄例外（零候選探索 opt-in）：上述一般規則維持不變。只有當前 manifest snapshot 為 `matches=[]`、runtime 已送出 marker `forge-empty-snapshot-exploratory-consent` 的固定探索 opt-in，且使用者回覆符合既有 `isApproval` 的明確肯定時，該回答才視為 `human_premise`（不是知識充分性確認），允許由 `WAIT_USER` 直接進入既有 `DEEP_KNOWLEDGE_RETRIEVAL`；拒絕或模糊回答維持 `WAIT_USER`。有候選流程仍必須經下一輪 Grill，且任何一般 `NEEDS_CONFIRMATION` 不適用此例外。
+
 ## 九之一、Grill Completion 與 Recovery 的最高規範（2026-08-13）
 
 ### Grill 呼叫傳輸不變量（2026-08-17）
@@ -1806,4 +1808,9 @@ PI 官方目前也維持這種「core minimal、透過 extension/skills/package 
 本 amendment 只處理「過期的 Deep Retrieval 完成結果已忽略。」反覆循環，其他流程與 Deep semantic contract 維持不變。初始 Deep stage panel 使用 `displayOnly`，只讓訊息可見且可持久化，不參與 agent-loop；input handler 只預載本回合 Deep tools，不提前消費 pending identity；matching user `message_start` 才消費 identity；pending 期間 Deep tool_call fail-closed。工具預載與 delivery 授權分離，避免合法 identity 到達時工具尚未註冊。
 
 這個窄化 amendment 不改 Grill completion、WAIT_USER、cancel/retry/switch、relevance、state transition、snapshot、合法 Deep 後續、其他 Deep delivery 或 `pi-main/`。自動化已完成：正式 RED 1 fail、GREEN 1 pass、extension 117/117、PI integration 10/10、完整 `npm test` 212/212、`npm run check` exit 0。真實 PI v0.83.0 僅完成啟動 smoke check，尚未完成原始情境人工驗收。
+
+### 2026-09-05 零候選探索性路由封版同步
+
+- 本案修改範圍：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`，以及唯一衍生視圖 `forge-intent-context-flow.html`；不修改 `pi-main`、Evidence validator、state machine 或 TO_SPEC executor。
+- 本案窄例外僅限空 `matches`、runtime 固定探索 opt-in marker 與既有 `isApproval` 明確肯定同時成立時，由 `WAIT_USER` 直進既有 Deep 並建立 exploratory `Spec Gap`。一般 `NEEDS_CONFIRMATION` 仍必須在使用者回答後進下一輪 Grill；有候選流程維持既有 Light→Grill→Deep，拒絕／模糊回答維持 `WAIT_USER`。
 

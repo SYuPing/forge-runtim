@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Plan A
 type: implementation-plan
 scope: Forge Runtime v4 設計、實作、驗證與交接
-updated: 2026-09-03
+updated: 2026-09-05
 source: FORGE_RUNTIME_Arch_v4.md、CONTEXT.md、docs/adr、docs/handoff.md
-status: adr-boundary-awaiting-user-confirmation
+status: implemented-completed-check-blocked
 ---
 
 # Plan A：Intent Route-Only LLM（本段歷史 ticket）
@@ -2248,7 +2248,7 @@ Plan A 已完成。checkpoint bare `cancel` 與既有 cancel 共用完整 cleanu
 | Documents | `CONTEXT.md`、ADR-0021、ticket、agent-state、`docs/handoff.md` | durable status |
 | 不修改 | `pi-main/` | 上游原始碼維持不變 |
 
-### Tests
+### Tests（已完成）
 
 至少涵蓋：session option 只公開「確認／取消」且共用 UI 有「自行輸入…」；selector「取消」清空輸入／evidence 並回 `RECEIVE`；自行輸入 trim 後精確「取消」同樣 reset；「確認」仍建立 fresh Understanding；一般 `deep_decision` 取消仍保留資料；stale／duplicate input 不重複 reset。第一個測試必須由測試子代理先打 RED。
 
@@ -2444,3 +2444,131 @@ Context／ADR ambiguity 可由 UI select 或一般文字 input 回答：UI 路�
 本輪使用者取消目前實作任務，僅更新 AGENTS.md 規定的正式文件：root `CONTEXT.md`、`docs/adr/`、本 `docs/PLAN-A.md` 與 `docs/handoff.md`。`Documents/` 僅是未來 PI 使用者專案的生成產物，本輪不讀、不改，也不作為 canonical 真相來源。
 
 本 Plan A 的已完成驗證史予以保留；但 `TO_SPEC` 只記為狀態節點存在／可轉入，TO_SPEC tool／handler 與後續工作尚未開始。流程交付停在 ADR 邊界，未獲使用者明確確認前不得開始 TO_SPEC、TO_TICKET 或其他後續實作。詳見 [`ADR-0028`](adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md)。
+
+## 2026-09-03 流程圖維護完成與現存 runtime gaps
+
+- 本次維護完成：衍生圖已對齊 11 個真正 workflow state、7 種 WAIT_USER payload kind、Context／ADR production caller、Documents bundle 與 `human_premise` provenance。
+- 目前邊界：`TO_SPEC` 僅是成功 ADR 後的 state node，沒有 executor；不得寫成 TO_SPEC 或 Plan B 已完成，且未獲使用者明確確認前停在 `adr-boundary-awaiting-user-confirmation`。
+- 現存 gap：Evidence 空包仍需保留流程風險；`buildContextItems` production caller 尚未接入。這些不是本輪新增 runtime 修復範圍。
+- 驗證證據：HTML parser、無 JS／外部依賴、11 rows、Edge 兩尺寸、console 0 與內容 review P0/P1/P2=0 PASS；未執行 runtime 測試。
+
+## 2026-09-03 零候選探索性路由（唯一 Plan A）
+
+### Building
+
+Light Discovery `matches=[]` 時，不呼叫不存在 candidate 的 evidence tool；UI 固定選項為「同意／不同意」，runtime 沿用 `isApproval`，trim 後接受「好、可以、同意、照做、yes、ok、okay、y」（英文先 lowercase），含「確認」的其他字串不屬於此 opt-in；只有這些明確肯定才沿用既有 `human_premise` 進 exploratory，並建立 non-blocking `Spec Gap`。`resumeGrillWithAnswer` 在空 snapshot 保留已確認 premise，呼叫既有 `continueDeepKnowledge(..., true)`，沿用 `pendingKnowledgeRequest`。`forge_deep_complete` schema／params／`createEvidencePackage` 補接既有 `verificationLevel`／`specGap`／`formalSpecReference`。
+
+### Not Building
+
+有候選的既有 Light→Grill→Deep、不放寬 Evidence validator、不新增頂層 state／command／service、不修改 `session-state`／`evidence-engine`／`context-build-skill`、不做 UI、TO_SPEC／TO_TICKET、trusted importer、generic execution guard 或 `pi-main`。本案無 UI，因此不建 Plan B。
+
+最高架構窄例外已明文化：僅空 `matches` 的固定探索 opt-in 明確肯定可由 `WAIT_USER` 直進既有 Deep；一般 `NEEDS_CONFIRMATION` 與有候選路徑仍須下一輪 Grill。
+
+### Files
+
+Production：`forge-runtime/extensions/forge-runtime.ts`。Tests：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。新增／修正測試：明確同意、拒絕、顯式 Spec Gap 傳遞、自動 Spec Gap、孤立 formalSpecReference 拒絕；後者另以非空 fixture 恢復三個既有 TUI grill-2／retry 契約，不是新增空知識 feature test。
+
+五個新增 extension tests：`Extension_WhenDeepCompleteProvidesOnlyFormalSpecReference_ShouldRejectBeforeContextBuild`、`Extension_WhenDeepCompleteProvidesExploratorySpecGap_ShouldPropagateToEvidencePackage`、`Extension_WhenEmptySnapshotConsentAndDeepCompleteOmitMetadata_ShouldAddExploratorySpecGap`、`Extension_WhenEmptyDiscoveryHasHumanConfirmation_ShouldEnterDeepWithoutSecondGrillRound`、`Extension_WhenEmptyDiscoveryAnswerIsNotExplicitApproval_ShouldRemainWaiting`。`DeepCompletion_WhenOnlyGrillHumanPremiseExists_ShouldEnterContextBuild` 為修改既有測試；三個 TUI 測試為恢復既有契約。
+
+### Execution Order
+
+1. 子代理先新增兩個測試並打紅，記錄 failing test／原因。
+2. 主代理確認紅燈後做最小 production implementation。
+3. 不同子代理先執行實際 `tsx` 限定批次，再執行 `npm test`。
+4. 完成驗證後更新 durable documents；任何未通過項目保留在 state，不寫成完成。
+
+### Verification
+
+以下命令均從 `forge-runtime` 目錄執行。以下 RED 1、RED 2 與 targeted 282 是核准時的歷史執行計畫；最終由正式 full 329/329 supersede，不代表本輪另有 targeted 282 實際結果：
+
+1. RED 1：`.\node_modules\.bin\tsx.cmd --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 --test-name-pattern="Extension_WhenEmptyDiscoveryHasHumanConfirmation_ShouldEnterDeepWithoutSecondGrillRound" tests/extensions/forge-runtime-extension.test.ts`；期望先失敗。
+2. RED 2：`.\node_modules\.bin\tsx.cmd --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 --test-name-pattern="Extension_WhenDeepCompleteProvidesExploratorySpecGap_ShouldPropagateToEvidencePackage" tests/extensions/forge-runtime-extension.test.ts`；期望先失敗。
+3. 相關完整批次：`.\node_modules\.bin\tsx.cmd --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/discovery/light-discovery.test.ts tests/evidence/evidence-engine.test.ts tests/runtime/session-state.test.ts tests/extensions/forge-runtime-extension.test.ts tests/extensions/pi-grill-interactive.test.ts tests/grill/grill-result.test.ts tests/knowledge/discovery-evidence.test.ts`；歷史計畫預期 282 passed，本輪未另宣稱已執行。
+4. 全套：`npm test`；期望 0 failed。
+5. 靜態：`npm run check`；只允許既知未修改 `pi-main` 的 highlight.js TS7016，不得有新增 Forge Runtime error，也不得修改 `pi-main`。
+
+### Fragile assumptions
+
+`human_premise` 只證明意圖，不證明 API／協定／安全／相容性，不能升為 `spec_verified`。拒絕、空白或模糊回答維持 `WAIT_USER`；TO_SPEC 保留 ADR-0028 的人工確認邊界。
+
+### Current status（歷史設計狀態）
+
+歷史設計狀態為 `design-confirmed-not-implemented`；現況由下方 2026-09-04 收尾段落取代。
+
+## 2026-09-04 零候選探索性路由收尾
+
+現行執行紀錄（取代上述歷史計畫）：五個新增 extension tests 為明確同意進 Deep、拒絕仍等待、顯式 Spec Gap 傳遞、自動補 exploratory／Spec Gap、孤立 `formalSpecReference` 拒絕；實際 RED 為自動補 exploratory／Spec Gap 與孤立 `formalSpecReference` guard。最終以正式 full 329/329 為準，未將 targeted 282 寫成已執行。
+
+- 狀態：implemented／verified／completed。UI 固定選項為「同意／不同意」；runtime 沿用 `isApproval`，trim 後接受「好、可以、同意、照做、yes、ok、okay、y」（英文先 lowercase），只有這些明確肯定才由空快照進既有 Deep；含「確認」的其他字串不屬於此 opt-in。拒絕／模糊回答停在 `WAIT_USER`，不記 premise；有候選流程不變。
+- 空快照、無外部 evidence、有人類前提且三項 metadata 全省略時，runtime 自動補 exploratory 與 deterministic non-blocking Spec Gap；不完整 metadata 組合（含孤立 `formalSpecReference`）在 extension boundary fail-closed。
+- 修改檔案：production `forge-runtime/extensions/forge-runtime.ts`；tests `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。後者以非空 fixture 恢復三個既有 TUI grill-2／retry 契約，不是新增空知識 feature test。不改 `pi-main`、Evidence validator、state machine、TO_SPEC。
+- 正式 final5/check4 證據為歷史紀錄，已由下方 final10/check9 取代；final9/check8 亦為歷史紀錄。
+
+- 最終文件同步：`npm test` 以 `.tmp/full-test-final10-0905.log` 為準，329 passed、0 failed、0 skipped、30778.2386 ms；`npm run check` 以 `.tmp/check-final9-0905.log` 為準，exit 2，21 個上游 TS7016，Forge Runtime 三個檔案 0 error。final9/check8、final8/check7 及更早僅為歷史紀錄，已由 final10/check9 取代。
+- 修改範圍加入 `forge-intent-context-flow.html`，僅作衍生視圖同步，不是 runtime 行為來源；`.tmp/intent-flow-release-validation-20260904.log` 的 CDP、靜態與視覺驗證通過，mobile／desktop overflow 均為 0。歷史 targeted 282 為未執行預估，已由正式 329 全量測試取代。
+
+## 2026-09-05 封版同步
+
+- 狀態：`implemented-verified-completed`。最高架構窄例外已同步：只有空 `matches` 固定 opt-in 的明確肯定可由 `WAIT_USER` 直進既有 Deep；一般 `NEEDS_CONFIRMATION` 仍須下一輪 Grill，有候選流程不變。
+
+## 2026-09-05 零候選同意範圍與 Context Build 過期結果復原
+
+工作項目：`zero-candidate-context-build-recovery-20260905`
+
+狀態：實作完成，正式 check 有既有外部阻塞。本案沒有 UI gap，不產生 Plan B。
+
+## 2026-09-05 實作完成與驗證
+
+- 狀態：實作完成，正式 check 有既有外部阻塞。
+- workflow-scoped exploration consent 已在同一 workflow 跨兩個 gate 共用，並於 cancel、new workflow、switch、reset 清除；其他人類決策不沿用。
+- stale completion 仍 fail-closed；第一次 stale 在下一個 `agent_settled` 只重播目前 identity 一次，第二次不循環，`/forge-runtime continue` 只人工重播目前 identity。
+- 未修改 `session-state`、`pi-main`、queue 或 UI。
+- 驗證：focused 4/4、`npm test` 333/333、主 tsconfig pass、兩個獨立 review PASS。`npm run check` 唯一阻塞是既有上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 highlight.js 子路徑缺少型別，共 20 個 TS7016；未修改 `pi-main`。
+
+### Building
+
+- exploration consent 只在同一 workflow 內有效，涵蓋缺少來源與空 snapshot gate；新 workflow、cancel、reset、switch 時清除。相同 workflow 重新搜尋仍為空時，沿用已記錄同意，不再重問。
+- 保留 Context Build identity 比對與過期結果拒收。`agent_settled` 收到 stale completion 後，對目前 identity 自動 replay 一次；同一 identity 的自動重試耗盡後，不再自動迴圈，只允許 `/forge-runtime continue` 恢復。
+- replay 使用既有 invocation／pending marker 與 settled 流程，不新增 state、queue 或背景流程。
+
+### Not Building
+
+- 不修改 `pi-main/`、session-state contract、Context builder／skill、Evidence validator 或 UI。
+- 不放寬 stale identity guard，不接受舊 Context Build 結果；不新增 retry command、backoff、平行 queue 或永久 consent。
+- 不處理與本 ticket 無關的 Grill、ADR、TO_SPEC／TO_TICKET 流程。
+
+### Approach
+
+1. 先由獨立測試子代理新增並執行三個 RED：`Extension_WhenMissingAssetApprovalLeadsToEmptySnapshot_ShouldNotAskConsentTwice`、`Extension_WhenContextBuildCompletionIsStale_ShouldRetryCurrentInvocationOnce`、`Extension_WhenContextBuildStaleRetryIsExhausted_ShouldReplayOnlyOnContinue`。
+2. 主代理確認 RED 後，在既有 consent marker 與 Context completion handler 上做最小實作；不改上游與既有 fail-closed 條件。
+3. 由獨立驗證子代理執行 targeted tests、既有 extension test 檔與 package check。
+
+### Files
+
+| 檔案 | 變動 |
+| --- | --- |
+| `forge-runtime/extensions/forge-runtime.ts` | workflow-scope consent 清理／重用，以及 stale Context Build 一次 replay 與 `/forge-runtime continue` 邊界。 |
+| `forge-runtime/tests/extensions/forge-runtime-extension.test.ts` | 新增三個回歸測試，覆蓋重問、一次自動 replay、耗盡後僅 continue。 |
+
+不新增檔案、不新增 dependency、不修改 `pi-main/`。
+
+### Tests
+
+- focused 驗證 4/4；完整 `npm test` 333/333；主 tsconfig pass；兩個獨立 review PASS。
+- `npm run check` 唯一阻塞是既有上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 highlight.js 子路徑缺少型別，共 20 個 TS7016；未修改 `pi-main`。
+
+### Execution Order
+
+1. 下一 session 先讀 `docs/handoff.md`、本 Plan、`CONTEXT.md`、相關 ADR 與本 ticket 狀態檔，展示摘要並取得確認。
+2. 獨立測試子代理新增三個 RED 並回報失敗證據。
+3. 主代理只修改兩個指定檔案，先修 consent scope，再修 stale replay budget。
+4. 獨立驗證子代理執行 targeted、既有 extension 檔案測試與 `npm run check`。
+5. 驗證通過後更新 durable documents；未通過則保留實際錯誤與未解問題。
+
+### Verification（已完成）
+
+完成條件已達成：focused 4/4、完整 `npm test` 333/333、主 tsconfig pass、兩個獨立 review PASS。正式 `npm run check` 的唯一阻塞為既有上游 highlight.js 子路徑型別缺失（20 個 TS7016），沒有因此修改 `pi-main`。
+
+### Fragile assumption
+
+模型或 provider 可能重播舊 invocation identity；runtime 必須以目前 identity 判定並拒收舊結果。一次 replay budget 必須綁定目前 identity，並在新 workflow／cancel／reset／switch 清除；若無法可靠辨識目前 identity，維持 fail-closed 並停止。

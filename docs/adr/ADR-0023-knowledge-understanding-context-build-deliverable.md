@@ -2,9 +2,9 @@
 title: Knowledge Understanding 交付 Context Build 的單一知識封包
 type: architecture-decision-record
 scope: Forge Runtime KNOWLEDGE_UNDERSTANDING 到 CONTEXT_BUILD 的資料交接
-updated: 2026-08-30
+updated: 2026-09-05
 source: 使用者確認、FORGE_RUNTIME_Arch_v4.md、ADR-0016、ADR-0021、現有 evidence-engine／session-state／context-builder
-status: accepted
+status: implemented-completed-check-blocked
 ---
 
 # ADR-0023：Knowledge Understanding 交付 Context Build 的單一知識封包
@@ -32,6 +32,22 @@ status: accepted
 
 本 ADR 定義 Context Build 的必要輸入契約與 consumer seam，但不宣稱自動啟動／排程 Context Build provider 已修復。若要補 provider continuation，必須另案設計與確認。
 
+## 2026-09-05 追加決策：stale completion recovery
+
+1. `CONTEXT_BUILD` completion 的 identity 檢查維持 fail-closed；過期結果不得寫入 package、推進 state 或覆蓋目前 invocation。
+2. stale terminate 後，下一次 `agent_settled` 以目前有效 identity 自動 replay 一次；replay 必須沿用現有 Context Build invocation，不建立新 queue 或新頂層 state。
+3. 若同一有效 invocation 再次收到 stale completion，不自動循環；`/forge-runtime continue` 才能明確恢復，且只能重播目前有效 invocation。
+4. 最脆弱假設是 stale terminate 後必定觸發 `agent_settled`。若 RED 證明此假設不成立，改採 continue-only recovery，不以新增 queue 補洞。
+
+本追加決策的實作與驗收由 [`zero-candidate-context-build-recovery-20260905`](../tickets/zero-candidate-context-build-recovery-20260905.md) 定義。
+
+## 2026-09-05 實作結果
+
+- workflow-scoped exploration consent 已在同一 workflow 跨缺少來源 gate 與空 snapshot gate 共用，並於 cancel、new workflow、switch、reset 清除；其他人類決策不沿用。
+- stale completion 仍 fail-closed；第一次 stale 在下一個 `agent_settled` 只重播目前 identity 一次，第二次不循環，`/forge-runtime continue` 只人工重播目前 identity。
+- 未修改 `session-state`、`pi-main`、queue 或 UI。focused 4/4、`npm test` 333/333、主 tsconfig pass；兩個獨立 review PASS。
+- 正式 `npm run check` 的唯一阻塞是未修改上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 highlight.js 子路徑缺少型別，共 20 個 TS7016；本 ticket 未修改 `pi-main`。未知舊 invocation 的來源未視為已證實根因。
+
 ## 實作與驗證結果（2026-08-30）
 
 - `EvidencePackage` 現在以單一 immutable package 交付五項資料：`decisions`、`findings`、`limitations`、`knowledgeSummary` 與 runtime 衍生的 `evidenceIds`。
@@ -44,3 +60,7 @@ status: accepted
 ## TDD 驗收
 
 依序完成 RED→GREEN：summary validation／derived IDs；extension schema／handler；atomic session save + transition guard；Context Build 取得五項交付；cleanup isolation。
+
+## Current production verification note（2026-09-03）
+
+既有 package contract 已由 `CONTEXT_BUILD`／`ADR_BUILD` production caller 消費並接上 Documents bundle；本 ADR 不改寫既有交付契約。流程圖仍標示 `buildContextItems` caller gap 與 Evidence 空包缺口，兩者不是本 ADR 已完成的 validator 或 runtime 修復。

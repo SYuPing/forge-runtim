@@ -50,6 +50,9 @@ import {
 	type EvidenceFinding,
 	type EvidenceLimitation,
 	type EvidencePackage,
+	type EvidenceVerificationLevel,
+	type FormalSpecReference,
+	type SpecGap,
 } from "../src/evidence/evidence-engine.ts";
 import type { ForgeUiState } from "../src/ui/ui-state.ts";
 import { buildWorkflowStatusText } from "../src/ui/workflow-status-widget.ts";
@@ -59,6 +62,8 @@ const DEEP_RESULT_GUIDANCE = [
 	"needs_discovery 僅用於來源或證據不足。",
 	"正式 route 只依 kind；不得用 decisionSummary 自由文字判斷 route。",
 ].join("\n");
+
+const EMPTY_SNAPSHOT_EXPLORATORY_CONSENT_ID = "forge-empty-snapshot-exploratory-consent";
 
 function isEvidenceTooLargeRejection(
 	value: unknown,
@@ -258,6 +263,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	const adrBuildToolNames = ["forge_adr_complete"];
 	let pendingGrillRun = false;
 	let pendingKnowledgeRequest: { missingAssets: string[]; request: string; rootDir: string } | undefined;
+	let explorationConsentGranted = false;
 	let activeWorkflow: ActiveWorkflowContext | undefined;
 	let savedActiveTools: string[] | undefined;
 	let pendingReplayInvocation: string | undefined;
@@ -268,6 +274,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	let pendingSettledDiscoveryInvocationTimer: ReturnType<typeof setTimeout> | undefined;
 	let pendingSettledBuildInvocation: PendingSettledBuildInvocation | undefined;
 	let pendingSettledBuildInvocationTimer: ReturnType<typeof setTimeout> | undefined;
+	let lastSentContextBuildInvocation: PendingSettledBuildInvocation | undefined;
+	let replayedContextBuildIdentity: PendingSettledBuildInvocation["identity"] | undefined;
 	let documentsBaseHash: string | undefined;
 		let pendingDiscoveryRestart: PendingDiscoveryRestart | undefined;
 		const fetchedGrillEvidence = new Map<string, EvidenceInput>();
@@ -343,6 +351,18 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		pendingGrillRun = false;
 		restoreActiveTools();
 	};
+	const rememberSentContextBuildInvocation = (pending: PendingSettledBuildInvocation): void => {
+		if (pending.stage !== "CONTEXT_BUILD") return;
+		const previousIdentity = lastSentContextBuildInvocation?.identity;
+		if (
+			!previousIdentity ||
+			previousIdentity.attemptId !== pending.identity.attemptId ||
+			previousIdentity.sourceRoundId !== pending.identity.sourceRoundId
+		) {
+			replayedContextBuildIdentity = undefined;
+		}
+		lastSentContextBuildInvocation = pending;
+	};
 		const clearPendingState = () => {
 			pendingGrillRun = false;
 			pendingKnowledgeRequest = undefined;
@@ -358,6 +378,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				pendingSettledDiscoveryInvocationTimer = undefined;
 			}
 			pendingSettledBuildInvocation = undefined;
+			lastSentContextBuildInvocation = undefined;
+			replayedContextBuildIdentity = undefined;
 			if (pendingSettledBuildInvocationTimer) {
 				clearTimeout(pendingSettledBuildInvocationTimer);
 				pendingSettledBuildInvocationTimer = undefined;
@@ -438,15 +460,32 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 		const hasActiveGrillAttempt = () => pendingGrillRun && sessionState.current().stage === "GRILL";
 	const parseActiveGrillCompletion = (payload: unknown) => {
 		const round = sessionState.continueGrillRound();
-		return parseGrillCompletion(payload, {
+		const completion = parseGrillCompletion(payload, {
 			expectedRoundId: round.roundId,
 			fetchedEvidenceIds: sessionState.getFetchedEvidenceIds(),
 			isFirstRoundOfSnapshot: sessionState.isFirstGrillRoundOfSnapshot(),
 			snapshotManifest: round.snapshot.manifest,
 		});
+		if (
+			sessionState.isFirstGrillRoundOfSnapshot() &&
+			round.snapshot.manifest.length === 0 &&
+			completion.requiresUserConfirmation
+		) {
+			return {
+				...completion,
+				questions: [{
+					id: EMPTY_SNAPSHOT_EXPLORATORY_CONSENT_ID,
+					options: ["同意", "不同意"],
+					question: "目前沒有可用的知識文件，是否同意以人類前提進行探索性開發？",
+				}],
+				recommendation: { ...completion.recommendation, value: "同意" },
+			};
+		}
+		return completion;
 	};
-	const cancelWorkflow = async (ctx: CommandContext): Promise<void> => {
-		const current = sessionState.current();
+const cancelWorkflow = async (ctx: CommandContext): Promise<void> => {
+	explorationConsentGranted = false;
+	const current = sessionState.current();
 		const fallbackReset = current.stage === "WAIT_USER" && current.waitUser?.kind === "deep_discovery_fallback";
 		const deepCancel =
 			current.stage === "DEEP_KNOWLEDGE_RETRIEVAL" ||
@@ -473,6 +512,40 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 	const resumeGrillWithAnswer = async (answer: string, ctx: CommandContext): Promise<string | undefined> => {
 		const currentRound = sessionState.continueGrillRound();
 		const currentState = sessionState.current();
+		const isEmptySnapshotExploratoryConsent =
+			currentState.stage === "WAIT_USER" &&
+			currentState.waitUser?.kind === "grill_confirmation" &&
+			currentState.waitUser.decisionId === EMPTY_SNAPSHOT_EXPLORATORY_CONSENT_ID &&
+			currentState.waitUser.roundId === currentRound.roundId &&
+			sessionState.isFirstGrillRoundOfSnapshot() &&
+			currentRound.snapshot.manifest.length === 0;
+		if (isEmptySnapshotExploratoryConsent) {
+			if (!isApproval(answer)) {
+				pendingGrillRun = true;
+				activateGrillTools();
+				await publishState(pi, ctx, currentState);
+				ctx.ui?.notify?.("請先明確同意探索性開發，或保留目前等待狀態。", "warn");
+				return undefined;
+			}
+			const answeredState = sessionState.recordAnswer(answer);
+			explorationConsentGranted = true;
+			const enteredDeep = await continueDeepKnowledge(
+				pi,
+				ctx,
+				sessionState,
+				activeWorkflow,
+				publishWaitUser,
+				requireDeepToolBoundary,
+				() => undefined,
+				answeredState.decisionSummary,
+				undefined,
+				activateDeepRetrievalTools,
+				"settled",
+				true,
+			);
+			await publishState(pi, ctx, sessionState.current());
+			return enteredDeep.invocation;
+		}
 		if (currentState.waitUser?.kind === "grill_checkpoint" && answer.trim() === "cancel") {
 			await cancelWorkflow(ctx);
 			return undefined;
@@ -861,8 +934,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					return { block: true };
 				}
 				const completion = parseActiveGrillCompletion(params);
+				const emptySnapshotAlreadyApproved =
+					explorationConsentGranted &&
+					sessionState.isFirstGrillRoundOfSnapshot() &&
+					sessionState.continueGrillRound().snapshot.manifest.length === 0;
 				let deepInvocation: string | undefined;
-					if (completion.requiresUserConfirmation) {
+					if (completion.requiresUserConfirmation && !emptySnapshotAlreadyApproved) {
 						const waitUser = toWaitUserPayload(completion);
 							void publishWaitUser(waitUser, ctx as CommandContext, { deliverAs: "displayOnly" }).catch((error: unknown) => {
 							(ctx as CommandContext).ui?.notify?.(
@@ -887,7 +964,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							completion,
 							activateDeepRetrievalTools,
 							"settled",
-							isConvergenceRound || (completion.evidence.length === 0 && sessionState.getHumanPremises().length > 0),
+							emptySnapshotAlreadyApproved ||
+								isConvergenceRound ||
+								(completion.evidence.length === 0 && sessionState.getHumanPremises().length > 0),
 					);
 					if (!enteredDeep.entered) {
 						return {
@@ -1493,6 +1572,39 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 									{ additionalProperties: false },
 								),
 							),
+							verificationLevel: Type.Optional(
+								Type.Union([
+									Type.Literal("exploratory"),
+									Type.Literal("black_box_verified"),
+									Type.Literal("spec_verified"),
+								]),
+							),
+							specGap: Type.Optional(
+								Type.Object(
+									{
+										target: Type.String(),
+										version: Type.Optional(Type.String()),
+										environment: Type.Optional(Type.String()),
+										scenarios: Type.Optional(Type.Array(Type.String())),
+										verifiedAt: Type.Optional(Type.String()),
+										reason: Type.String(),
+										missingEvidence: Type.Array(Type.String()),
+										impact: Type.String(),
+									},
+									{ additionalProperties: false },
+								),
+							),
+							formalSpecReference: Type.Optional(
+								Type.Object(
+									{
+										target: Type.String(),
+										version: Type.String(),
+										locator: Type.String(),
+										evidenceId: Type.String(),
+									},
+									{ additionalProperties: false },
+								),
+							),
 						},
 						{ additionalProperties: false },
 					),
@@ -1532,7 +1644,10 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 							decisions: EvidenceDecision[];
 							findings: EvidenceFinding[];
 							limitations: EvidenceLimitation[];
-					  }
+							verificationLevel?: EvidenceVerificationLevel;
+							specGap?: SpecGap;
+							formalSpecReference?: FormalSpecReference;
+						}
 					| {
 							kind: "needs_decision";
 							decisionId: string;
@@ -1643,6 +1758,42 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						}
 					: decision,
 			);
+			const round = sessionState.continueGrillRound();
+			let verificationLevel = params.outcome.verificationLevel;
+			let specGap = params.outcome.specGap;
+			if (
+				round?.isFirstRoundOfSnapshot === true &&
+				round.snapshot.manifest.length === 0 &&
+				inheritedEvidence.length === 0 &&
+				supplementalEvidence.length === 0 &&
+				humanPremises.length > 0 &&
+				params.outcome.verificationLevel === undefined &&
+				params.outcome.specGap === undefined &&
+				params.outcome.formalSpecReference === undefined
+			) {
+				verificationLevel = "exploratory";
+				specGap = {
+					target: round.request,
+					reason: "本輪沒有可用的知識文件，僅依使用者明確提供的前提進行探索性開發。",
+					missingEvidence: ["與本輪目標相關的知識文件或正式規格"],
+					impact: "不得據此宣稱 API、協定、安全、法規或相容性；後續需補充可核對證據。",
+				};
+			}
+			const formalSpecReference = params.outcome.formalSpecReference;
+			const metadataCombinationIsValid =
+				(verificationLevel === undefined && specGap === undefined && formalSpecReference === undefined) ||
+				(verificationLevel !== undefined &&
+					specGap !== undefined &&
+					(verificationLevel === "spec_verified"
+						? formalSpecReference !== undefined
+						: formalSpecReference === undefined));
+			if (!metadataCombinationIsValid) {
+				const error = "Evidence metadata 組合不完整：verificationLevel 與 specGap 必須成對；formalSpecReference 僅能搭配 spec_verified。";
+				return {
+					content: [{ type: "text", text: error }],
+					details: { status: "invalid", errors: [error] },
+				};
+			}
 			const evidencePackage = createEvidencePackage({
 				inherited: inheritedEvidence,
 				supplemental: supplementalEvidence,
@@ -1651,6 +1802,9 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				findings: params.outcome.findings,
 				limitations: params.outcome.limitations,
 				knowledgeSummary: params.outcome.knowledgeSummary,
+				verificationLevel,
+				specGap,
+				formalSpecReference,
 			});
 			const validation = validateEvidencePackage(evidencePackage);
 			if (!validation.ok) {
@@ -1820,6 +1974,22 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 
 			const completion = sessionState.completeContextBuild(identity, params.outcome);
 			if (completion.kind === "stale") {
+				const currentAttempt = sessionState.currentContextBuildAttempt();
+				const lastSent = lastSentContextBuildInvocation;
+				const replayedIdentity = replayedContextBuildIdentity;
+				if (
+					!pendingSettledBuildInvocation &&
+					currentAttempt &&
+					lastSent?.stage === "CONTEXT_BUILD" &&
+					lastSent.identity.attemptId === currentAttempt.attemptId &&
+					lastSent.identity.sourceRoundId === currentAttempt.sourceRoundId &&
+					(!replayedIdentity ||
+						replayedIdentity.attemptId !== currentAttempt.attemptId ||
+						replayedIdentity.sourceRoundId !== currentAttempt.sourceRoundId)
+				) {
+					pendingSettledBuildInvocation = lastSent;
+					replayedContextBuildIdentity = lastSent.identity;
+				}
 				return {
 					content: [{ type: "text", text: "過期的 Context Build 完成結果已忽略。" }],
 					details: { status: "stale" },
@@ -1834,6 +2004,8 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			}
 
 			pendingSettledBuildInvocation = undefined;
+			lastSentContextBuildInvocation = undefined;
+			replayedContextBuildIdentity = undefined;
 			if (completion.kind === "ambiguous") {
 				restoreActiveTools();
 				if (completion.state.waitUser) {
@@ -2272,6 +2444,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 				) {
 					return;
 				}
+				rememberSentContextBuildInvocation(pendingBuild);
 				pendingReplayInvocation = pendingBuild.invocation;
 				await pi.sendUserMessage(pendingBuild.invocation);
 			}, 0);
@@ -2388,6 +2561,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			const approvedRequest = pendingKnowledgeRequest.request;
 			const approvedRootDir = pendingKnowledgeRequest.rootDir;
 			pendingKnowledgeRequest = undefined;
+			explorationConsentGranted = true;
 			clearFallbackWorkflowState();
 			await publishState(pi, ctx ?? {}, sessionState.beginIntent(approvedRequest));
 			await publishState(pi, ctx ?? {}, sessionState.beginLightDiscovery(approvedRequest));
@@ -2431,10 +2605,11 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 								? waitUser.recommendation
 							: routingText);
 						if (waitUser?.kind === "context_ambiguity" || waitUser?.kind === "adr_ambiguity") {
-							if (await resumeBuildAnswer(answer, ctx ?? {})) {
-								const pendingBuild = pendingSettledBuildInvocation;
-								pendingSettledBuildInvocation = undefined;
-								return pendingBuild
+						if (await resumeBuildAnswer(answer, ctx ?? {})) {
+							const pendingBuild = pendingSettledBuildInvocation;
+							pendingSettledBuildInvocation = undefined;
+							if (pendingBuild) rememberSentContextBuildInvocation(pendingBuild);
+							return pendingBuild
 									? { action: "transform" as const, text: pendingBuild.invocation }
 									: { action: "handled" as const };
 							}
@@ -2481,11 +2656,12 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 			ctx?.ui?.notify?.("Forge 缺少明確的 project root（ctx.cwd），已拒絕啟動 workflow。", "warn");
 			return { action: "handled" as const };
 		}
-		if (!requireGrillToolBoundary(ctx ?? {})) {
-			return { action: "handled" as const };
-		}
+	if (!requireGrillToolBoundary(ctx ?? {})) {
+		return { action: "handled" as const };
+	}
 
-			const knowledgeAssets = getKnowledgeAssetStatus(rootDir);
+	explorationConsentGranted = false;
+	const knowledgeAssets = getKnowledgeAssetStatus(rootDir);
 			if (knowledgeAssets.missingAssets.length > 0) {
 				pendingKnowledgeRequest = {
 					missingAssets: knowledgeAssets.missingAssets,
@@ -2598,6 +2774,34 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 						await pi.sendUserMessage(invocation, { deliverAs: "followUp" });
 						return;
 					}
+					if (stage === "CONTEXT_BUILD") {
+						const currentAttempt = sessionState.currentContextBuildAttempt();
+						const lastSent = lastSentContextBuildInvocation;
+						const replayedIdentity = replayedContextBuildIdentity;
+						if (
+							!pi.sendUserMessage ||
+							!requireBuildToolBoundary(ctx) ||
+							!activeWorkflow ||
+							!lastSent ||
+							lastSent.activeWorkflow !== activeWorkflow ||
+							!currentAttempt ||
+							lastSent.identity.attemptId !== currentAttempt.attemptId ||
+							lastSent.identity.sourceRoundId !== currentAttempt.sourceRoundId ||
+							!replayedIdentity ||
+							replayedIdentity.attemptId !== currentAttempt.attemptId ||
+							replayedIdentity.sourceRoundId !== currentAttempt.sourceRoundId ||
+							pendingSettledBuildInvocation !== undefined ||
+							pendingSettledBuildInvocationTimer !== undefined
+						) {
+							await publishState(pi, ctx, sessionState.current());
+							return;
+						}
+						activateContextBuildTools();
+						pendingReplayInvocation = lastSent.invocation;
+						await pi.sendUserMessage(lastSent.invocation, { deliverAs: "followUp" });
+						await publishState(pi, ctx, sessionState.current());
+						return;
+					}
 					if (stage === "DEEP_KNOWLEDGE_RETRIEVAL" || stage === "KNOWLEDGE_UNDERSTANDING" || (stage === "WAIT_USER" && sessionState.current().waitUser?.kind === "deep_decision")) {
 						if (!pi.sendUserMessage || !requireDeepToolBoundary(ctx)) {
 							await publishState(pi, ctx, sessionState.current());
@@ -2693,6 +2897,7 @@ export default function forgeRuntimeExtension(pi: ForgeExtensionApi): void {
 					return;
 				}
 				activeWorkflow = undefined;
+				explorationConsentGranted = false;
 				clearFallbackWorkflowState();
 				pendingConvergenceRoundId = undefined;
 				clearPendingState();

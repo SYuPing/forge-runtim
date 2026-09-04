@@ -2,9 +2,9 @@
 title: Forge Runtime v4 Context
 type: context
 scope: Forge Runtime v4 設計、實作與交接
-updated: 2026-09-03
+updated: 2026-09-05
 source: FORGE_RUNTIME_Arch_v4.md、docs/adr、docs/PLAN-A.md、docs/handoff.md
-status: implemented-verified-reviewed
+status: active
 ---
 
 # Forge Runtime v4 Context
@@ -646,3 +646,50 @@ Context Builder regression 以否定正式 decision 與虛構 `authorityLevel` �
 - `Documents 生成產物`：未來 PI 使用者專案的輸出目錄，不是本 repo 的正式設計文件；本輪取消任務後不修改、不要求先讀取，也不以其內容覆蓋 canonical 文件。
 - `TO_SPEC 狀態節點`：代表流程模型存在可轉入的節點；`TO_SPEC 實作`（tool／handler）與後續工作尚未開始，未獲使用者確認前不得進入或宣稱已執行。
 - 最新狀態：本輪只同步正式文件至 ADR 邊界，後續只能等待使用者明確確認 TO_SPEC；詳見 [`ADR-0028`](docs/adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md)。
+
+## 2026-09-03 Intent 到 Context 流程圖 current-runtime 對齊（最新）
+
+- 衍生圖已依 current runtime 對齊 11 個真正 workflow state 與 7 種 `WAIT_USER` payload kind；等待種類維持為旁路，不另增 state。
+- `CONTEXT_BUILD`／`ADR_BUILD` production caller、Documents bundle 與 `human_premise` provenance 已接線；完成 ADR 後只進入 `TO_SPEC` 狀態節點，沒有 TO_SPEC executor，未經使用者明確確認不得進入或宣稱完成。
+- Evidence 空包仍是 validator／流程圖需標示的缺口；`buildContextItems` production caller gap 仍未解決。證據：`forge-intent-context-flow.html:25-35,38-40`、`ADR-0023`、`ADR-0028`。
+- 驗證：內容 review P0/P1/P2=0；HTML parser、無 JavaScript／外部依賴、11 rows、Edge 1280×900／390×844、console 0 PASS。`forge-runtime-flow.html` before/after SHA-256 均為 `153841F436081711694834EF464F9DB82C5D8B41D4028426F480A04EDC19EBE8`，該檔原先已有工作樹修改，本輪未碰；未宣稱執行 runtime 測試。
+
+## 2026-09-03 零候選探索性路由設計核准
+
+- 使用者已核准：Light Discovery `matches=[]` 時，不呼叫不存在 candidate 的 evidence tool；只有明確人類確認才沿用既有 `human_premise` 進 exploratory，並建立 non-blocking `Spec Gap`。
+- 拒絕、空白或模糊回答維持 `WAIT_USER`；有候選的既有 Light→Grill→Deep 流程完全不變，不放寬 Evidence validator、不新增頂層 state／command／service。
+- `human_premise` 僅證明使用者意圖，不證明 API、協定、安全或相容性；不得升為 `spec_verified`。`TO_SPEC` 排除於本案，仍保留 ADR-0028 的人工確認邊界。
+- 最小 implementation scope：production 僅 `forge-runtime/extensions/forge-runtime.ts`；測試僅 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。核心 seam 是空 snapshot 的 `resumeGrillWithAnswer` 保留已確認 premise，呼叫既有 `continueDeepKnowledge(..., true)`，並沿用 `pendingKnowledgeRequest`。
+- `forge_deep_complete` schema／params／`createEvidencePackage` 補接現有 `verificationLevel`／`specGap`／`formalSpecReference`，不規劃修改 `session-state`、`evidence-engine` 或 `context-build-skill`。
+- 狀態：`design-confirmed-not-implemented`。baseline 為批次 277 passed；新增後預期 279 passed／0 failed。驗證由子代理先打紅，再做最小實作；先跑實際 `tsx` 限定批次，再跑 `npm test`。`npm run check` 的既有 `pi-main` highlight.js TS7016 仍不修改，只要求無新增 Forge Runtime error。
+- 詳見 [`ADR-0029`](docs/adr/ADR-0029-zero-candidate-exploratory-routing.md)、[`ticket`](docs/tickets/zero-candidate-exploratory-routing-20260903.md)、[`PLAN-A`](docs/PLAN-A.md) 與 [`agent-state`](agent-state/zero-candidate-exploratory-routing-20260903.md)。
+
+## 2026-09-04 零候選探索性路由實作完成
+
+- 狀態：implemented／verified／completed。空快照首輪固定要求明確 opt-in；UI 固定選項為「同意／不同意」，runtime 沿用 `isApproval`（trim 後接受「好、可以、同意、照做、yes、ok、okay、y」；英文先 lowercase），只有這些明確肯定才沿用既有 `human_premise` 直接進 Deep；包含「確認」的其他字串不屬於此 opt-in，拒絕或模糊回答留在 `WAIT_USER` 且不記 premise；有候選流程維持 Light→Grill→Deep。
+- `forge_deep_complete` metadata 維持向後相容；空快照、無外部 evidence 且有人類前提時，三項 metadata 全省略會自動補 `exploratory` 與 deterministic non-blocking `Spec Gap`。metadata 組合不完整（含孤立 `formalSpecReference`）在 extension boundary fail-closed；`spec_verified` 仍由既有 trusted-context validator fail-closed。
+- production 只修改 `forge-runtime/extensions/forge-runtime.ts`；測試修改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`；同步唯一衍生視圖 `forge-intent-context-flow.html`。未修改 `pi-main`、Evidence validator、state machine 或 TO_SPEC。
+- 驗證：以 `.tmp/full-test-final10-0905.log` 為準，`npm test` 329 passed、0 failed、0 skipped、30778.2386 ms；以 `.tmp/check-final9-0905.log` 為準，`npm run check` exit 2，21 筆 TS7016 全在未修改上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21`，本輪三個 Forge 檔 0 error。final9/check8、final8/check7 及更早僅為歷史紀錄，已由 final10/check9 取代。
+- 最高架構已明文化窄例外：僅空 `matches` 的固定探索 opt-in 明確肯定回答可由 `WAIT_USER` 直接進既有 Deep；一般 `NEEDS_CONFIRMATION` 與有候選流程仍須下一輪 Grill。
+
+## 2026-09-05 零候選探索性路由封版
+
+- 狀態：`implemented-verified-completed`。窄例外已納入最高架構；一般 confirmation 規則與有候選流程未變。
+- 封版證據：`.tmp/full-test-final10-0905.log`（329 passed／0 failed／0 skipped，duration_ms 30778.2386）；`.tmp/check-final9-0905.log`（exit 2，21 個上游 TS7016，Forge 三檔 0 error）。
+
+## 2026-09-05 Context Build recovery 實作完成
+
+- 使用者已核准修正兩個實際流程缺口：缺少來源 gate 與空 snapshot gate 共用一個狹窄、只限同一次 workflow 的 exploration consent；同一次 workflow 內不重問，新 workflow、cancel、reset、switch 時清除，其他人類決策不沿用。
+- `CONTEXT_BUILD` 收到過期 completion 時仍維持 fail-closed，不接受舊 identity。以目前有效 identity 在下一次 `agent_settled` 自動 replay 最多一次；再次 stale 不自動循環，改由 `/forge-runtime continue` 明確恢復，且只能重播目前有效 invocation。
+- 最脆弱假設：stale terminate 後必定會觸發 `agent_settled`。若 RED 證明不成立，採 continue-only recovery，不新增 queue。
+- workflow-scoped exploration consent 已在同一 workflow 跨缺少來源 gate 與空 snapshot gate 共用，並於 cancel、new workflow、switch、reset 清除；其他人類決策不沿用。
+- stale completion 仍 fail-closed；第一次 stale 在下一個 `agent_settled` 只重播目前 identity 一次，第二次不循環，`/forge-runtime continue` 只人工重播目前 identity。
+- 實作未修改 `session-state`、`pi-main`、queue 或 UI。驗證：focused 4/4、`npm test` 333/333、主 tsconfig pass；兩個獨立 review PASS。正式 `npm run check` 仍受既有上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 highlight.js 子路徑型別缺失阻塞，共 20 個 TS7016；本 ticket 未修改 `pi-main`。
+- 設計文件與 ticket：[`ADR-0023`](docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md)、[`ADR-0027`](docs/adr/ADR-0027-context-build-human-premise-and-documents-output.md)、[`ADR-0029`](docs/adr/ADR-0029-zero-candidate-exploratory-routing.md)、[`zero-candidate-context-build-recovery-20260905`](docs/tickets/zero-candidate-context-build-recovery-20260905.md)。目前狀態為「實作完成，正式 check 有既有外部阻塞」。
+
+## 2026-09-04 零候選探索性路由最終文件同步（歷史證據，已由 2026-09-05 取代）
+
+- （歷史證據）最終狀態：`implemented-verified-completed`。以 `.tmp/full-test-final8-0904.log` 為準：`npm test` 329 passed、0 failed、0 skipped、34635.325 ms；五個新增測試與三個恢復既有 TUI 測試均通過，僅有既有 DEP0190 warning。舊 final5/final6/final7 僅為歷史紀錄，已由 final8 取代。
+- （歷史證據）以 `.tmp/check-final7-0904.log` 為準：`npm run check` exit 2；21 個 TS7016 全在未修改的 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21`，本輪三個 Forge 檔為 0 error。舊 check4/check5/check6 僅為歷史紀錄，已由 check7 取代。
+- 完整修改範圍另包含 `forge-intent-context-flow.html`，但它只是衍生視圖同步，不是 runtime 行為來源；未修改 `forge-runtime-flow.html`。
+- HTML 已反映空 manifest opt-in、明確同意後 `human_premise` 直進 Deep、拒絕／模糊 `WAIT_USER`、有候選維持 Grill-2、exploratory Spec Gap 與 TO_SPEC 未實作。`.tmp/intent-flow-release-validation-20260904.log` 顯示 CDP mobile／desktop overflow 均為 0。

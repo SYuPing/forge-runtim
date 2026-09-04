@@ -28,3 +28,7 @@ status: accepted-boundary
 ## Not in scope
 
 不修改程式碼、測試、`pi-main/`、`Documents/` 或 `AGENTS.md`；不實作 TO_SPEC／TO_TICKET，不新增 importer、execution guard 或其他後續流程。
+
+## Current runtime／flow verification note（2026-09-03）
+
+衍生流程圖已核對 current runtime 的 11 個 state、7 種 WAIT_USER payload kind、Context／ADR production caller 與 Documents bundle；成功 ADR 後僅到 `TO_SPEC` 狀態節點，沒有 TO_SPEC tool／handler。流程圖與本 ADR 一致，未把狀態節點誤標為 executor；Evidence 空包與 `buildContextItems` caller gap 仍列為未解風險。證據：`forge-intent-context-flow.html:25-35,38-40`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`。

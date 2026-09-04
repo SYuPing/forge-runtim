@@ -2,12 +2,30 @@
 title: Forge Runtime v4 開發教訓
 type: lessons-learned
 scope: 已發現的 bug、根因、修復方式與可重用工程教訓
-updated: 2026-09-03
+updated: 2026-09-05
 source: 本 repo 的 agent-state、ADR、Plan、handoff 與測試證據
 status: complete
 ---
 
 # Forge Runtime v4 開發教訓
+
+## 2026-09-05 零候選與 Context Build continuation 修正
+
+- **workflow-scoped consent**：同一流程跨缺少來源與空 snapshot gate 重用明確同意，避免再次詢問；新 workflow、cancel、reset、switch 清除。證據：`forge-runtime/extensions/forge-runtime.ts`、`Extension_WhenMissingAssetApprovalLeadsToEmptySnapshot_ShouldNotAskConsentTwice`、`Extension_WhenExplorationConsentWorkflowIsCancelled_ShouldAskAgainInNewWorkflow`，兩者均 RED→GREEN。
+- **stale fail-closed 與有界復原**：過期結果仍拒收；保留 current invocation，讓下一次 `agent_settled` 只 replay 一次，耗盡後才由 `/forge-runtime continue` 恢復，且必須 identity／invocation／workflow 相符、無 pending／timer。證據：`forge-runtime/extensions/forge-runtime.ts`、`Extension_WhenContextBuildCompletionIsStale_ShouldRetryCurrentInvocationOnce`、`Extension_WhenContextBuildStaleRetryIsExhausted_ShouldReplayOnlyOnContinue`，均 RED→GREEN。
+- **public harness seam**：`sendInput` 的 transform 才代表 invocation；不能把 `sendUserMessage` 當作第一次輸出，否則會得到錯誤的 replay 次數判斷。證據：`forge-runtime/tests/extensions/forge-runtime-extension.test.ts` 的 Slice 2 RED 校正（`replayed.length` 實際 0／預期 1）與後續 focused 4/4。
+- **check 阻塞標記**：`npm run check` 的 20 個 TS7016 只記為既有 `pi-main` 驗證阻塞／觀察，不推定本 ticket 根因。證據：主 tsconfig typecheck PASS、完整 333/333、standards/spec review PASS，以及 `pi-main` 型別錯誤位置；未修改上游。
+- **仍存風險**：附件只能證明收到了舊 invocation 結果，無法證明舊 identity 的來源；此為未解觀察，不宣稱是 provider 或模型根因。
+
+## 2026-09-04 零候選探索性路由教訓
+
+- **開發中觀察：過早以 `USER_CONFIRMED` 作 gate**：曾使合法空快照確認無法通過；修正為現有 `GRILL`／pending confirmation seam，並由零候選同意測試驗證。若無明確 log，只記為開發中觀察。
+- **已驗證：GRILL→LIGHT 非法轉移**：空快照同意曾嘗試重走 Light，觸發既有 state transition 契約；修正為直接重用 Deep handoff，相關成功測試與完整 suite 通過。
+- **已驗證：人類 premise approval 過寬**：拒絕或模糊回答可能被當作同意；修正為固定 opt-in marker 與明確 approval，拒絕測試確認不記 premise。
+- **已驗證：固定問題測試假綠**：測試送入已被 runtime 正規化的固定問題，無法保護 normalization；改以任意 model question/id 經公開 `ui.select` seam 驗證固定 consent payload。
+- **已驗證：空快照 metadata 缺 default**：Deep completion 省略 metadata 時 package 可通過但沒有 exploratory／Spec Gap；補上空快照條件的 deterministic non-blocking default，RED／GREEN 見 `.tmp/specgap-default-red2-20260904.log`。
+- **已驗證：孤立 `formalSpecReference` bypass**：不完整 metadata 組合曾可通過 extension boundary；補 guard fail-closed，RED／GREEN 見 `.tmp/metadata-guard-red-20260904.log`、`.tmp/metadata-guard-green-20260904.log`。
+- **可重用教訓**：固定流程問題應測公開 seam 的輸出，不要把已正規化的 fixture 當輸入；新 metadata 的相容性與 fail-closed 必須同時覆蓋全省略與孤立欄位。`npm run check` 剩餘 21 筆為未修改上游 TS7016，非本 ticket bug。
 
 ## 使用方式
 
@@ -358,3 +376,35 @@ status: complete
 - **本輪未發現新 bug**：本輪只有文件同步，未修改或驗證 runtime。
 - **可重用教訓**：workflow state transition 不等於 phase executor 已實作；目前成功 ADR 後可轉入 `TO_SPEC` state，但 `forge-runtime/src/runtime/session-state.ts` 與 `forge-runtime/extensions/forge-runtime.ts` 的實際流程沒有 TO_SPEC tool／handler，故不能把 state 名稱當成已完成的 TO_SPEC。證據：上述兩個 runtime 檔案與 `ADR-0028`。
 - **可重用教訓**：generated `Documents/` 不等於 canonical repo docs；本 repo 的正規文件邊界由 `AGENTS.md:29-34` 定義，包含根目錄 `CONTEXT.md`、`ADR.md`、`PLAN-A.md`、`handoff.md` 與 `docs/`。生成產物不應覆寫正式真相來源，也不應在本輪未獲授權時更新。
+
+## 2026-09-03 流程圖衍生視圖缺陷與驗證教訓
+
+- **衍生圖落後 current runtime**：原圖未反映 11 個 state 與 7 種 WAIT_USER；這是視圖漂移觀察，不是已驗證的 runtime bug。證據：`forge-intent-context-flow.html:25-35,38-40`、內容 review P0/P1/P2=0。
+- **Evidence 空包缺口遺漏**：原圖未完整標示空 Evidence Package 風險；只能記為流程／驗證缺口，不能推定 validator 根因。證據：`forge-intent-context-flow.html:38-40`、既有 Evidence validator 契約與 review。
+- **人類確認邊界措辭可能誤導**：若把 `TO_SPEC` state node 寫成已執行流程，會混淆 state 與 executor；已改為等待明確確認的描述。證據：`ADR-0028`、`forge-runtime/src/runtime/session-state.ts`、`forge-runtime/extensions/forge-runtime.ts`。
+- **favicon 404**：Edge headless console 驗證出 favicon 404；屬衍生 HTML 的資源缺漏，不是 runtime bug。證據：本輪 Edge 1280×900／390×844 console 記錄與 `forge-intent-context-flow.html`；流程仍無 JS／外部依賴。
+- **環境限制**：in-app Browser 缺少服務檔，無法使用內建 Browser；Edge headless 已作等效驗證並通過兩尺寸、overflow／截斷與 console 0（favicon 404 已列為圖面缺陷）。
+
+## 2026-09-03 零候選探索性路由設計觀察
+
+- **觀察，尚未以 RED 驗證根因**：Light Discovery `matches=[]` 時，若把不存在的 candidate 交給 evidence tool，可能無法形成有效 evidence；本案決定改走明確確認的既有 `human_premise` 與 non-blocking `Spec Gap` 分支。證據基礎為使用者核准、`ADR-0021`、`ADR-0026`、`ADR-0029`；尚未宣稱 runtime bug 已由測試確認。
+- **可重用教訓**：人類 premise 與外部事實必須分開；沒有正式 API／協定／安全／相容性證據時，只能標示 exploratory，不能升為 `spec_verified`。後續 RED 與 targeted verification 需維持此邊界。
+- **本輪未發現新 bug**：本輪僅同步設計文件，未修改或驗證 runtime／測試。
+
+## 2026-09-04 零候選探索性路由實作教訓
+
+- **已驗證修正**：空快照須以固定 consent seam 接收明確「同意」；拒絕／模糊答案不記錄 premise 且維持 `WAIT_USER`。證據：`forge-runtime/extensions/forge-runtime.ts`、`forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。
+- **已驗證修正**：空快照且完成資料省略 metadata 時，extension 自動補 `exploratory` 與 deterministic non-blocking `Spec Gap`；不完整 metadata 組合維持 fail-closed。證據：同上測試與 `.tmp/full-test-final8-0904.log`（329/329）；`.tmp/full-test-final5-20260904.log` 與 final7 僅為歷史紀錄，已由 final8 取代。
+- **可重用教訓**：測試必須驗證公開 UI／provider seam，而不是直接送入已正規化的固定問題；既有 TUI 測試應以非空 fixture 恢復原契約，避免把回歸覆蓋誤改成新功能測試。證據：兩個 extension consent tests、`pi-grill-interactive.test.ts`、完整測試 329/329。
+- **本輪未發現其他新 bug**；唯一未通過為未修改 `pi-main` 的 21 筆 TS7016，changed TS files 0 errors；證據：`.tmp/check-final7-0904.log`（exit 2；final4/check6 僅為歷史紀錄，已由 check7 取代）。
+
+## 2026-09-04 零候選路由最終驗證教訓
+
+- **衍生流程圖曾落後正式實作**：`forge-intent-context-flow.html` 曾缺少 ADR-0029 的空 manifest opt-in、明確同意直進 Deep、拒絕／模糊 `WAIT_USER` 與 exploratory Spec Gap；已依正式 runtime／ADR 同步。這是衍生視圖漂移，不是 runtime 行為來源。證據：`forge-intent-context-flow.html`、`.tmp/intent-flow-release-validation-20260904.log`。
+- **Windows Edge headless 尺寸假象**：單用 `--window-size=390,844` 時實際 `innerWidth` 為 492，再裁成 390，會製造假 mobile 裁切判讀；應使用 CDP `Emulation.setDeviceMetricsOverride` 驗證。誤導產生的 mobile CSS patch 已完整撤回，最終 HTML 保留原樣式。證據：`.tmp/intent-mobile-dom-metrics-0904.log`、`.tmp/intent-mobile-prepatch-cdp-20260904.log`、`.tmp/intent-flow-release-validation-20260904.log`。
+- **可重用教訓**：衍生 HTML 的視覺驗證要同時檢查 DOM viewport／scrollWidth 與實際截圖；歷史 targeted 282 只能標為未執行預估，正式 `.tmp/full-test-final8-0904.log` 的 329 全量結果才是現況證據（final6/final7 僅為歷史紀錄，已由 final8 取代）。
+- **可重用教訓**：Edge profile 應放在 repo 外的 temp 目錄，驗證完成後關閉程序並清理，避免產生未追蹤 cache。
+
+## 2026-09-05 最高架構 confirmation 窄例外明文化
+
+- **已驗證教訓**：最高架構原本未明寫零候選的 confirmation 窄例外，造成「一般 confirmation 是否必須再 Grill」的 spec gate 歧義；已在 `FORGE_RUNTIME_Arch_v4.md:504` 明文化，並由 `docs/adr/ADR-0029-zero-candidate-exploratory-routing.md` 約束為空 `matches` 固定 opt-in 明確肯定才可直進 Deep，不改一般流程。證據：架構行 504、ADR-0029、`.tmp/full-test-final10-0905.log`。

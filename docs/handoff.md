@@ -2,12 +2,37 @@
 title: Deep Knowledge 檢索、理解與證據包交接
 type: handoff
 scope: intent-route-only-llm-20260821、light-discovery-file-metadata-20260822、grill-deep-boundary-risk-20260823、deep-knowledge-retrieval-understanding-20260824、deep-stale-result-loop-20260826、deep-target-source-contract-20260827、deep-completion-stale-termination-20260828、deep-recovery-contract-20260828、deep-mixed-tool-batch-termination-20260829、wait-user-ui-only-state-publication-20260829、deep-decision-replay-ui-only-stage-20260830、knowledge-understanding-context-build-deliverable-20260830、knowledge-summary-authority-boundary-20260831
-updated: 2026-09-03
+updated: 2026-09-05
 source: ADR-0013、ADR-0014、CONTEXT.md、docs/PLAN-A.md、docs/adr/ADR-0015-grill-deep-knowledge-handoff-boundary.md、docs/adr/ADR-0016-deep-knowledge-retrieval-understanding-evidence-package.md、docs/adr/ADR-0017-deep-target-source-contract.md、docs/adr/ADR-0018-deep-retryable-recovery-contract.md、docs/adr/ADR-0019-deep-mixed-tool-batch-termination-barrier.md、docs/adr/ADR-0020-wait-user-ui-only-state-publication.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、docs/adr/ADR-0027-context-build-human-premise-and-documents-output.md、docs/adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md、agent-state/knowledge-summary-authority-boundary-20260831.md、scoped validation logs
-status: adr-boundary-awaiting-user-confirmation
+status: implemented-completed-check-blocked
 ---
 
 # Intent route-only LLM 交接
+
+## 2026-09-05 零候選同意與 Context Build 復原（目前狀態）
+
+- 狀態：實作完成，正式 check 有既有外部阻塞。
+- workflow-scoped exploration consent 在同一 workflow 跨缺少來源 gate 與空 snapshot gate 共用，並於 cancel、new workflow、switch、reset 清除；其他人類決策不沿用。
+- stale completion 仍 fail-closed；第一次 stale 在下一個 `agent_settled` 只重播目前 identity 一次，第二次不循環；`/forge-runtime continue` 只人工重播目前 identity。
+- 未修改 `session-state`、`pi-main`、queue 或 UI。未知舊 invocation 的來源未視為已證實根因。
+- 驗證：focused 4/4、`npm test` 333/333、主 tsconfig pass、兩個獨立 review PASS。`npm run check` 唯一阻塞是既有上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 highlight.js 子路徑缺少型別，共 20 個 TS7016；本 ticket 未修改 `pi-main`。
+- 目前不需新增 queue；若後續發現 `agent_settled` 不會在 stale terminate 後觸發，應改由 continue-only recovery，另行取得確認。
+
+## 2026-09-05 零候選同意與 Context Build 復原交接（歷史計畫，已完成）
+
+計畫已由使用者核准並完成實作；本案沒有 UI gap，因此不產生 Plan B。
+
+已確認：consent 僅在同一 workflow 內跨缺少來源與空 snapshot gate 有效，於新 workflow、cancel、reset、switch 清除；Context stale completion 仍拒收，`agent_settled` 對目前 identity 自動 replay 一次，第二次只允許 `/forge-runtime continue`。
+
+範圍限 `forge-runtime/extensions/forge-runtime.ts` 與 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`，未修改 `session-state`、`pi-main`、queue 或 UI。驗證：focused 4/4、`npm test` 333/333、主 tsconfig pass、兩個獨立 review PASS。`npm run check` 唯一阻塞是既有上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts` 的 highlight.js 子路徑缺少型別，共 20 個 TS7016；未知舊 invocation 來源未視為已證實根因。
+
+最脆弱假設是 provider／模型可能重播舊 identity；若無法可靠辨識目前 identity，必須維持 fail-closed。下一個 session 第一件事先讀本 `docs/handoff.md`，展示 context 摘要，等使用者確認後再開始實作。
+
+## 2026-09-05 零候選路由封版同步
+
+狀態：`implemented-verified-completed`。窄例外已納入 `FORGE_RUNTIME_Arch_v4.md`；只有空 `matches` 固定 opt-in 的明確肯定可由 `WAIT_USER` 直進既有 Deep，一般 `NEEDS_CONFIRMATION` 仍須下一輪 Grill，有候選流程不變。
+
+封版證據：`.tmp/full-test-final10-0905.log`（329 passed／0 failed／0 skipped，duration_ms 30778.2386）；`.tmp/check-final9-0905.log`（exit 2，21 個未修改上游 TS7016，Forge 三檔 0 error）。風險：TO_SPEC 無 executor、上游 TS7016、未 commit／push。
 
 ## WAIT_USER UI-only state publication 收尾（2026-08-29）
 
@@ -604,3 +629,53 @@ Context／ADR ambiguity 可由 UI select 或一般文字 input 回答；UI 在 `
 本輪使用者已取消目前實作任務；交接只以 AGENTS.md 規定的正式文件為準：先讀 root [`CONTEXT.md`](../CONTEXT.md)、[`docs/PLAN-A.md`](PLAN-A.md)、[`ADR-0027`](adr/ADR-0027-context-build-human-premise-and-documents-output.md) 與 [`ADR-0028`](adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md)，再讀本文件。`Documents/` 是未來 PI 使用者專案的生成產物，不是本 repo 的 canonical 真相來源，本輪不要求讀取或修改其中任何文件。
 
 現有 code 已完成 `CONTEXT_BUILD`、`ADR_BUILD` 與 Documents writer；但 `TO_SPEC` 目前僅是狀態節點存在／可轉入，TO_SPEC tool／handler 與後續規格化工作尚未開始，不能寫成已執行或已完成。流程交付停在 ADR 邊界；下一步只能等待使用者明確確認是否進入 TO_SPEC，不得自行開始 TO_SPEC、TO_TICKET 或其他後續實作。`human_premise`、Spec Gap 與既有 fail-closed 邊界仍依 ADR-0027 有效。
+
+## 2026-09-03 Intent→Context current flow handoff
+
+目前交接狀態為 `adr-boundary-awaiting-user-confirmation`。衍生流程圖已對齊 11 個 workflow state 與 7 種 WAIT_USER payload kind，且反映 Context／ADR production caller、Documents bundle、`human_premise` provenance 與 `TO_SPEC` 僅為 state node 的邊界。
+
+下一步只能等待使用者明確確認是否進入 TO_SPEC；不得自行實作或宣稱 TO_SPEC／Plan B 完成。仍需保留的 runtime gaps 是 Evidence 空包與 `buildContextItems` production caller；本輪未修改 runtime、測試、`pi-main`、`Documents/` 或 `forge-runtime-flow.html`，也未執行 runtime 測試。流程圖驗證證據為 `forge-intent-context-flow.html:25-35,38-40`、內容 review P0/P1/P2=0、parser／11 rows／Edge 兩尺寸／console 0 PASS。
+
+## 2026-09-03 零候選探索性路由設計交接（歷史設計交接，已完成）
+
+## 2026-09-04 零候選探索性路由最終交接（歷史草稿，已由檔尾目前狀態取代）
+
+（歷史紀錄，非目前證據）本 ticket 已 implemented／verified／completed。空快照首輪固定要求明確 opt-in；只有明確「同意」才沿用既有 `human_premise` 直接進 Deep，拒絕／模糊回答留在 `WAIT_USER` 且不記 premise；有候選流程維持原有 light／grill-2。空快照、無外部 evidence、有人類前提且三項 metadata 全省略時，自動補 exploratory 與 deterministic non-blocking `Spec Gap`；不完整 metadata（含孤立 `formalSpecReference`）在 extension boundary fail-closed。
+
+（歷史驗證，已由 final7/check6 取代）production 只改 `forge-runtime/extensions/forge-runtime.ts`；tests 改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。未改 `pi-main`、Evidence validator、state machine 或 TO_SPEC。完整 `npm test` 329/329，0 fail／skip，31.746 秒，證據 `.tmp/full-test-final4-20260904.log`。`npm run check` exit 2 僅有未修改上游的 21 筆 TS7016，本 ticket 三個 TS 檔 0 errors，證據 `.tmp/check-final3-20260904.log`。
+
+未解風險：TO_SPEC executor 尚未實作，需另案且先取得使用者確認；上游 TS7016 不在本 ticket 範圍，未修改、未 commit／push。
+
+## 2026-09-04 零候選探索性路由最終文件同步（歷史證據，已由 2026-09-05 取代）
+
+本 ticket 狀態為 `implemented-verified-completed`。正式 `npm test` 以 `.tmp/full-test-final8-0904.log` 為準：329 passed、0 failed、0 skipped、34635.325 ms，五個新增測試與三個恢復 TUI 測試均通過，僅有既有 DEP0190 warning。`npm run check` 以 `.tmp/check-final7-0904.log` 為準：exit 2，21 個 TS7016 全在未修改的 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21`，本輪三個 Forge 檔 0 error。舊 final6/check5/final7/check6 僅為歷史紀錄，已由 final8/check7 取代。
+
+修改範圍加入 `forge-intent-context-flow.html`，僅為衍生視圖同步，不是 runtime 行為來源；UI 固定選項為「同意／不同意」，runtime `isApproval` 接受明確肯定「好、可以、同意、照做、yes、ok、okay、y」，其他含「確認」字串不屬於此 opt-in。已反映空 manifest opt-in、明確同意 human premise 直 Deep、拒絕／模糊 WAIT_USER、有候選 Grill-2、exploratory Spec Gap 與 TO_SPEC 未實作。`.tmp/intent-flow-release-validation-20260904.log` 的 CDP mobile 390×844／desktop 1280×900 overflow 均為 0，靜態與視覺 PASS。`forge-runtime-flow.html` 在本 ticket 開始前已 dirty，本 ticket 未修改、未納入實作範圍；before/after SHA-256 相同。
+
+未解風險仍為 TO_SPEC 無 executor、upstream TS7016；歷史 targeted 282 是未執行預估，已由正式 329 全量測試取代；未 commit／push。
+
+最高架構已同步明文化本 ticket 的窄例外：只有空 `matches` 固定探索 opt-in 的明確肯定可由 `WAIT_USER` 直進既有 Deep；一般 `NEEDS_CONFIRMATION` 與有候選流程不變。
+
+## 2026-09-04 零候選探索性路由最終交接（歷史草稿）
+
+（歷史紀錄，非目前證據）本 ticket 目前為 `implemented／verified／completed`。空快照只有明確「同意」才沿用 `human_premise` 直接進 Deep；拒絕／模糊回答留在 `WAIT_USER` 且不記 premise；有候選流程維持原有 light／grill-2。空快照、無外部 evidence、有人類前提且 metadata 全省略時，自動補 exploratory 與 deterministic non-blocking `Spec Gap`；不完整 metadata（含孤立 `formalSpecReference`）在 extension boundary fail-closed。
+
+（歷史驗證，已由 final7/check6 取代）production 只改 `forge-runtime/extensions/forge-runtime.ts`；tests 改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。後者以非空 fixture 恢復三個既有 TUI grill-2／retry 契約，不是新增空知識 feature test。未改 `pi-main`、Evidence validator、state machine 或 TO_SPEC。正式 `npm test` 為 329/329，0 fail／skip；`npm run check` 僅有未修改上游的 21 筆 TS7016。
+
+未解風險：TO_SPEC executor 尚未實作，需另案且先取得使用者確認；上游 TS7016 不在本 ticket 範圍，未修改、未 commit／push。
+
+本 ticket 狀態為 `design-confirmed-not-implemented`，使用者已核准 ADR-0029 與唯一 Plan A。Light Discovery `matches=[]` 時不得呼叫不存在 candidate 的 evidence tool；只有明確人類確認才沿用既有 `human_premise` 進 exploratory，並建立 non-blocking `Spec Gap`。拒絕、空白或模糊回答維持 `WAIT_USER`；有候選的 Light→Grill→Deep 完全不變。
+
+本案最小 scope 僅 `forge-runtime/extensions/forge-runtime.ts` 與 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`。核心 seam 是空 snapshot 的 `resumeGrillWithAnswer` 保留已確認 premise 並呼叫既有 `continueDeepKnowledge(..., true)`，沿用 `pendingKnowledgeRequest`；同時補接 `forge_deep_complete` 到 `createEvidencePackage` 的既有 `verificationLevel`／`specGap`／`formalSpecReference`。不修改 `session-state`、`evidence-engine`、`context-build-skill`、`pi-main`，不做 TO_SPEC。
+
+先由子代理從 `forge-runtime` 目錄執行兩個 RED，且兩者必須先失敗：RED 1 為 `.\node_modules\.bin\tsx.cmd --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 --test-name-pattern="Extension_WhenEmptyDiscoveryHasHumanConfirmation_ShouldEnterDeepWithoutSecondGrillRound" tests/extensions/forge-runtime-extension.test.ts`；RED 2 為 `.\node_modules\.bin\tsx.cmd --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 --test-name-pattern="Extension_WhenDeepCompleteProvidesExploratorySpecGap_ShouldPropagateToEvidencePackage" tests/extensions/forge-runtime-extension.test.ts`。之後執行相關完整批次 `.\node_modules\.bin\tsx.cmd --tsconfig tsconfig.pi-interactive.json --test --test-force-exit --test-concurrency=1 tests/discovery/light-discovery.test.ts tests/evidence/evidence-engine.test.ts tests/runtime/session-state.test.ts tests/extensions/forge-runtime-extension.test.ts tests/extensions/pi-grill-interactive.test.ts tests/grill/grill-result.test.ts tests/knowledge/discovery-evidence.test.ts`；baseline 277 passed，新增後預期 279 passed／0 failed；再執行 `npm test`，期望 0 failed。`npm run check` 只允許既知未修改 `pi-main` 的 highlight.js TS7016，不得有新增 Forge Runtime error，也不得修改 `pi-main`。完整 baseline log 為 `.tmp/baseline-zero-candidate-20260903.log`。`human_premise` 只證明意圖，不得升為 `spec_verified`；TO_SPEC 仍須另有人工確認。下一步是測試角色先打紅。
+
+## 2026-09-04 零候選探索性路由最終交接（歷史證據，已由 2026-09-05 取代）
+
+本 ticket 目前為 `implemented／verified／completed`。UI 固定選項為「同意／不同意」；runtime 沿用 `isApproval`，trim 後接受「好、可以、同意、照做、yes、ok、okay、y」（英文先 lowercase），含「確認」的其他字串不屬於此 opt-in；只有這些明確肯定才沿用 `human_premise` 直接進 Deep；拒絕／模糊回答留在 `WAIT_USER` 且不記 premise；有候選流程維持原有 light／grill-2。空快照、無外部 evidence、有人類前提且 metadata 全省略時，自動補 exploratory 與 deterministic non-blocking `Spec Gap`；不完整 metadata（含孤立 `formalSpecReference`）在 extension boundary fail-closed。
+
+production 只改 `forge-runtime/extensions/forge-runtime.ts`；tests 改 `forge-runtime/tests/extensions/forge-runtime-extension.test.ts`、`forge-runtime/tests/extensions/pi-grill-interactive.test.ts`。後者以非空 fixture 恢復三個既有 TUI grill-2／retry 契約，不是新增空知識 feature test。未改 `pi-main`、Evidence validator、state machine 或 TO_SPEC。
+
+驗證（歷史，已由 final10/check9 取代）：`npm test` 以 `.tmp/full-test-final8-0904.log` 為準，329 passed、0 failed、0 skipped、34635.325 ms；`npm run check` 以 `.tmp/check-final7-0904.log` 為準，exit 2，21 筆 TS7016 全在未修改上游 `pi-main/packages/coding-agent/src/utils/syntax-highlight.ts:1-21`，本輪三個 Forge 檔 0 error。
+
+未解風險：TO_SPEC executor 尚未實作，需另案且先取得使用者確認；上游 TS7016 不在本 ticket 範圍，未修改、未 commit／push。

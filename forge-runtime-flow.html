@@ -355,7 +355,7 @@
   <header>
     <p class="eyebrow">FORGE RUNTIME / 流程與進度</p>
     <h1>目前流程做到哪裡，從收到需求一路看到交接</h1>
-    <p>這張圖把目前真的做完、只做一部分，以及還沒做完的工作放在一起。進度更新到 2026/09/02；綠色是已完成，橘色是部分完成，灰色虛線是後續工作。</p>
+    <p>這張圖把目前真的做完、只做一部分，以及還沒做完的工作放在一起。進度更新到 2026/09/03；綠色是已完成，橘色是部分完成，灰色虛線是後續工作。</p>
   </header>
 
   <main>
@@ -456,6 +456,9 @@
               <li>Deep Discovery fallback 顯示「確認／取消」；取消會清除本輪資料並回到初始入口，一般深度決定的取消行為不變。</li>
               <li>缺少正式規格時可建立 Spec Gap，區分探索、指定環境黑箱驗證與正式規格驗證，並限制可宣稱的範圍。</li>
               <li>最新完整測試 292/292 通過；fallback 專項 282/282、Evidence 專項 28/28 也通過。</li>
+              <li>Context 與 ADR production 流程可自動續跑，會把已驗證的候選內容安全交付到使用者專案的 <code>Documents/</code>。</li>
+              <li>使用者以選單或一般文字回答歧義時，都會建立新的回合並保留決策來源；沒有明確專案根目錄時會先擋下來。</li>
+              <li>最新完整測試 324/324 通過，Context／ADR 文件產物與流程檢查也已通過。</li>
             </ul>
           </article>
           <article class="future">
@@ -465,6 +468,8 @@
               <li>由資料包自動啟動或排程後續的 Context Build，仍未納入本輪範圍。</li>
               <li>整理背景文件，以及後面的設計決定、規格、工作單、實作、測試與審查。</li>
               <li>可信正式規格來源匯入、來源綁定與通用高風險操作防護仍是獨立後續工作；目前正式規格驗證會先擋下來。</li>
+              <li><code>TO_SPEC</code> 目前只有流程狀態節點，尚未有真正的工具或執行器；等待使用者明確確認後再開始。</li>
+              <li>生成的 <code>Documents/</code> 是使用者專案產物，不取代本 repo 的正規文件，也不會在取消後續開發時自行更新。</li>
               <li>完整控制面板與固定畫面配置。</li>
               <li>多來源摘要、知識卡、長期保存、第二次獨立查核與外部來源。</li>
               <li>由使用者在實際操作畫面重跑原始情境。</li>
@@ -665,10 +670,32 @@
             <p><strong>驗證：</strong>Evidence 專項 28/28、Forge Runtime 完整測試 292/292、程式檢查沒有本 ticket 診斷，差異檢查沒有空白錯誤；可信正式規格匯入、來源綁定與通用高風險操作防護仍未完成。</p>
           </article>
         </div>
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">09/03</p>
+            <h3>整理好 Context 和 ADR，再安全交給下一步</h3>
+            <p><strong>做了什麼：</strong>接上 Context Build 與 ADR Build 的 production 續跑，使用已確認的證據、人類前提和決策來源產生文件候選；三份文件通過檢查後才一起寫入明確的使用者專案根目錄。</p>
+            <p class="detail bug"><strong>這段期間 Bug：</strong>初版曾有程式括號缺漏造成解析失敗，handoff 只擋明顯密鑰而可能漏掉高信心個資；未提供專案根目錄時也可能沿用目前工作目錄，導致文件寫錯地方。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>修正解析與型別邊界，統一在 handoff 輸出邊界遮罩高信心個資；移除 <code>process.cwd()</code> fallback，要求非空 <code>ctx.cwd</code>，並用暫存、雜湊檢查與 rollback 保護文件交付。</p>
+            <p><strong>驗證：</strong>完整測試 324/324、base type check 通過、skill 檢查通過、差異檢查通過；extension 163/163，文件產物的原子寫入與失敗回復也有回歸驗證。</p>
+          </article>
+        </div>
+        <div class="milestone green">
+          <div class="milestone-dot" aria-hidden="true"></div>
+          <article>
+            <p class="date">09/03</p>
+            <h3>正式文件和下一個階段各有自己的邊界</h3>
+            <p><strong>做了什麼：</strong>同步確認本 repo 的正規文件仍是根目錄與 <code>docs/</code> 內的 canonical 文件；使用者專案的 <code>Documents/</code> 是生成產物。流程可以到 <code>TO_SPEC</code> 狀態，但不代表已執行規格工具。</p>
+            <p class="detail no-bug"><strong>這段期間 Bug：</strong>沒有經測試證實的新 Bug；本段是文件與狀態邊界同步。</p>
+            <p class="detail fix"><strong>怎麼解決：</strong>在 ADR 與交接文件中明確分開正規文件、生成產物、狀態節點和真正的執行器；後續工作停在等待使用者明確確認。</p>
+            <p><strong>驗證：</strong>已核對 <code>ADR-0028</code>、<code>CONTEXT.md</code>、<code>docs/PLAN-A.md</code> 與 <code>docs/handoff.md</code> 的邊界說明；本段未重新執行 runtime 測試。</p>
+          </article>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer>更新日期：2026/09/02。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、CONTEXT.md、docs/PLAN-A.md、docs/handoff.md、docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、docs/adr/ADR-0022-forge-stage-ui-only-settled-decision-replay.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、docs/adr/ADR-0025-grill-soft-cap-human-checkpoint.md、docs/adr/ADR-0026-spec-gap-exploratory-development.md、agent-state/deep-discovery-fallback-human-premise-20260829.md、agent-state/knowledge-summary-authority-boundary-20260831.md、agent-state/spec-gap-exploratory-development-20260902.md。這是人工整理的進度快照，只反映文件已證實的範圍，不會自動讀取程式狀態。</footer>
+  <footer>更新日期：2026/09/03。依據：FORGE_RUNTIME_Arch_v4.md、Memory/record.md、Memory/lesson_learn.md、CONTEXT.md、docs/PLAN-A.md、docs/handoff.md、docs/adr/ADR-0021-deep-discovery-fallback-human-premise.md、docs/adr/ADR-0022-forge-stage-ui-only-settled-decision-replay.md、docs/adr/ADR-0023-knowledge-understanding-context-build-deliverable.md、docs/adr/ADR-0024-knowledge-summary-authority-boundary.md、docs/adr/ADR-0025-grill-soft-cap-human-checkpoint.md、docs/adr/ADR-0026-spec-gap-exploratory-development.md、docs/adr/ADR-0027-context-build-human-premise-and-documents-output.md、docs/adr/ADR-0028-official-documents-and-to-spec-confirmation-boundary.md、agent-state/deep-discovery-fallback-human-premise-20260829.md、agent-state/knowledge-summary-authority-boundary-20260831.md、agent-state/spec-gap-exploratory-development-20260902.md、agent-state/context-build-production-continuation-20260902.md。這是人工整理的進度快照，只反映文件已證實的範圍，不會自動讀取程式狀態。</footer>
 </body>
 </html>

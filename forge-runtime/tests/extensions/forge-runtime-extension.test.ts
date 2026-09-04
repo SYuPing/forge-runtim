@@ -88,6 +88,8 @@ const readyForDeepGrillResult = JSON.stringify({
 
 const knowledgeBoundaryRequest = "請幫我測試 BoundaryToken";
 const tempRootEvidence = "OnlyTempRootEvidence";
+const emptyDiscoveryExploratoryConsentQuestion = "目前沒有可用的知識文件，是否同意以人類前提進行探索性開發？";
+const emptyDiscoveryExploratoryConsentId = "forge-empty-snapshot-exploratory-consent";
 
 test("Extension_WhenGrillStarts_ShouldExposeOnlyDomainTools", async (t) => {
 	const rootDir = createTempRoot();
@@ -1763,6 +1765,43 @@ test("Extension_DeepCompleteDuplicateDecision_ReturnsRetryableInvalidWithoutStat
 	assert.equal((duplicate.details.evidencePackage as { decisions: Array<{ statement: string }> }).decisions[0]?.statement, "原始決策");
 });
 
+test("Extension_WhenDeepCompleteProvidesOnlyFormalSpecReference_ShouldRejectBeforeContextBuild", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"formal-spec-reference-only",
+	);
+	const result = await understandingTool(
+		"call-formal-spec-reference-only",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "僅提供正式規格參照的測試摘要",
+				decisions: [],
+				findings: [],
+				limitations: [],
+				formalSpecReference: {
+					target: "test-product-api",
+					version: "v1",
+					locator: "https://example.test/spec#endpoint",
+					evidenceId: candidateId,
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(result.details.status, "invalid");
+	assert.deepEqual(result.details.errors, [
+		"Evidence metadata 組合不完整：verificationLevel 與 specGap 必須成對；formalSpecReference 僅能搭配 spec_verified。",
+	]);
+	assert.doesNotMatch([...harness.observedStatuses, ...harness.observedMessages].join("\n"), /CONTEXT_BUILD/);
+});
+
 test("Extension_DeepCompleteCorrectedDecision_ReusesAttemptAndEntersContextBuild", async (t) => {
 	const rootDir = createTempRoot();
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
@@ -1884,6 +1923,149 @@ test("Extension_DeepCompleteCompletedOutcome_ShouldReturnSummaryAndDerivedEviden
 	};
 	assert.equal(evidencePackage.knowledgeSummary, "已驗證的知識摘要");
 	assert.deepEqual(evidencePackage.evidenceIds, [candidateId]);
+});
+
+test("Extension_WhenDeepCompleteProvidesExploratorySpecGap_ShouldPropagateToEvidencePackage", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"exploratory-spec-gap",
+	);
+	const specGap = {
+		target: "exploratory-product-api",
+		reason: "目前不存在正式知識文件。",
+		missingEvidence: ["正式 API 規格"],
+		impact: "相容性尚未確認。",
+	};
+	const understandingDefinition = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingDefinition?.parameters, "Expected public forge_deep_complete parameters");
+	const understandingSchema = Compile(understandingDefinition.parameters as TSchema);
+	const legalUnderstandingPayload = {
+		...identity,
+		outcome: {
+			kind: "completed" as const,
+			knowledgeSummary: "探索性產品開發摘要",
+			decisions: [],
+			findings: [{ statement: "候選支持目前判斷。", evidenceIds: [candidateId] }],
+			limitations: [],
+			verificationLevel: "exploratory" as const,
+			specGap,
+		},
+	};
+	assert.equal(understandingSchema.Check(legalUnderstandingPayload), true);
+	assert.equal(
+		understandingSchema.Check({
+			...legalUnderstandingPayload,
+			outcome: { ...legalUnderstandingPayload.outcome, unknownNested: true },
+		}),
+		false,
+	);
+
+	const result = await understandingTool(
+		"call-exploratory-spec-gap",
+		legalUnderstandingPayload,
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(result.details.status, "accepted");
+	assert.match([...harness.observedStatuses, ...harness.observedMessages].join("\n"), /CONTEXT_BUILD/);
+	const evidencePackage = result.details.evidencePackage as {
+		verificationLevel?: string;
+		specGap?: typeof specGap;
+	};
+	assert.equal(evidencePackage.verificationLevel, "exploratory");
+	assert.deepEqual(evidencePackage.specGap, specGap);
+});
+
+test("Extension_WhenEmptySnapshotConsentAndDeepCompleteOmitMetadata_ShouldAddExploratorySpecGap", async (t) => {
+	const rootDir = createTempRoot();
+	rmSync(join(rootDir, "wiki", "boundary.md"));
+	writeWorkspaceFile(rootDir, "code_base/src/unrelated.ts", "export const unrelated = true;\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const roundRequest = "請幫我開始一個全新產品，不存在既有知識文件";
+	await harness.sendInput(roundRequest);
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	await grillCompleteTool.execute(
+		"call-empty-discovery-spec-gap",
+		{
+			roundId: "grill-1",
+			status: "NEEDS_CONFIRMATION",
+			questions: [{
+				id: "model-question-id-not-consent",
+				question: "模型原始問題：不應沿用這個問題",
+				options: ["模型選項 A", "模型選項 B"],
+			}],
+			recommendation: { value: "同意", reason: "找不到既有知識文件。", confidence: 0.8 },
+			evidence: [],
+			requiresUserConfirmation: true,
+		},
+		undefined,
+		undefined,
+		harness.buildContext({ ui: { select: async () => undefined } }),
+	);
+
+	await harness.sendInput("同意");
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+
+	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
+	assert.ok(retrievalTool?.execute);
+	await retrievalTool.execute(
+		"call-empty-discovery-spec-gap-retrieval",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "DEEP_KNOWLEDGE_RETRIEVAL",
+			outcome: { kind: "completed" },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	const understandingTool = harness.registeredTools.get("forge_deep_complete");
+	assert.ok(understandingTool?.execute);
+	const result = await understandingTool.execute(
+		"call-empty-discovery-spec-gap-understanding",
+		{
+			attemptId: "deep-1",
+			sourceRoundId: "grill-1",
+			phase: "KNOWLEDGE_UNDERSTANDING",
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "探索性產品開發摘要",
+				decisions: [],
+				findings: [],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+
+	assert.equal(result.details.status, "accepted");
+	const evidencePackage = result.details.evidencePackage as {
+		verificationLevel?: string;
+		specGap?: {
+			target: string;
+			reason: string;
+			missingEvidence: string[];
+			impact: string;
+		};
+	};
+	assert.equal(evidencePackage.verificationLevel, "exploratory");
+	assert.deepEqual(evidencePackage.specGap, {
+		target: roundRequest,
+		reason: "本輪沒有可用的知識文件，僅依使用者明確提供的前提進行探索性開發。",
+		missingEvidence: ["與本輪目標相關的知識文件或正式規格"],
+		impact: "不得據此宣稱 API、協定、安全、法規或相容性；後續需補充可核對證據。",
+	});
 });
 
 test("Extension_DeepSearchWikiAndCodeBase_ShouldRemainUnaffected", async (t) => {
@@ -2856,6 +3038,229 @@ test("AgentSettled_WhenContextBuildIsPending_ShouldInvokeBundledSkillOnce", asyn
 	assert.doesNotMatch(content, /ContextBuildcontext-build-settledNeedle code base evidence/);
 });
 
+test("Extension_WhenContextBuildCompletionIsStale_ShouldRetryCurrentInvocationOnce", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"context-build-stale-retry",
+	);
+	const deepResult = await understandingTool(
+		"call-context-build-stale-retry-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "Context stale retry knowledge summary",
+				decisions: [],
+				findings: [{ statement: "可追溯的 Context 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+
+	assert.ok(harness.agentSettledHandler);
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextOneMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	assert.match(contextOneMessage, /"attemptId"\s*:\s*"context-1"/);
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute, "Expected forge_context_complete to be registered");
+
+	const ambiguity = (decisionId: string) => ({
+		kind: "ambiguous" as const,
+		ambiguity: {
+			decisionId,
+			question: "採用哪一個 Context 範圍？",
+			options: ["方案 A", "方案 B"],
+			recommendation: "方案 A",
+			evidenceIds: [candidateId],
+		},
+	});
+	await contextCompleteTool.execute(
+		"call-context-build-stale-retry-ambiguity-one",
+		{ attemptId: "context-1", sourceRoundId: "grill-1", outcome: ambiguity("context-stale-one") },
+		undefined,
+		undefined,
+		harness.buildContext({ ui: { select: async () => undefined } }),
+	);
+	const contextTwoResult = (await harness.sendInput("方案 B")) as { action?: string; text?: string };
+	assert.equal(contextTwoResult.action, "transform");
+	const contextTwoMessage = contextTwoResult.text ?? "";
+	assert.match(contextTwoMessage, /"attemptId"\s*:\s*"context-2"/);
+
+	await contextCompleteTool.execute(
+		"call-context-build-stale-retry-ambiguity-two",
+		{ attemptId: "context-2", sourceRoundId: "grill-1", outcome: ambiguity("context-stale-two") },
+		undefined,
+		undefined,
+		harness.buildContext({ ui: { select: async () => undefined } }),
+	);
+	const contextThreeResult = (await harness.sendInput("方案 B")) as { action?: string; text?: string };
+	assert.equal(contextThreeResult.action, "transform");
+	assert.match(contextThreeResult.text ?? "", /"attemptId"\s*:\s*"context-3"/);
+	const beforeStale = harness.observedUserMessageCalls.length;
+
+	const staleResult = await contextCompleteTool.execute(
+		"call-context-build-stale-retry-old",
+		{
+			attemptId: "context-2",
+			sourceRoundId: "grill-1",
+			outcome: { kind: "completed", candidate: { glossary: [{ term: "範圍", definition: "目前的產品範圍。", evidenceIds: [candidateId] }] } },
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(staleResult.details.status, "stale");
+	assert.equal(staleResult.terminate, true);
+	assert.equal(harness.observedUserMessageCalls.length, beforeStale, "過期結果處理不得在 handler 內立即送出訊息");
+	assert.match(harness.observedStatuses.at(-1) ?? "", /CONTEXT_BUILD/);
+	assert.deepEqual(harness.getActiveTools(), ["forge_context_complete"]);
+
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const replayed = harness.observedUserMessageCalls.slice(beforeStale);
+	assert.equal(replayed.length, 1, "過期 Context 結果後只能重播一次最新 invocation");
+	assert.match(replayed[0]?.content ?? "", /完成工具：forge_context_complete/);
+	assert.match(replayed[0]?.content ?? "", /"attemptId"\s*:\s*"context-3"/);
+	assert.match(replayed[0]?.content ?? "", /"sourceRoundId"\s*:\s*"grill-1"/);
+});
+
+test("Extension_WhenContextBuildStaleRetryIsExhausted_ShouldReplayOnlyOnContinue", async (t) => {
+	const rootDir = createTempRoot();
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const { harness, candidateId, understandingTool, identity } = await prepareKnowledgeUnderstanding(
+		rootDir,
+		"context-build-stale-retry-exhausted",
+	);
+	const deepResult = await understandingTool(
+		"call-context-build-stale-retry-exhausted-deep",
+		{
+			...identity,
+			outcome: {
+				kind: "completed",
+				knowledgeSummary: "Context stale retry exhaustion summary",
+				decisions: [],
+				findings: [{ statement: "可追溯的 Context 證據。", evidenceIds: [candidateId] }],
+				limitations: [],
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(deepResult.details.status, "accepted");
+	assert.ok(harness.agentSettledHandler);
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const contextOneMessage = harness.observedUserMessageCalls.at(-1)?.content ?? "";
+	assert.match(contextOneMessage, /"attemptId"\s*:\s*"context-1"/);
+
+	const contextCompleteTool = harness.registeredTools.get("forge_context_complete");
+	assert.ok(contextCompleteTool?.execute, "Expected forge_context_complete to be registered");
+	await contextCompleteTool.execute(
+		"call-context-build-stale-retry-exhausted-ambiguity-one",
+		{
+			attemptId: "context-1",
+			sourceRoundId: "grill-1",
+			outcome: {
+				kind: "ambiguous",
+				ambiguity: {
+					decisionId: "context-stale-exhausted-one",
+					question: "採用哪一個 Context 範圍？",
+					options: ["方案 A", "方案 B"],
+					recommendation: "方案 A",
+					evidenceIds: [candidateId],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext({ ui: { select: async () => undefined } }),
+	);
+	const contextTwoResult = (await harness.sendInput("方案 B")) as { action?: string; text?: string };
+	assert.equal(contextTwoResult.action, "transform");
+	assert.match(contextTwoResult.text ?? "", /"attemptId"\s*:\s*"context-2"/);
+
+	await contextCompleteTool.execute(
+		"call-context-build-stale-retry-exhausted-ambiguity-two",
+		{
+			attemptId: "context-2",
+			sourceRoundId: "grill-1",
+			outcome: {
+				kind: "ambiguous",
+				ambiguity: {
+					decisionId: "context-stale-exhausted-two",
+					question: "採用哪一個 Context 範圍？",
+					options: ["方案 A", "方案 B"],
+					recommendation: "方案 A",
+					evidenceIds: [candidateId],
+				},
+			},
+		},
+		undefined,
+		undefined,
+		harness.buildContext({ ui: { select: async () => undefined } }),
+	);
+	const contextThreeResult = (await harness.sendInput("方案 B")) as { action?: string; text?: string };
+	assert.equal(contextThreeResult.action, "transform");
+	assert.match(contextThreeResult.text ?? "", /"attemptId"\s*:\s*"context-3"/);
+
+	const stalePayload = {
+		attemptId: "context-2",
+		sourceRoundId: "grill-1",
+		outcome: {
+			kind: "completed" as const,
+			candidate: {
+				glossary: [{ term: "範圍", definition: "目前的產品範圍。", evidenceIds: [candidateId] }],
+			},
+		},
+	};
+	const beforeFirstStale = harness.observedUserMessageCalls.length;
+	const firstStale = await contextCompleteTool.execute(
+		"call-context-build-stale-retry-exhausted-old-one",
+		stalePayload,
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(firstStale.details.status, "stale");
+	assert.equal(firstStale.terminate, true);
+	assert.equal(harness.observedUserMessageCalls.length, beforeFirstStale);
+
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const afterFirstReplay = harness.observedUserMessageCalls.length;
+	assert.equal(afterFirstReplay - beforeFirstStale, 1);
+	assert.match(harness.observedUserMessageCalls.at(-1)?.content ?? "", /"attemptId"\s*:\s*"context-3"/);
+
+	const secondStale = await contextCompleteTool.execute(
+		"call-context-build-stale-retry-exhausted-old-two",
+		stalePayload,
+		undefined,
+		undefined,
+		harness.buildContext(),
+	);
+	assert.equal(secondStale.details.status, "stale");
+	assert.equal(secondStale.terminate, true);
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	assert.equal(harness.observedUserMessageCalls.length, afterFirstReplay);
+
+	await harness.runCommand("continue");
+	const continued = harness.observedUserMessageCalls.slice(afterFirstReplay);
+	assert.equal(continued.length, 1, "耗盡自動重試後，continue 應只重播目前 invocation 一次");
+	assert.match(continued[0]?.content ?? "", /forge_context_complete/);
+	assert.match(continued[0]?.content ?? "", /"sourceRoundId"\s*:\s*"grill-1"/);
+	assert.match(continued[0]?.content ?? "", /"attemptId"\s*:\s*"context-3"/);
+	assert.doesNotMatch(continued[0]?.content ?? "", /"attemptId"\s*:\s*"context-2"/);
+});
+
 test("ContextAndAdrBuild_ShouldSuppressAssistantProseAndBlockWrongStageTool", async (t) => {
 	const rootDir = createTempRoot();
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
@@ -3571,6 +3976,103 @@ test("AdrComplete_WhenDocumentsChangedAfterContextStart_ShouldFailClosedWithoutO
 	assert.doesNotMatch(harness.observedStatuses.join("\n"), /TO_SPEC/);
 });
 
+test("Extension_WhenEmptyDiscoveryHasHumanConfirmation_ShouldEnterDeepWithoutSecondGrillRound", async (t) => {
+	const rootDir = createTempRoot();
+	rmSync(join(rootDir, "wiki", "boundary.md"));
+	writeWorkspaceFile(rootDir, "code_base/src/unrelated.ts", "export const unrelated = true;\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+
+	const firstRound = await harness.sendInput("請幫我開始一個全新產品，不存在既有知識文件");
+	assert.match((firstRound as { text?: string }).text ?? "", /grill-1/);
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	let consentTitle = "";
+	let consentOptions: string[] = [];
+	await grillCompleteTool.execute(
+		"call-empty-discovery-confirmation",
+		{
+			roundId: "grill-1",
+			status: "NEEDS_CONFIRMATION",
+			questions: [{
+				id: "model-question-id-not-consent",
+				question: "模型原始問題：不應沿用這個問題",
+				options: ["模型選項 A", "模型選項 B"],
+			}],
+			recommendation: { value: "同意", reason: "找不到既有知識文件。", confidence: 0.8 },
+			evidence: [],
+			requiresUserConfirmation: true,
+		},
+		undefined,
+		undefined,
+		harness.buildContext({
+			ui: {
+				select: async (title, options) => {
+					consentTitle = title;
+					consentOptions = options;
+					return undefined;
+				},
+			},
+		}),
+	);
+	assert.equal(consentTitle, emptyDiscoveryExploratoryConsentQuestion);
+	assert.deepEqual(consentOptions, ["同意", "不同意", "自行輸入…"]);
+
+	const answerResult = await harness.sendInput("同意");
+
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.doesNotMatch((answerResult as { text?: string }).text ?? "", /roundId\s*[:=]\s*grill-2/);
+});
+
+test("Extension_WhenEmptyDiscoveryAnswerIsNotExplicitApproval_ShouldRemainWaiting", async (t) => {
+	const rootDir = createTempRoot();
+	rmSync(join(rootDir, "wiki", "boundary.md"));
+	writeWorkspaceFile(rootDir, "code_base/src/unrelated.ts", "export const unrelated = true;\n");
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+
+	await harness.sendInput("請幫我開始一個全新產品，不存在既有知識文件");
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute);
+	let consentTitle = "";
+	let consentOptions: string[] = [];
+	await grillCompleteTool.execute("call-empty-discovery-rejection", {
+		roundId: "grill-1",
+		status: "NEEDS_CONFIRMATION",
+		questions: [{
+			id: "model-question-id-not-consent",
+			question: "模型原始問題：不應沿用這個問題",
+			options: ["模型選項 A", "模型選項 B"],
+		}],
+		recommendation: { value: "同意", reason: "找不到既有知識文件。", confidence: 0.8 },
+		evidence: [],
+		requiresUserConfirmation: true,
+	}, undefined, undefined, harness.buildContext({
+		ui: {
+			select: async (title, options) => {
+				consentTitle = title;
+				consentOptions = options;
+				return undefined;
+			},
+		},
+	}));
+	assert.equal(consentTitle, emptyDiscoveryExploratoryConsentQuestion);
+	assert.deepEqual(consentOptions, ["同意", "不同意", "自行輸入…"]);
+
+	const rejectedAnswer = "拒絕探索性開發-unique-public-seam";
+	const answerResult = await harness.sendInput(rejectedAnswer);
+	assert.deepEqual(answerResult, { action: "handled" });
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER|GRILL/);
+	assert.deepEqual(harness.getActiveTools().sort(), ["forge_grill_complete", "forge_grill_evidence"]);
+	assert.equal(harness.observedUserMessageCalls.some(({ content }) => content.includes(rejectedAnswer)), false);
+
+	const approvedResult = await harness.sendInput("同意");
+	assert.match((approvedResult as { text?: string }).text ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+	assert.doesNotMatch((approvedResult as { text?: string }).text ?? "", new RegExp(rejectedAnswer));
+	assert.match(harness.observedStatuses.at(-1) ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+});
+
 test("DeepCompletion_WhenOnlyGrillHumanPremiseExists_ShouldEnterContextBuild", async (t) => {
 	const rootDir = createTempRoot();
 	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
@@ -3582,32 +4084,23 @@ test("DeepCompletion_WhenOnlyGrillHumanPremiseExists_ShouldEnterContextBuild", a
 	await grillCompleteTool.execute("call-human-premise-grill-confirmation", {
 		roundId: "grill-1",
 		status: "NEEDS_CONFIRMATION",
-		questions: [{ id: "new-product-confirmation", question: "是否以前提繼續？", options: ["確認", "拒絕"] }],
+		questions: [{
+			id: emptyDiscoveryExploratoryConsentId,
+			question: emptyDiscoveryExploratoryConsentQuestion,
+			options: ["同意", "不同意"],
+		}],
 		recommendation: { value: "確認", reason: "新產品尚無外部資料。", confidence: 0.8 },
 		evidence: [],
 		requiresUserConfirmation: true,
 	}, undefined, undefined, harness.buildContext());
-	await harness.sendInput("確認");
-
-	const secondGrillComplete = harness.registeredTools.get("forge_grill_complete");
-	assert.ok(secondGrillComplete?.execute, "Expected forge_grill_complete after user confirmation");
-	const secondGrillResult = await secondGrillComplete.execute("call-human-premise-ready-for-deep", {
-		roundId: "grill-2",
-		status: "READY_FOR_DEEP",
-		questions: [],
-		recommendation: { value: "proceed", reason: "使用者已確認前提。", confidence: 0.9 },
-		evidence: [],
-		requiresUserConfirmation: false,
-	}, undefined, undefined, harness.buildContext());
-	assert.deepEqual(secondGrillResult.content, [{ type: "text", text: "Forge Grill 完成結果已接受。" }], "已有使用者確認 human premise 時，空 external evidence 的 READY_FOR_DEEP 應被接受");
-	assert.equal(secondGrillResult.details.status, "READY_FOR_DEEP", "已有使用者確認 human premise 時，空 external evidence 的 READY_FOR_DEEP 應被接受");
+	await harness.sendInput("同意");
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
 
 	const retrievalTool = harness.registeredTools.get("forge_deep_retrieval_complete");
 	assert.ok(retrievalTool?.execute, "Expected forge_deep_retrieval_complete to expose execute");
-	await settlePendingDeepPrompt(harness);
 	const retrievalResult = await retrievalTool.execute("call-human-premise-retrieval-complete", {
 		attemptId: "deep-1",
-		sourceRoundId: "grill-2",
+		sourceRoundId: "grill-1",
 		phase: "DEEP_KNOWLEDGE_RETRIEVAL",
 		outcome: { kind: "completed" },
 	}, undefined, undefined, harness.buildContext());
@@ -3617,9 +4110,15 @@ test("DeepCompletion_WhenOnlyGrillHumanPremiseExists_ShouldEnterContextBuild", a
 	assert.ok(understandingTool?.execute, "Expected forge_deep_complete to expose execute");
 	const completeResult = await understandingTool.execute("call-human-premise-understanding", {
 		attemptId: "deep-1",
-		sourceRoundId: "grill-2",
+		sourceRoundId: "grill-1",
 		phase: "KNOWLEDGE_UNDERSTANDING",
-		outcome: { kind: "completed", knowledgeSummary: "以使用者確認前提建立規範。", decisions: [], findings: [], limitations: [] },
+		outcome: {
+			kind: "completed",
+			knowledgeSummary: "以使用者確認前提建立規範。",
+			decisions: [],
+			findings: [],
+			limitations: [],
+		},
 	}, undefined, undefined, harness.buildContext());
 
 	assert.equal(completeResult.details.status, "accepted");
@@ -3630,7 +4129,6 @@ test("DeepCompletion_WhenOnlyGrillHumanPremiseExists_ShouldEnterContextBuild", a
 	const premise = evidencePackage.evidence.find((evidence) => evidence.origin === "human_premise");
 	assert.ok(premise, "Expected human premise evidence");
 	assert.equal(premise.metadata.roundId, "grill-1");
-	assert.equal(premise.metadata.decisionId, "new-product-confirmation");
 });
 
 test("Extension_WhenCompletionOmissionOccurs_ShouldShowRetryCancelSwitchAndSettle", async (t) => {
@@ -6386,6 +6884,104 @@ test("Extension_WhenKnowledgeCodeBaseMissing_ShouldStopStartForgeAndAskForConsen
 	assert.match(warning, /code_base/i);
 	assert.match(warning, /缺少|missing/i);
 	assert.match(warning, /是否|accept|繼續/i);
+});
+
+test("Extension_WhenMissingAssetApprovalLeadsToEmptySnapshot_ShouldNotAskConsentTwice", async (t) => {
+	const rootDir = createTempRoot({ withWiki: false, withCodeBase: false });
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const selectCalls: Array<{ title: string; options: string[] }> = [];
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+	const request = "請幫我開始一個全新產品，不存在既有知識文件";
+
+	assert.deepEqual(await harness.sendInput(request), { action: "handled" });
+	const grillStart = await harness.sendInput("同意");
+	assert.match((grillStart as { text?: string }).text ?? "", /grill-1/);
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	await grillCompleteTool.execute(
+		"call-missing-assets-empty-snapshot",
+		{
+			roundId: "grill-1",
+			status: "NEEDS_CONFIRMATION",
+			questions: [{ id: "model-empty-evidence-question", question: "模型不應再次詢問探索同意", options: ["同意", "不同意"] }],
+			recommendation: { value: "同意", reason: "沒有找到相關證據。", confidence: 0.8 },
+			evidence: [],
+			requiresUserConfirmation: true,
+		},
+		undefined,
+		undefined,
+		harness.buildContext({
+			ui: {
+				select: async (title, options) => {
+					selectCalls.push({ title, options });
+					return undefined;
+				},
+			},
+		}),
+	);
+
+	assert.equal(selectCalls.length, 0, "已在 missing-assets gate 同意後，不得再次顯示探索同意");
+	assert.deepEqual(harness.getActiveTools(), ["forge_deep_search", "forge_deep_retrieval_complete"]);
+	assert.match(harness.observedStatuses.at(-1) ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+
+	const baseline = harness.observedUserMessageCalls.length;
+	assert.ok(harness.agentSettledHandler, "Expected agent_settled handler for pending Deep invocation");
+	await harness.agentSettledHandler({}, harness.buildContext());
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const deepMessages = harness.observedUserMessageCalls.slice(baseline);
+	assert.equal(deepMessages.length, 1, "預期直接送出一次 Deep invocation");
+	assert.match(deepMessages[0]?.content ?? "", /DEEP_KNOWLEDGE_RETRIEVAL/);
+});
+
+test("Extension_WhenExplorationConsentWorkflowIsCancelled_ShouldAskAgainInNewWorkflow", async (t) => {
+	const rootDir = createTempRoot({ withWiki: false, withCodeBase: false });
+	t.after(() => rmSync(rootDir, { force: true, recursive: true }));
+	const selectCalls: Array<{ title: string; options: string[] }> = [];
+	const harness = await createExtensionHarness({ cwd: rootDir, initialActiveTools: ["read"] });
+
+	assert.deepEqual(await harness.sendInput("請幫我開始一個全新產品，不存在既有知識文件"), { action: "handled" });
+	const firstApproval = await harness.sendInput("同意");
+	assert.equal((firstApproval as { action?: string }).action, "transform");
+	assert.match(harness.observedStatuses.at(-1) ?? "", /GRILL/);
+
+	await harness.runCommand("cancel");
+	assert.equal(harness.observedStatuses.at(-1), "Forge RECEIVE [active]");
+
+	mkdirSync(join(rootDir, "wiki"), { recursive: true });
+	mkdirSync(join(rootDir, "code_base"), { recursive: true });
+	const secondStart = await harness.sendInput("請幫我開始另一個全新產品");
+	const secondInvocation = (secondStart as { text?: string }).text ?? "";
+	assert.equal((secondStart as { action?: string }).action, "transform");
+	const roundId = /目前 Grill roundId:\s*(\S+)/.exec(secondInvocation)?.[1];
+	assert.ok(roundId, "Expected second workflow Grill roundId");
+
+	const grillCompleteTool = harness.registeredTools.get("forge_grill_complete");
+	assert.ok(grillCompleteTool?.execute, "Expected forge_grill_complete to expose execute");
+	await grillCompleteTool.execute(
+		"call-cancelled-consent-empty-snapshot",
+		{
+			roundId,
+			status: "NEEDS_CONFIRMATION",
+			questions: [{ id: "second-workflow-consent", question: "是否同意探索？", options: ["同意", "不同意"] }],
+			recommendation: { value: "同意", reason: "沒有找到相關證據。", confidence: 0.8 },
+			evidence: [],
+			requiresUserConfirmation: true,
+		},
+		undefined,
+		undefined,
+		harness.buildContext({
+			ui: {
+				select: async (title, options) => {
+					selectCalls.push({ title, options });
+					return undefined;
+				},
+			},
+		}),
+	);
+
+	assert.equal(selectCalls.length, 1, "取消前一 workflow 後，新 workflow 必須重新詢問探索同意");
+	assert.match(harness.observedStatuses.at(-1) ?? "", /WAIT_USER/);
 });
 
 test("Extension_WhenKnowledgeAssetsExist_ShouldKeepStartForgePathUsingInjectedRoot", async (t) => {
